@@ -24,6 +24,10 @@ git submodule update --init --recursive
 bash tools/status_all.sh
 ```
 
+运行测试前先产生测试文件 从testsuits 来命名为 sdcard-rv.img 或者 sdcard-la.img 
+-  os挂载两个img分别是 包含基础目录+user下自定义程序的 由ext4-packer产生的镜像 和 这里的测试镜像文件  
+测试文件由 testsuits得来
+- 请备份测试文件。某些测试可能会破坏镜像。
 运行一次集成测试：
 
 ```sh
@@ -41,4 +45,4 @@ ARCH=riscv64 bash os/run.sh
 ## 进一步说明
 
 - 协作流程见 [COLLABORATION.md](./COLLABORATION.md)
-- 工作区边界说明见 [WORKSPACE.md](./WORKSPACE.md)
+- （可选） 可配置exampleOs文件夹供agent参考，详情参考AGENTS.md。
