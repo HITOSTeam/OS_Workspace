@@ -1,0 +1,33 @@
+# build
+target/
+**/target/
+**/__pycache__/
+*.pyc
+*.o
+*.elf
+*.bin
+
+# logs / runtime output
+output*.md
+output*.log
+build_check*.log
+run_output*.md
+tmp_clone_debug.log
+*.log
+
+# local scratch
+_inspect/
+_scratch/
+mnt/
+temp_mnt/
+
+# disk images
+sdcard-*.img
+img/*.img
+img/*.bak
+
+# generated submit workspace
+submit_repo/
+
+# optional large reference trees
+exampleOs/

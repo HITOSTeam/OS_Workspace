@@ -1,0 +1,6 @@
+[submodule "os"]
+	path = os
+	url = https://github.com/985025074/OS.git
+[submodule "OSGuide"]
+	path = OSGuide
+	url = https://github.com/985025074/OSDevGuide.git

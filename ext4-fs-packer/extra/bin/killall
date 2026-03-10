@@ -1,0 +1,47 @@
+#!/bin/sh
+
+if [ "$#" -lt 1 ]; then
+    echo "usage: killall process_name ..." >&2
+    exit 1
+fi
+
+ret=0
+for target in "$@"; do
+    found=0
+    for proc_dir in /proc/[0-9]*; do
+        [ -d "$proc_dir" ] || continue
+        pid="${proc_dir#/proc/}"
+        pname="$(cat "$proc_dir/comm" 2>/dev/null)"
+        if [ -z "$pname" ]; then
+            pname="$(awk '/^Name:/ {print $2; exit}' "$proc_dir/status" 2>/dev/null)"
+        fi
+        cmdline="$(tr '\000' ' ' < "$proc_dir/cmdline" 2>/dev/null)"
+        cmd0="${cmdline%% *}"
+        cbase="${cmd0##*/}"
+
+        matched=0
+        case "$pname" in
+            "$target" | "$target.bin")
+                matched=1
+                ;;
+        esac
+        if [ "$matched" -eq 0 ]; then
+            case "$cbase" in
+                "$target" | "$target.bin")
+                    matched=1
+                    ;;
+            esac
+        fi
+
+        if [ "$matched" -eq 1 ]; then
+            if kill "$pid" 2>/dev/null; then
+                found=1
+            fi
+        fi
+    done
+    if [ "$found" -eq 0 ]; then
+        ret=1
+    fi
+done
+
+exit "$ret"

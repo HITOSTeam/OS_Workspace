@@ -1,0 +1,5 @@
+nettest_sdp.o: nettest_sdp.c \
+ /opt/gcc-13.2.0-loongarch64-linux-gnu/sysroot/usr/include/stdc-predef.h \
+ ../config.h
+/opt/gcc-13.2.0-loongarch64-linux-gnu/sysroot/usr/include/stdc-predef.h:
+../config.h:

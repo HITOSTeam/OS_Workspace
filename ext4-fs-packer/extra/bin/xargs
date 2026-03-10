@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "xargs (BusyBox compatibility wrapper) 1.0"
+    exit 0
+fi
+exec /bin/busybox xargs "$@"

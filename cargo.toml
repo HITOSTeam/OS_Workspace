@@ -1,0 +1,2 @@
+[workspace]
+members = ["os", "user", "tests", "easy-fs", "easy-fs-fuse"]
