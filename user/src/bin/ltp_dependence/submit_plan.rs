@@ -40,7 +40,7 @@ const MSGSTRESS_DEBUG_TASKS: [&str; 1] = ["msgstress01"];
 const FOCUS_CPUCTL_FJ_DEBUG: bool = false;
 const CPUCTL_FJ_DEBUG_TASKS: [&str; 1] = ["run_cpuctl_test_fj.sh"];
 const FOCUS_POLL_EPOLL_DEBUG: bool = false;
-const POLL_EPOLL_DEBUG_TASKS: [&str; 13] = [
+const POLL_EPOLL_DEBUG_TASKS: [&str; 18] = [
     "select01",
     "select02",
     "select03",
@@ -54,6 +54,11 @@ const POLL_EPOLL_DEBUG_TASKS: [&str; 13] = [
     "pselect02_64",
     "pselect03",
     "pselect03_64",
+    "epoll_create01",
+    "epoll_create02",
+    "epoll_create1_01",
+    "epoll_create1_02",
+    "epoll-ltp",
 ];
 const RUN_20260302_IO: bool = false;
 const RUN_20260302_MM: bool = false;
