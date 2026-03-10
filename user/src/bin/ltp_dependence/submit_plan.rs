@@ -37,8 +37,24 @@ const CLOCK_SETTIME_DEBUG_TASKS: [&str; 1] = ["clock_settime03"];
 const FOCUS_POSIX_TIMER_DEBUG: bool = false;
 const FOCUS_MSGSTRESS_DEBUG: bool = false;
 const MSGSTRESS_DEBUG_TASKS: [&str; 1] = ["msgstress01"];
-const FOCUS_CPUCTL_FJ_DEBUG: bool = true;
+const FOCUS_CPUCTL_FJ_DEBUG: bool = false;
 const CPUCTL_FJ_DEBUG_TASKS: [&str; 1] = ["run_cpuctl_test_fj.sh"];
+const FOCUS_POLL_EPOLL_DEBUG: bool = false;
+const POLL_EPOLL_DEBUG_TASKS: [&str; 13] = [
+    "select01",
+    "select02",
+    "select03",
+    "select04",
+    "poll01",
+    "poll02",
+    "ppoll01",
+    "pselect01",
+    "pselect01_64",
+    "pselect02",
+    "pselect02_64",
+    "pselect03",
+    "pselect03_64",
+];
 const RUN_20260302_IO: bool = false;
 const RUN_20260302_MM: bool = false;
 const RUN_20260302_THREADING: bool = false;
@@ -120,6 +136,9 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
     if FOCUS_CPUCTL_FJ_DEBUG {
         run_group("/musl", CPUCTL_FJ_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_POLL_EPOLL_DEBUG {
+        run_for_both_libcs(run_group, POLL_EPOLL_DEBUG_TASKS.as_ref());
     }
 
     if RUN_20260302_IO {
