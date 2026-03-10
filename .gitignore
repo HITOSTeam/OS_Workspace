@@ -31,3 +31,6 @@ submit_repo/
 
 # optional large reference trees
 exampleOs/
+# store useless old files
+.legacy/
+loongarch_img_info/
