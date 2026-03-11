@@ -27,6 +27,13 @@ const LTP_ENV_RECVMMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_recvmmsg_fi
 const LTP_ENV_SENDMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sendmsg_fix.so\0";
 const LTP_ENV_EPOLL_CREATE_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_epoll_create_fix.so\0";
 const LTP_ENV_SIGNAL_WAIT_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_signal_wait_fix.so\0";
+const FOCUS_READINESS_SMOKES: bool = false;
+const READINESS_SMOKES: [&str; 4] = [
+    "/user/nested_epoll_smoke.bin",
+    "/user/epoll_ctl_wakeup_smoke.bin",
+    "/user/eventfd_epoll_smoke.bin",
+    "/user/timerfd_epoll_smoke.bin",
+];
 
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let group = if dir.contains("musl") {
@@ -64,6 +71,20 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         }
     }
 
+    println!("#### OS COMP TEST GROUP END {} ####", group);
+}
+
+fn run_named_cases(group: &str, cases: &[&str]) {
+    println!("#### OS COMP TEST GROUP START {} ####", group);
+    for &case in cases {
+        println!("RUN CASE {}", case);
+        let ret = run_script(case, &[]);
+        if ret == 0 {
+            println!("PASS CASE {}", case);
+        } else {
+            println!("FAIL CASE {} : {}", case, ret);
+        }
+    }
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
@@ -336,6 +357,9 @@ fn try_poweroff() -> ! {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
+        if FOCUS_READINESS_SMOKES {
+            run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
+        }
         // basic_test
 
         // chdir("/musl");

@@ -6,7 +6,7 @@ extern crate user;
 
 use user::syscall::{
     EPOLL_CTL_ADD, EPOLLHUP, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait,
-    fork, pipe, read, sleep, waitpid, write,
+    fork, pipe, read, waitpid, write,
 };
 
 const CHILD_DATA: u64 = 0x1111_1111_1111_1111;
@@ -16,6 +16,8 @@ const PARENT_DATA: u64 = 0x2222_2222_2222_2222;
 pub fn main() -> i32 {
     let mut pipe_fd = [0usize; 2];
     assert_eq!(pipe(&mut pipe_fd), 0);
+    let mut start_fd = [0usize; 2];
+    assert_eq!(pipe(&mut start_fd), 0);
 
     let child_epfd = epoll_create1(0);
     assert!(child_epfd >= 0);
@@ -47,7 +49,11 @@ pub fn main() -> i32 {
     assert!(pid >= 0);
     if pid == 0 {
         close(pipe_fd[0]);
-        sleep(50);
+        close(start_fd[1]);
+        let mut start = [0u8; 1];
+        assert_eq!(read(start_fd[0], &mut start), 1);
+        assert_eq!(start[0], b'g');
+        close(start_fd[0]);
         assert_eq!(write(pipe_fd[1], b"x"), 1);
         close(pipe_fd[1]);
         close(child_epfd);
@@ -56,6 +62,9 @@ pub fn main() -> i32 {
     }
 
     close(pipe_fd[1]);
+    close(start_fd[0]);
+    assert_eq!(write(start_fd[1], b"g"), 1);
+    close(start_fd[1]);
 
     let mut events = [EpollEvent::default(); 2];
     assert_eq!(epoll_wait(parent_epfd, &mut events[..1], 5000), 1);
