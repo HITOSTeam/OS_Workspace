@@ -6,7 +6,7 @@ extern crate user;
 
 use user::syscall::{
     close, epoll_create1, epoll_ctl, epoll_wait, eventfd, fork, read, sleep, waitpid, write,
-    EpollEvent, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD,
+    EpollEvent, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_MOD,
 };
 
 const EVENTFD_DATA: u64 = 0x3333_3333_3333_3333;
@@ -34,6 +34,12 @@ pub fn main() -> i32 {
     assert_eq!(events[0].events & EPOLLIN, 0);
     assert_ne!(events[0].events & EPOLLOUT, 0);
 
+    let read_event = EpollEvent {
+        events: EPOLLIN,
+        data: EPOLL_DATA,
+    };
+    assert_eq!(epoll_ctl(epfd, EPOLL_CTL_MOD, efd, Some(&read_event)), 0);
+
     let pid = fork();
     assert!(pid >= 0);
     if pid == 0 {
@@ -54,6 +60,11 @@ pub fn main() -> i32 {
     assert_eq!(read(efd, &mut payload), payload.len() as isize);
     assert_eq!(u64::from_ne_bytes(payload), 3);
 
+    let write_event = EpollEvent {
+        events: EPOLLOUT,
+        data: EPOLL_DATA,
+    };
+    assert_eq!(epoll_ctl(epfd, EPOLL_CTL_MOD, efd, Some(&write_event)), 0);
     assert_eq!(epoll_wait(epfd, &mut events, 0), 1);
     assert_eq!(events[0].data, EPOLL_DATA);
     assert_eq!(events[0].events & EPOLLIN, 0);
