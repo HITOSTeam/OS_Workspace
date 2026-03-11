@@ -18,6 +18,10 @@ const SYSCALL_CLOSE: usize = 57;
 const SYSCALL_SYNC: usize = 81;
 const SYSCALL_PIPE2: usize = 59;
 const SYSCALL_DUP3: usize = 24;
+const SYSCALL_EVENTFD2: usize = 19;
+const SYSCALL_EPOLL_CREATE1: usize = 20;
+const SYSCALL_EPOLL_CTL: usize = 21;
+const SYSCALL_EPOLL_PWAIT: usize = 22;
 const SYSCALL_GETDENTS64: usize = 61;
 const SYSCALL_REBOOT: usize = 142;
 
@@ -217,6 +221,26 @@ const AT_FDCWD: isize = -100;
 const O_CREAT: usize = 0x40;
 const O_TRUNC: usize = 0x200;
 
+pub const EPOLL_CTL_ADD: usize = 1;
+pub const EPOLL_CTL_DEL: usize = 2;
+pub const EPOLL_CTL_MOD: usize = 3;
+pub const EFD_SEMAPHORE: usize = 0x1;
+pub const EFD_NONBLOCK: usize = 0x800;
+pub const EFD_CLOEXEC: usize = 0x80000;
+pub const EPOLLIN: u32 = 0x001;
+pub const EPOLLOUT: u32 = 0x004;
+pub const EPOLLERR: u32 = 0x008;
+pub const EPOLLHUP: u32 = 0x010;
+pub const EPOLLRDHUP: u32 = 0x2000;
+pub const EPOLL_CLOEXEC: usize = 0x80000;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct EpollEvent {
+    pub events: u32,
+    pub data: u64,
+}
+
 fn to_linux_open_flags(flags: usize) -> usize {
     let mut out = flags & 0x3; // access mode compatible with Linux
     if (flags & CREATE) != 0 {
@@ -263,6 +287,33 @@ pub fn pipe(pipe: &mut [usize; 2]) -> isize {
         pipe[1] = tmp[1] as usize;
     }
     ret
+}
+
+pub fn eventfd(initval: u64, flags: usize) -> isize {
+    syscall(SYSCALL_EVENTFD2, [initval as usize, flags, 0, 0, 0, 0])
+}
+
+pub fn epoll_create1(flags: usize) -> isize {
+    syscall(SYSCALL_EPOLL_CREATE1, [flags, 0, 0, 0, 0, 0])
+}
+
+pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event: Option<&EpollEvent>) -> isize {
+    let event_ptr = event.map_or(0usize, |ev| ev as *const EpollEvent as usize);
+    syscall(SYSCALL_EPOLL_CTL, [epfd, op, fd, event_ptr, 0, 0])
+}
+
+pub fn epoll_wait(epfd: usize, events: &mut [EpollEvent], timeout_ms: isize) -> isize {
+    syscall(
+        SYSCALL_EPOLL_PWAIT,
+        [
+            epfd,
+            events.as_mut_ptr() as usize,
+            events.len(),
+            timeout_ms as usize,
+            0,
+            0,
+        ],
+    )
 }
 
 pub fn dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {

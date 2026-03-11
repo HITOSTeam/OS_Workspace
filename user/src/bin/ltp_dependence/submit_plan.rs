@@ -60,6 +60,20 @@ const POLL_EPOLL_DEBUG_TASKS: [&str; 18] = [
     "epoll_create1_02",
     "epoll-ltp",
 ];
+const FOCUS_PIDFD_DEBUG: bool = false;
+const PIDFD_DEBUG_TASKS: [&str; 9] = [
+    "pidfd_getfd01",
+    "pidfd_getfd02",
+    "pidfd_open01",
+    "pidfd_open02",
+    "pidfd_open03",
+    "pidfd_open04",
+    "pidfd_send_signal01",
+    "pidfd_send_signal02",
+    "pidfd_send_signal03",
+];
+const FOCUS_USERFAULTFD_DEBUG: bool = false;
+const USERFAULTFD_DEBUG_TASKS: [&str; 1] = ["userfaultfd01"];
 const RUN_20260302_IO: bool = false;
 const RUN_20260302_MM: bool = false;
 const RUN_20260302_THREADING: bool = false;
@@ -144,6 +158,12 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
     if FOCUS_POLL_EPOLL_DEBUG {
         run_for_both_libcs(run_group, POLL_EPOLL_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_PIDFD_DEBUG {
+        run_for_both_libcs(run_group, PIDFD_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_USERFAULTFD_DEBUG {
+        run_for_both_libcs(run_group, USERFAULTFD_DEBUG_TASKS.as_ref());
     }
 
     if RUN_20260302_IO {
