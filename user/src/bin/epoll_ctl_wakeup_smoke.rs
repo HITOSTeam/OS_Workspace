@@ -5,8 +5,8 @@
 extern crate user;
 
 use user::syscall::{
-    close, epoll_create1, epoll_ctl, epoll_wait, fork, pipe, read, sleep, waitpid, write,
-    EpollEvent, EPOLLIN, EPOLL_CTL_ADD,
+    EPOLL_CTL_ADD, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait, fork, pipe,
+    read, sleep, waitpid, write,
 };
 
 const EVENT_DATA: u64 = 0x3333_3333_3333_3333;

@@ -22,6 +22,9 @@ const SYSCALL_EVENTFD2: usize = 19;
 const SYSCALL_EPOLL_CREATE1: usize = 20;
 const SYSCALL_EPOLL_CTL: usize = 21;
 const SYSCALL_EPOLL_PWAIT: usize = 22;
+const SYSCALL_TIMERFD_CREATE: usize = 85;
+const SYSCALL_TIMERFD_SETTIME: usize = 86;
+const SYSCALL_TIMERFD_GETTIME: usize = 87;
 const SYSCALL_GETDENTS64: usize = 61;
 const SYSCALL_REBOOT: usize = 142;
 
@@ -218,6 +221,26 @@ pub const CREATE: usize = 1 << 9;
 pub const TRUNC: usize = 1 << 10;
 
 const AT_FDCWD: isize = -100;
+pub const CLOCK_REALTIME: usize = 0;
+pub const CLOCK_MONOTONIC: usize = 1;
+pub const TFD_NONBLOCK: usize = 0x800;
+pub const TFD_CLOEXEC: usize = 0x80000;
+pub const TFD_TIMER_ABSTIME: usize = 0x1;
+pub const TFD_TIMER_CANCEL_ON_SET: usize = 0x2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TimeSpec {
+    pub sec: i64,
+    pub nsec: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ITimerSpec {
+    pub it_interval: TimeSpec,
+    pub it_value: TimeSpec,
+}
 const O_CREAT: usize = 0x40;
 const O_TRUNC: usize = 0x200;
 
@@ -291,6 +314,37 @@ pub fn pipe(pipe: &mut [usize; 2]) -> isize {
 
 pub fn eventfd(initval: u64, flags: usize) -> isize {
     syscall(SYSCALL_EVENTFD2, [initval as usize, flags, 0, 0, 0, 0])
+}
+
+pub fn timerfd_create(clockid: usize, flags: usize) -> isize {
+    syscall(SYSCALL_TIMERFD_CREATE, [clockid, flags, 0, 0, 0, 0])
+}
+
+pub fn timerfd_settime(
+    fd: usize,
+    flags: usize,
+    new_value: &ITimerSpec,
+    old_value: Option<&mut ITimerSpec>,
+) -> isize {
+    let old_value_ptr = old_value.map_or(0usize, |spec| spec as *mut ITimerSpec as usize);
+    syscall(
+        SYSCALL_TIMERFD_SETTIME,
+        [
+            fd,
+            flags,
+            new_value as *const ITimerSpec as usize,
+            old_value_ptr,
+            0,
+            0,
+        ],
+    )
+}
+
+pub fn timerfd_gettime(fd: usize, curr_value: &mut ITimerSpec) -> isize {
+    syscall(
+        SYSCALL_TIMERFD_GETTIME,
+        [fd, curr_value as *mut ITimerSpec as usize, 0, 0, 0, 0],
+    )
 }
 
 pub fn epoll_create1(flags: usize) -> isize {

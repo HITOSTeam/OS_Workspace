@@ -4,7 +4,7 @@
 #[macro_use]
 extern crate user;
 
-use user::syscall::{close, open, read, RDONLY};
+use user::syscall::{RDONLY, close, open, read};
 
 const STDIN_FD: usize = 0;
 

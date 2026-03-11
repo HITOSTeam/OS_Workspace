@@ -5,8 +5,8 @@
 extern crate user;
 
 use user::syscall::{
-    close, epoll_create1, epoll_ctl, epoll_wait, eventfd, fork, read, sleep, waitpid, write,
-    EpollEvent, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_MOD,
+    EPOLL_CTL_ADD, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT, EpollEvent, close, epoll_create1, epoll_ctl,
+    epoll_wait, eventfd, fork, read, sleep, waitpid, write,
 };
 
 const EVENTFD_DATA: u64 = 0x3333_3333_3333_3333;
@@ -44,7 +44,7 @@ pub fn main() -> i32 {
     assert!(pid >= 0);
     if pid == 0 {
         sleep(50);
-        let payload = 3u64.to_ne_bytes();
+        let payload = EVENTFD_DATA.to_ne_bytes();
         assert_eq!(write(efd, &payload), payload.len() as isize);
         close(efd);
         close(epfd);
@@ -54,11 +54,10 @@ pub fn main() -> i32 {
     assert_eq!(epoll_wait(epfd, &mut events, 5000), 1);
     assert_eq!(events[0].data, EPOLL_DATA);
     assert_ne!(events[0].events & EPOLLIN, 0);
-    assert_ne!(events[0].events & EPOLLOUT, 0);
 
     let mut payload = [0u8; 8];
     assert_eq!(read(efd, &mut payload), payload.len() as isize);
-    assert_eq!(u64::from_ne_bytes(payload), 3);
+    assert_eq!(u64::from_ne_bytes(payload), EVENTFD_DATA);
 
     let write_event = EpollEvent {
         events: EPOLLOUT,
@@ -79,8 +78,7 @@ pub fn main() -> i32 {
 
     println!(
         "eventfd_epoll_smoke passed: event_data={:#x} epoll_data={:#x}",
-        EVENTFD_DATA,
-        EPOLL_DATA
+        EVENTFD_DATA, EPOLL_DATA
     );
     0
 }

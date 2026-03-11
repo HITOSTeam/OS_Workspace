@@ -60,6 +60,27 @@ const POLL_EPOLL_DEBUG_TASKS: [&str; 18] = [
     "epoll_create1_02",
     "epoll-ltp",
 ];
+const FOCUS_EVENTFD_DEBUG: bool = false;
+const EVENTFD_DEBUG_TASKS: [&str; 9] = [
+    "eventfd01",
+    "eventfd02",
+    "eventfd03",
+    "eventfd04",
+    "eventfd05",
+    "eventfd06",
+    "eventfd2_01",
+    "eventfd2_02",
+    "eventfd2_03",
+];
+const FOCUS_TIMERFD_DEBUG: bool = false;
+const TIMERFD_DEBUG_TASKS: [&str; 6] = [
+    "timerfd01",
+    "timerfd02",
+    "timerfd_create01",
+    "timerfd_gettime01",
+    "timerfd_settime01",
+    "timerfd_settime02",
+];
 const FOCUS_PIDFD_DEBUG: bool = false;
 const PIDFD_DEBUG_TASKS: [&str; 9] = [
     "pidfd_getfd01",
@@ -158,6 +179,12 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
     if FOCUS_POLL_EPOLL_DEBUG {
         run_for_both_libcs(run_group, POLL_EPOLL_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_EVENTFD_DEBUG {
+        run_for_both_libcs(run_group, EVENTFD_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_TIMERFD_DEBUG {
+        run_for_both_libcs(run_group, TIMERFD_DEBUG_TASKS.as_ref());
     }
     if FOCUS_PIDFD_DEBUG {
         run_for_both_libcs(run_group, PIDFD_DEBUG_TASKS.as_ref());

@@ -9,7 +9,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use user::syscall::{close, getdents64, open, read, RDONLY};
+use user::syscall::{RDONLY, close, getdents64, open, read};
 
 struct ProcInfo {
     pid: u32,
