@@ -26,6 +26,7 @@ const SYSCALL_MQ_OPEN: usize = 180;
 const SYSCALL_MQ_UNLINK: usize = 181;
 const SYSCALL_MQ_TIMEDSEND: usize = 182;
 const SYSCALL_MQ_TIMEDRECEIVE: usize = 183;
+const SYSCALL_MQ_NOTIFY: usize = 184;
 const SYSCALL_MQ_GETSETATTR: usize = 185;
 const SYSCALL_TIMERFD_CREATE: usize = 85;
 const SYSCALL_TIMERFD_SETTIME: usize = 86;
@@ -253,6 +254,10 @@ const O_TRUNC: usize = 0x200;
 pub const MQ_O_CREAT: usize = O_CREAT;
 pub const MQ_O_EXCL: usize = O_EXCL;
 pub const MQ_O_NONBLOCK: usize = O_NONBLOCK;
+pub const SIGEV_SIGNAL: i32 = 0;
+pub const SIGEV_NONE: i32 = 1;
+pub const SIGEV_THREAD: i32 = 2;
+pub const SIGEV_THREAD_ID: i32 = 4;
 
 pub const EPOLL_CTL_ADD: usize = 1;
 pub const EPOLL_CTL_DEL: usize = 2;
@@ -282,6 +287,15 @@ pub struct MqAttr {
     pub mq_msgsize: i64,
     pub mq_curmsgs: i64,
     pub __reserved: [i64; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Sigevent {
+    pub sigev_value: usize,
+    pub sigev_signo: i32,
+    pub sigev_notify: i32,
+    pub sigev_data: [usize; 2],
 }
 
 fn to_linux_open_flags(flags: usize) -> usize {
@@ -392,6 +406,11 @@ pub fn mq_timedreceive(
             0,
         ],
     )
+}
+
+pub fn mq_notify(mqdes: usize, notification: Option<&Sigevent>) -> isize {
+    let notification_ptr = notification.map_or(0usize, |ev| ev as *const Sigevent as usize);
+    syscall(SYSCALL_MQ_NOTIFY, [mqdes, notification_ptr, 0, 0, 0, 0])
 }
 
 pub fn mq_getattr(mqdes: usize, attr: &mut MqAttr) -> isize {
@@ -568,6 +587,16 @@ pub struct SignalAction {
     pub handler: usize,
     pub mask: SignalFlags,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct RtSigAction {
+    handler: usize,
+    flags: usize,
+    restorer: usize,
+    mask: u64,
+}
+
 impl Default for SignalAction {
     fn default() -> Self {
         SignalAction {
@@ -581,25 +610,39 @@ pub fn sigaction(
     action: Option<&SignalAction>,
     old_action: Option<&mut SignalAction>,
 ) -> isize {
-    let action_ptr = match action {
-        Some(act) => act as *const SignalAction,
-        None => core::ptr::null(),
+    let action_rt = action.map(|act| RtSigAction {
+        handler: act.handler,
+        flags: 0,
+        restorer: 0,
+        mask: act.mask.bits() as u64,
+    });
+    let mut old_rt = RtSigAction::default();
+    let action_ptr = action_rt
+        .as_ref()
+        .map_or(core::ptr::null(), |act| act as *const RtSigAction);
+    let old_action_ptr = if old_action.is_some() {
+        &mut old_rt as *mut RtSigAction
+    } else {
+        core::ptr::null_mut()
     };
-    let old_action_ptr = match old_action {
-        Some(old_act) => old_act as *mut SignalAction,
-        None => core::ptr::null_mut(),
-    };
-    syscall(
+    let ret = syscall(
         SYSCALL_SIGACTION,
         [
             signum as usize,
             action_ptr as usize,
             old_action_ptr as usize,
-            0,
+            core::mem::size_of::<u64>(),
             0,
             0,
         ],
-    )
+    );
+    if ret >= 0 {
+        if let Some(old_act) = old_action {
+            old_act.handler = old_rt.handler;
+            old_act.mask = SignalFlags::from_bits_truncate(old_rt.mask as u32);
+        }
+    }
+    ret
 }
 pub fn sigprocmask(how: u32) -> isize {
     syscall(SYSCALL_SIGPROCMASK, [how as usize, 0, 0, 0, 0, 0])
