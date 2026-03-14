@@ -28,13 +28,14 @@ const LTP_ENV_SENDMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sendmsg_fix.
 const LTP_ENV_EPOLL_CREATE_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_epoll_create_fix.so\0";
 const LTP_ENV_SIGNAL_WAIT_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_signal_wait_fix.so\0";
 const FOCUS_READINESS_SMOKES: bool = false;
-const READINESS_SMOKES: [&str; 12] = [
+const READINESS_SMOKES: [&str; 13] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
     "/user/nested_epoll_ctl_del_smoke.bin",
     "/user/nested_epoll_et_smoke.bin",
     "/user/nested_epoll_et_maxevents_smoke.bin",
     "/user/nested_epoll_oneshot_smoke.bin",
+    "/user/nested_epoll_parent_oneshot_smoke.bin",
     "/user/epoll_ctl_wakeup_smoke.bin",
     "/user/eventfd_epoll_smoke.bin",
     "/user/mq_epoll_smoke.bin",
