@@ -22,6 +22,11 @@ const SYSCALL_EVENTFD2: usize = 19;
 const SYSCALL_EPOLL_CREATE1: usize = 20;
 const SYSCALL_EPOLL_CTL: usize = 21;
 const SYSCALL_EPOLL_PWAIT: usize = 22;
+const SYSCALL_MQ_OPEN: usize = 180;
+const SYSCALL_MQ_UNLINK: usize = 181;
+const SYSCALL_MQ_TIMEDSEND: usize = 182;
+const SYSCALL_MQ_TIMEDRECEIVE: usize = 183;
+const SYSCALL_MQ_GETSETATTR: usize = 185;
 const SYSCALL_TIMERFD_CREATE: usize = 85;
 const SYSCALL_TIMERFD_SETTIME: usize = 86;
 const SYSCALL_TIMERFD_GETTIME: usize = 87;
@@ -242,7 +247,12 @@ pub struct ITimerSpec {
     pub it_value: TimeSpec,
 }
 const O_CREAT: usize = 0x40;
+const O_EXCL: usize = 0x80;
+const O_NONBLOCK: usize = 0x800;
 const O_TRUNC: usize = 0x200;
+pub const MQ_O_CREAT: usize = O_CREAT;
+pub const MQ_O_EXCL: usize = O_EXCL;
+pub const MQ_O_NONBLOCK: usize = O_NONBLOCK;
 
 pub const EPOLL_CTL_ADD: usize = 1;
 pub const EPOLL_CTL_DEL: usize = 2;
@@ -262,6 +272,16 @@ pub const EPOLL_CLOEXEC: usize = 0x80000;
 pub struct EpollEvent {
     pub events: u32,
     pub data: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MqAttr {
+    pub mq_flags: i64,
+    pub mq_maxmsg: i64,
+    pub mq_msgsize: i64,
+    pub mq_curmsgs: i64,
+    pub __reserved: [i64; 4],
 }
 
 fn to_linux_open_flags(flags: usize) -> usize {
@@ -314,6 +334,71 @@ pub fn pipe(pipe: &mut [usize; 2]) -> isize {
 
 pub fn eventfd(initval: u64, flags: usize) -> isize {
     syscall(SYSCALL_EVENTFD2, [initval as usize, flags, 0, 0, 0, 0])
+}
+
+pub fn mq_open(name: &str, oflag: usize, mode: usize, attr: Option<&MqAttr>) -> isize {
+    extern crate alloc;
+    use alloc::ffi::CString;
+    let Ok(cstr) = CString::new(name) else {
+        return -1;
+    };
+    let attr_ptr = attr.map_or(0usize, |v| v as *const MqAttr as usize);
+    syscall(
+        SYSCALL_MQ_OPEN,
+        [cstr.as_ptr() as usize, oflag, mode, attr_ptr, 0, 0],
+    )
+}
+
+pub fn mq_unlink(name: &str) -> isize {
+    extern crate alloc;
+    use alloc::ffi::CString;
+    let Ok(cstr) = CString::new(name) else {
+        return -1;
+    };
+    syscall(SYSCALL_MQ_UNLINK, [cstr.as_ptr() as usize, 0, 0, 0, 0, 0])
+}
+
+pub fn mq_timedsend(mqdes: usize, msg: &[u8], prio: u32, abs_timeout: Option<&TimeSpec>) -> isize {
+    let timeout_ptr = abs_timeout.map_or(0usize, |v| v as *const TimeSpec as usize);
+    syscall(
+        SYSCALL_MQ_TIMEDSEND,
+        [
+            mqdes,
+            msg.as_ptr() as usize,
+            msg.len(),
+            prio as usize,
+            timeout_ptr,
+            0,
+        ],
+    )
+}
+
+pub fn mq_timedreceive(
+    mqdes: usize,
+    buf: &mut [u8],
+    prio: Option<&mut u32>,
+    abs_timeout: Option<&TimeSpec>,
+) -> isize {
+    let prio_ptr = prio.map_or(0usize, |v| v as *mut u32 as usize);
+    let timeout_ptr = abs_timeout.map_or(0usize, |v| v as *const TimeSpec as usize);
+    syscall(
+        SYSCALL_MQ_TIMEDRECEIVE,
+        [
+            mqdes,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+            prio_ptr,
+            timeout_ptr,
+            0,
+        ],
+    )
+}
+
+pub fn mq_getattr(mqdes: usize, attr: &mut MqAttr) -> isize {
+    syscall(
+        SYSCALL_MQ_GETSETATTR,
+        [mqdes, 0, attr as *mut MqAttr as usize, 0, 0, 0],
+    )
 }
 
 pub fn timerfd_create(clockid: usize, flags: usize) -> isize {
