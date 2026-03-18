@@ -8,7 +8,7 @@ extern crate user;
 use alloc::{string::String, vec::Vec};
 mod ltp_dependence;
 use ltp_dependence::*;
-use user::syscall::{self, chdir, close, execve, exit, fork, open, sync, waitpid, RDONLY};
+use user::syscall::{self, RDONLY, chdir, close, execve, exit, fork, open, sync, waitpid};
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
 const LTP_ENV_DEV_FS_TYPE: &[u8] = b"LTP_DEV_FS_TYPE=tmpfs\0";
@@ -44,6 +44,8 @@ const READINESS_SMOKES: [&str; 13] = [
     "/user/mq_unlink_epoll_smoke.bin",
     "/user/timerfd_epoll_smoke.bin",
 ];
+const FOCUS_PROCFS_SMOKES: bool = false;
+const PROCFS_SMOKES: [&str; 1] = ["/user/proc_magic_links_smoke.bin"];
 
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let group = if dir.contains("musl") {
@@ -406,6 +408,9 @@ pub fn main() -> i32 {
     if cfg!(target_arch = "riscv64") {
         if FOCUS_READINESS_SMOKES {
             run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
+        }
+        if FOCUS_PROCFS_SMOKES {
+            run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
         }
         // basic_test
 
