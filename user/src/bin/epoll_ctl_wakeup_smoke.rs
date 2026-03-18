@@ -7,8 +7,8 @@ extern crate user;
 
 use alloc::{format, vec::Vec};
 use user::syscall::{
-    EPOLL_CTL_ADD, EPOLLIN, EpollEvent, RDONLY, close, epoll_create1, epoll_ctl, epoll_wait,
-    fork, open, pipe, read, waitpid, write, _yield,
+    _yield, EPOLL_CTL_ADD, EPOLLIN, EpollEvent, RDONLY, close, epoll_create1, epoll_ctl,
+    epoll_wait, fork, open, pipe, read, waitpid, write,
 };
 
 const EVENT_DATA: u64 = 0x3333_3333_3333_3333;

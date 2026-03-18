@@ -5,8 +5,8 @@
 extern crate user;
 
 use user::syscall::{
-    EPOLLET, EPOLL_CTL_ADD, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait,
-    pipe, read, write,
+    EPOLL_CTL_ADD, EPOLLET, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait, pipe,
+    read, write,
 };
 
 const CHILD_DATA: u64 = 0xb1b1_b1b1_b1b1_b1b1;

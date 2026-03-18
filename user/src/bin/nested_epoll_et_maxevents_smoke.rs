@@ -5,8 +5,8 @@
 extern crate user;
 
 use user::syscall::{
-    EPOLLET, EPOLL_CTL_ADD, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait,
-    pipe, read, write,
+    EPOLL_CTL_ADD, EPOLLET, EPOLLIN, EpollEvent, close, epoll_create1, epoll_ctl, epoll_wait, pipe,
+    read, write,
 };
 
 const CHILD_A_DATA: u64 = 0xd1d1_d1d1_d1d1_d1d1;
@@ -56,7 +56,12 @@ pub fn main() -> i32 {
         data: PARENT_A_DATA,
     };
     assert_eq!(
-        epoll_ctl(parent_epfd, EPOLL_CTL_ADD, child_a_epfd, Some(&parent_a_event)),
+        epoll_ctl(
+            parent_epfd,
+            EPOLL_CTL_ADD,
+            child_a_epfd,
+            Some(&parent_a_event)
+        ),
         0
     );
 
@@ -65,7 +70,12 @@ pub fn main() -> i32 {
         data: PARENT_B_DATA,
     };
     assert_eq!(
-        epoll_ctl(parent_epfd, EPOLL_CTL_ADD, child_b_epfd, Some(&parent_b_event)),
+        epoll_ctl(
+            parent_epfd,
+            EPOLL_CTL_ADD,
+            child_b_epfd,
+            Some(&parent_b_event)
+        ),
         0
     );
 

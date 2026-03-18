@@ -8,9 +8,9 @@ extern crate user;
 use alloc::format;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use user::syscall::{
-    _yield, MQ_O_CREAT, MQ_O_EXCL, MqAttr, RDONLY, SIGEV_SIGNAL, SIGUSR1, SignalAction, Sigevent,
-    WRONLY, close, getpid, mq_notify, mq_open, mq_timedreceive, mq_timedsend, mq_unlink,
-    sigaction, sigreturn, sleep,
+    _yield, MQ_O_CREAT, MQ_O_EXCL, MqAttr, RDONLY, SIGEV_SIGNAL, SIGUSR1, Sigevent, SignalAction,
+    WRONLY, close, getpid, mq_notify, mq_open, mq_timedreceive, mq_timedsend, mq_unlink, sigaction,
+    sigreturn, sleep,
 };
 
 const EBUSY: isize = -16;
@@ -32,7 +32,10 @@ fn install_sigusr1_handler() {
     let mut new_action = SignalAction::default();
     let mut old_action = SignalAction::default();
     new_action.handler = notify_handler as usize;
-    assert_eq!(sigaction(SIGUSR1, Some(&new_action), Some(&mut old_action)), 0);
+    assert_eq!(
+        sigaction(SIGUSR1, Some(&new_action), Some(&mut old_action)),
+        0
+    );
 }
 
 fn mq_signal_event() -> Sigevent {

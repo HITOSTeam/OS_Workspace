@@ -5,7 +5,7 @@
 extern crate user;
 
 use user::syscall::{
-    EPOLLONESHOT, EPOLL_CTL_ADD, EPOLL_CTL_MOD, EPOLLIN, EpollEvent, close, epoll_create1,
+    EPOLL_CTL_ADD, EPOLL_CTL_MOD, EPOLLIN, EPOLLONESHOT, EpollEvent, close, epoll_create1,
     epoll_ctl, epoll_wait, fork, pipe, read, waitpid, write,
 };
 
