@@ -8,7 +8,7 @@ extern crate user;
 use alloc::{string::String, vec::Vec};
 mod ltp_dependence;
 use ltp_dependence::*;
-use user::syscall::{self, chdir, execve, exit, fork, sync, waitpid};
+use user::syscall::{self, chdir, close, execve, exit, fork, open, sync, waitpid, RDONLY};
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
 const LTP_ENV_DEV_FS_TYPE: &[u8] = b"LTP_DEV_FS_TYPE=tmpfs\0";
@@ -26,6 +26,7 @@ const LTP_ENV_SBRK01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sbrk_fix.so\0";
 const LTP_ENV_RECVMMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_recvmmsg_fix.so\0";
 const LTP_ENV_SENDMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sendmsg_fix.so\0";
 const LTP_ENV_EPOLL_CREATE_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_epoll_create_fix.so\0";
+const LTP_ENV_READLINK_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_readlink_fix.so\0";
 const LTP_ENV_SIGNAL_WAIT_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_signal_wait_fix.so\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 13] = [
@@ -64,15 +65,9 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         for arg in parts {
             extra_args.push(arg);
         }
-        let mut path = String::from(dir);
-        if script.contains('/') {
-            path.push_str("/ltp/testcases/");
-        } else {
-            path.push_str("/ltp/testcases/bin/");
-        }
-        path.push_str(script);
+        let path = resolve_ltp_case_path(dir, script);
         println!("RUN LTP CASE {}", script);
-        let ret = run_script(&path, &extra_args);
+        let ret = run_script(path.as_str(), &extra_args);
         if ret == 0 {
             println!("PASS LTP CASE {}", script);
         } else {
@@ -81,6 +76,35 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     }
 
     println!("#### OS COMP TEST GROUP END {} ####", group);
+}
+
+fn path_exists(path: &str) -> bool {
+    let fd = open(path, RDONLY);
+    if fd < 0 {
+        return false;
+    }
+    let _ = close(fd as usize);
+    true
+}
+
+fn resolve_ltp_case_path(dir: &str, script: &str) -> String {
+    let basename = script.rsplit('/').next().unwrap_or(script);
+
+    let mut installed = String::from(dir);
+    installed.push_str("/ltp/testcases/bin/");
+    installed.push_str(basename);
+    if path_exists(installed.as_str()) {
+        return installed;
+    }
+
+    let mut source_tree = String::from(dir);
+    source_tree.push_str("/ltp/testcases/");
+    source_tree.push_str(script);
+    if path_exists(source_tree.as_str()) {
+        return source_tree;
+    }
+
+    installed
 }
 
 fn run_named_cases(group: &str, cases: &[&str]) {
@@ -182,6 +206,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         let is_musl_recvmmsg01 = name.contains("/musl/ltp/testcases/bin/recvmmsg01");
         let is_musl_sendmsg01 = name.contains("/musl/ltp/testcases/bin/sendmsg01");
         let is_musl_epoll_case = name.contains("/musl/ltp/testcases/bin/epoll");
+        let is_musl_readlink_compat_case = name.contains("/musl/ltp/testcases/bin/readlink03")
+            || name.contains("/musl/ltp/testcases/bin/readlinkat02");
         let is_musl_signal_wait_compat_case = name.contains("/musl/ltp/testcases/bin/sigrelse01")
             || name.contains("/musl/ltp/testcases/bin/sigtimedwait01")
             || name.contains("/musl/ltp/testcases/bin/sigwaitinfo01");
@@ -302,6 +328,16 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_EPOLL_CREATE_PRELOAD.as_ptr(),
             core::ptr::null(),
         ];
+        let ltp_envs_readlink = [
+            LTP_ENV_DEV.as_ptr(),
+            LTP_ENV_DEV_FS_TYPE.as_ptr(),
+            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
+            LTP_ENV_KERNEL.as_ptr(),
+            LTP_ENV_PATH.as_ptr(),
+            LTP_ENV_ROOT_MUSL.as_ptr(),
+            LTP_ENV_READLINK_PRELOAD.as_ptr(),
+            core::ptr::null(),
+        ];
         // The bundled musl reserves signal 34 internally and restarts
         // sigtimedwait()/sigwaitinfo() on EINTR, which breaks these LTP cases.
         let ltp_envs_signal_wait = [
@@ -334,6 +370,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
                 &ltp_envs_sendmsg01[..]
             } else if is_musl_epoll_case {
                 &ltp_envs_epoll[..]
+            } else if is_musl_readlink_compat_case {
+                &ltp_envs_readlink[..]
             } else if is_musl_signal_wait_compat_case {
                 &ltp_envs_signal_wait[..]
             } else if is_freezer_controller_script && is_musl_ltp {

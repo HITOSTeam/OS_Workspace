@@ -81,6 +81,13 @@ const TIMERFD_DEBUG_TASKS: [&str; 6] = [
     "timerfd_settime01",
     "timerfd_settime02",
 ];
+const FOCUS_PROC_MAGIC_DEBUG: bool = false;
+const PROC_MAGIC_DEBUG_TASKS: [&str; 4] = [
+    "open13",
+    "readlink03",
+    "readlinkat02",
+    "commands/sysctl/sysctl02.sh",
+];
 const FOCUS_PIDFD_DEBUG: bool = false;
 const PIDFD_DEBUG_TASKS: [&str; 9] = [
     "pidfd_getfd01",
@@ -185,6 +192,9 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
     if FOCUS_TIMERFD_DEBUG {
         run_for_both_libcs(run_group, TIMERFD_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_PROC_MAGIC_DEBUG {
+        run_for_both_libcs(run_group, PROC_MAGIC_DEBUG_TASKS.as_ref());
     }
     if FOCUS_PIDFD_DEBUG {
         run_for_both_libcs(run_group, PIDFD_DEBUG_TASKS.as_ref());
