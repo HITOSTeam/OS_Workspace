@@ -88,6 +88,15 @@ const PROC_MAGIC_DEBUG_TASKS: [&str; 4] = [
     "readlinkat02",
     "commands/sysctl/sysctl02.sh",
 ];
+const FOCUS_PROC_SYSCTL_DEBUG: bool = false;
+const PROC_SYSCTL_DEBUG_TASKS: [&str; 6] = [
+    "proc01",
+    "sysctl01",
+    "sysctl03",
+    "sysctl04",
+    "commands/sysctl/sysctl01.sh",
+    "commands/sysctl/sysctl02.sh",
+];
 const FOCUS_PIDFD_DEBUG: bool = false;
 const PIDFD_DEBUG_TASKS: [&str; 9] = [
     "pidfd_getfd01",
@@ -102,6 +111,8 @@ const PIDFD_DEBUG_TASKS: [&str; 9] = [
 ];
 const FOCUS_USERFAULTFD_DEBUG: bool = false;
 const USERFAULTFD_DEBUG_TASKS: [&str; 1] = ["userfaultfd01"];
+const FOCUS_MOUNTNS_DEBUG: bool = false;
+const MOUNTNS_DEBUG_TASKS: [&str; 4] = ["mountns01", "mountns02", "mountns03", "mountns04"];
 const RUN_20260302_IO: bool = false;
 const RUN_20260302_MM: bool = false;
 const RUN_20260302_THREADING: bool = false;
@@ -196,11 +207,17 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     if FOCUS_PROC_MAGIC_DEBUG {
         run_for_both_libcs(run_group, PROC_MAGIC_DEBUG_TASKS.as_ref());
     }
+    if FOCUS_PROC_SYSCTL_DEBUG {
+        run_for_both_libcs(run_group, PROC_SYSCTL_DEBUG_TASKS.as_ref());
+    }
     if FOCUS_PIDFD_DEBUG {
         run_for_both_libcs(run_group, PIDFD_DEBUG_TASKS.as_ref());
     }
     if FOCUS_USERFAULTFD_DEBUG {
         run_for_both_libcs(run_group, USERFAULTFD_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_MOUNTNS_DEBUG {
+        run_for_both_libcs(run_group, MOUNTNS_DEBUG_TASKS.as_ref());
     }
 
     if RUN_20260302_IO {
