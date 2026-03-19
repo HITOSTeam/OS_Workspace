@@ -24,6 +24,7 @@ const O_DIRECTORY: usize = 0x10000;
 const O_NOFOLLOW: usize = 0x20000;
 const O_PATH: usize = 0x200000;
 
+const ENOENT: isize = -2;
 const ELOOP: isize = -40;
 
 const S_IFMT: u32 = 0o170000;
@@ -121,22 +122,24 @@ fn assert_path_reads(path: &str, expected: &[u8]) {
     assert_eq!(close(fd), 0);
 }
 
-fn assert_symlink_fd(path: &str, expected_target: &str) {
+fn open_symlink_fd(path: &str) -> usize {
     let fd = linux_openat(AT_FDCWD, path, O_PATH | O_NOFOLLOW, 0);
     assert!(fd >= 0);
-    let fd = fd as usize;
+    fd as usize
+}
 
+fn assert_symlink_fd_target(fd: usize, expected_target: &str) {
     let mut buf = [0u8; 256];
     let len = linux_readlinkat(fd as isize, "", &mut buf);
     assert!(len >= 0);
     let target = str::from_utf8(&buf[..len as usize]).unwrap();
     assert_eq!(target, expected_target);
+}
 
+fn assert_symlink_fd_mode(fd: usize) {
     let mut st = KStat::default();
     assert_eq!(linux_newfstatat(fd as isize, "", &mut st, AT_EMPTY_PATH), 0);
     assert_eq!(st.st_mode & S_IFMT, S_IFLNK);
-
-    assert_eq!(close(fd), 0);
 }
 
 #[unsafe(no_mangle)]
@@ -168,12 +171,27 @@ pub fn main() -> i32 {
         linux_openat(AT_FDCWD, "/proc/self/cwd", O_NOFOLLOW, 0),
         ELOOP
     );
-    assert_symlink_fd("/proc/self/cwd", &cwd);
+    let cwd_link_fd = open_symlink_fd("/proc/self/cwd");
+    assert_symlink_fd_target(cwd_link_fd, &cwd);
+    assert_symlink_fd_mode(cwd_link_fd);
+
+    assert_eq!(chdir(&orig_cwd), 0);
+    assert_symlink_fd_target(cwd_link_fd, &orig_cwd);
+    assert_symlink_fd_mode(cwd_link_fd);
+    assert_eq!(chdir(&cwd), 0);
+    assert_eq!(close(cwd_link_fd), 0);
 
     let dir_link = alloc::format!("/proc/self/fd/{}", dirfd);
-    assert_symlink_fd(&dir_link, &cwd);
+    let dir_link_fd = open_symlink_fd(&dir_link);
+    assert_symlink_fd_target(dir_link_fd, &cwd);
+    assert_symlink_fd_mode(dir_link_fd);
 
     assert_eq!(close(dirfd), 0);
+    let mut buf = [0u8; 256];
+    assert_eq!(linux_readlinkat(dir_link_fd as isize, "", &mut buf), ENOENT);
+    assert_symlink_fd_mode(dir_link_fd);
+    assert_eq!(close(dir_link_fd), 0);
+
     assert_eq!(linux_unlinkat(AT_FDCWD, &name, 0), 0);
     assert_eq!(chdir(&orig_cwd), 0);
 

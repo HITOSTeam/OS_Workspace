@@ -138,6 +138,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         status
     }
 
+    const MUSL_COMPAT_PRELOADS_SUPPORTED: bool = cfg!(target_arch = "riscv64");
+
     let pid = fork();
     if pid == 0 {
         // doio is a low-level engine that blocks on stdin when run directly.
@@ -197,22 +199,29 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             || name.ends_with("/stop_freeze_sleep_thaw_cont.sh")
             || name.ends_with("/vfork_freeze.sh")
             || name.ends_with("/run_freezer.sh");
-        let is_musl_clone04 = name.contains("/musl/ltp/testcases/bin/clone04");
-        let is_musl_sbrk_compat_case = name.contains("/musl/ltp/testcases/bin/brk02")
-            || name.contains("/musl/ltp/testcases/bin/sbrk01")
-            || name.contains("/musl/ltp/testcases/bin/shmt09")
-            || name.contains("/musl/ltp/testcases/bin/mmapstress02")
-            || name.contains("/musl/ltp/testcases/bin/mmapstress03")
-            || name.contains("/musl/ltp/testcases/bin/mmapstress05")
-            || name.contains("/musl/ltp/testcases/bin/mmapstress06");
-        let is_musl_recvmmsg01 = name.contains("/musl/ltp/testcases/bin/recvmmsg01");
-        let is_musl_sendmsg01 = name.contains("/musl/ltp/testcases/bin/sendmsg01");
-        let is_musl_epoll_case = name.contains("/musl/ltp/testcases/bin/epoll");
-        let is_musl_readlink_compat_case = name.contains("/musl/ltp/testcases/bin/readlink03")
-            || name.contains("/musl/ltp/testcases/bin/readlinkat02");
-        let is_musl_signal_wait_compat_case = name.contains("/musl/ltp/testcases/bin/sigrelse01")
-            || name.contains("/musl/ltp/testcases/bin/sigtimedwait01")
-            || name.contains("/musl/ltp/testcases/bin/sigwaitinfo01");
+        let is_musl_clone04 =
+            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/clone04");
+        let is_musl_sbrk_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
+            && (name.contains("/musl/ltp/testcases/bin/brk02")
+                || name.contains("/musl/ltp/testcases/bin/sbrk01")
+                || name.contains("/musl/ltp/testcases/bin/shmt09")
+                || name.contains("/musl/ltp/testcases/bin/mmapstress02")
+                || name.contains("/musl/ltp/testcases/bin/mmapstress03")
+                || name.contains("/musl/ltp/testcases/bin/mmapstress05")
+                || name.contains("/musl/ltp/testcases/bin/mmapstress06"));
+        let is_musl_recvmmsg01 =
+            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/recvmmsg01");
+        let is_musl_sendmsg01 =
+            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/sendmsg01");
+        let is_musl_epoll_case =
+            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/epoll");
+        let is_musl_readlink_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
+            && (name.contains("/musl/ltp/testcases/bin/readlink03")
+                || name.contains("/musl/ltp/testcases/bin/readlinkat02"));
+        let is_musl_signal_wait_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
+            && (name.contains("/musl/ltp/testcases/bin/sigrelse01")
+                || name.contains("/musl/ltp/testcases/bin/sigtimedwait01")
+                || name.contains("/musl/ltp/testcases/bin/sigwaitinfo01"));
         let is_msgstress01 = name.contains("/ltp/testcases/bin/msgstress01");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
