@@ -45,7 +45,10 @@ const READINESS_SMOKES: [&str; 13] = [
     "/user/timerfd_epoll_smoke.bin",
 ];
 const FOCUS_PROCFS_SMOKES: bool = false;
-const PROCFS_SMOKES: [&str; 1] = ["/user/proc_magic_links_smoke.bin"];
+const PROCFS_SMOKES: [&str; 2] = [
+    "/user/proc_magic_links_smoke.bin",
+    "/user/mount_namespace_smoke.bin",
+];
 
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let group = if dir.contains("musl") {
