@@ -113,6 +113,17 @@ const FOCUS_USERFAULTFD_DEBUG: bool = false;
 const USERFAULTFD_DEBUG_TASKS: [&str; 1] = ["userfaultfd01"];
 const FOCUS_MOUNTNS_DEBUG: bool = false;
 const MOUNTNS_DEBUG_TASKS: [&str; 4] = ["mountns01", "mountns02", "mountns03", "mountns04"];
+const FOCUS_FS_BIND_DEBUG: bool = false;
+const FS_BIND_DEBUG_TASKS: [&str; 8] = [
+    "fs_bind01.sh",
+    "fs_bind02.sh",
+    "fs_bind03.sh",
+    "fs_bind04.sh",
+    "fs_bind05.sh",
+    "fs_bind06.sh",
+    "fs_bind07.sh",
+    "fs_bind08.sh",
+];
 const RUN_20260302_IO: bool = false;
 const RUN_20260302_MM: bool = false;
 const RUN_20260302_THREADING: bool = false;
@@ -218,6 +229,9 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
     if FOCUS_MOUNTNS_DEBUG {
         run_for_both_libcs(run_group, MOUNTNS_DEBUG_TASKS.as_ref());
+    }
+    if FOCUS_FS_BIND_DEBUG {
+        run_for_both_libcs(run_group, FS_BIND_DEBUG_TASKS.as_ref());
     }
 
     if RUN_20260302_IO {
