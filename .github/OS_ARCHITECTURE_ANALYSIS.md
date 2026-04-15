@@ -43,6 +43,8 @@
 | 2025-07-15 | kill(-pgid,sig) 排除自身（POSIX 要求包含） | ✅ 已修复 | `8288516` |
 | 2025-07-15 | 492 行死代码清理（task_block/signal/processor/handler） | ✅ 已修复 | `5433896` |
 | 2025-07-15 | P1 #10: init 进程 unwrap → descriptive expect | ✅ 已修复 | `5433896` |
+| 2025-07-15 | P1 #9: unsafe 块 SAFETY 注释（0% → 51%，68/132） | ✅ 已修复 | `a65bfbe` |
+| 2025-07-15 | TaskContext::fmt 非法内存读取（panic 双重故障风险） | ✅ 已修复 | `a65bfbe` |
 
 ---
 
@@ -51,7 +53,7 @@
 | 严重等级 | 数量 | 代表性问题 |
 |---------|------|-----------|
 | 🔴 CRITICAL | ~~7~~ 2 remaining | ~~COW fork TLB~~⚠️误报、~~LoongArch FP~~✅、~~eentry 竞态~~✅、~~unreachable~~✅、~~ELF panic~~✅、~~PID panic~~✅ |
-| 🟠 HIGH | ~~12~~ 7 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink~~✅、~~flush-lock 竞态~~✅、wakeup TOCTOU⚠️已缓解、~~remove_pid panic~~✅ |
+| 🟠 HIGH | ~~12~~ 6 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink~~✅、~~flush-lock 竞态~~✅、wakeup TOCTOU⚠️已缓解、~~remove_pid panic~~✅、~~unsafe 注释~~✅ |
 | 🟡 MEDIUM | 15+ | ~~cgroup OOM 未回滚~~、~~信号进程组投递~~✅、PRMD 魔法数字 |
 | 🟢 LOW | 10+ | DTB 解析静默失败、死代码、注释缺失 |
 
@@ -371,8 +373,8 @@ Syscall 层有 18+ unsafe 块**无安全注释**，主要在：
 | 总代码量 | 59,253 LOC / 145 文件 |
 | `.unwrap()` 调用 | 132 处（1 处 CRITICAL） |
 | `panic!()` 调用 | 21 处 |
-| `unsafe` 块 | 161 处（仅 6% 有 SAFETY 注释） |
-| 死代码（注释掉） | 650+ 行 |
+| `unsafe` 块 | 132 处（51% 有 SAFETY 注释） |
+| 死代码（注释掉） | ~~650+~~ 158 行（已清理 492 行） |
 | >100 行函数 | 2 个 |
 | TODO/FIXME | 仅 1 个 |
 
@@ -426,7 +428,7 @@ Syscall 层有 18+ unsafe 块**无安全注释**，主要在：
 | 6 | wait4 收割竞态 | `processor.rs:457-478` | Medium | ⚠️ **死代码** — 该函数从未被调用 |
 | 7 | deferred unlink 竞态 | `inode.rs:1142-1151` | Medium | ✅ **已修复** `949c6ed` |
 | 8 | wakeup_task TOCTOU | `manager.rs:547-588` | Medium | ⚠️ **已缓解** — in_ready_queue 原子标志 |
-| 9 | 161 个 unsafe 块无注释 | 全局 | Medium | 🔲 待修复 |
+| 9 | 161 个 unsafe 块无注释 | 全局 | Medium | ✅ **已修复** `a65bfbe`（68/132 blocks, 51%） |
 | 10 | init 进程 unwrap | `task/mod.rs:40` | Trivial | ✅ **已修复** `5433896` |
 
 ### 🟡 P2 — 架构改进（中期）
