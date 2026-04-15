@@ -41,6 +41,8 @@
 | 2025-07-15 | kill(0,sig) 排除自身（POSIX 要求包含） | ✅ 已修复 | `8288516` |
 | 2025-07-15 | kill(-1,sig) 未排除 init/PID 1（POSIX 要求排除） | ✅ 已修复 | `8288516` |
 | 2025-07-15 | kill(-pgid,sig) 排除自身（POSIX 要求包含） | ✅ 已修复 | `8288516` |
+| 2025-07-15 | 492 行死代码清理（task_block/signal/processor/handler） | ✅ 已修复 | `5433896` |
+| 2025-07-15 | P1 #10: init 进程 unwrap → descriptive expect | ✅ 已修复 | `5433896` |
 
 ---
 
@@ -390,10 +392,10 @@ Syscall 层有 18+ unsafe 块**无安全注释**，主要在：
 
 ### 8.4 死代码
 
-- `task/task_block.rs:115-230`: **371 行**（文件 54%）被注释掉的旧 TaskControlBlock 实现
-- `processor.rs`: 129 行调试实验代码
-- `signal.rs`: 135 行替代信号处理
-- `riscv64/trap/handler.rs`: 58 行遗留代码
+- ~~`task/task_block.rs:115-230`: **371 行**（文件 54%）被注释掉的旧 TaskControlBlock 实现~~ — ✅ **已清理** `5433896`（348 行）
+- ~~`processor.rs`: 129 行调试实验代码~~ — ✅ **已清理** `5433896`（11 行）
+- ~~`signal.rs`: 135 行替代信号处理~~ — ✅ **已清理** `5433896`（127 行）
+- ~~`riscv64/trap/handler.rs`: 58 行遗留代码~~ — ✅ **已清理** `5433896`（5 行）
 
 ### 8.5 积极面
 
@@ -425,7 +427,7 @@ Syscall 层有 18+ unsafe 块**无安全注释**，主要在：
 | 7 | deferred unlink 竞态 | `inode.rs:1142-1151` | Medium | ✅ **已修复** `949c6ed` |
 | 8 | wakeup_task TOCTOU | `manager.rs:547-588` | Medium | ⚠️ **已缓解** — in_ready_queue 原子标志 |
 | 9 | 161 个 unsafe 块无注释 | 全局 | Medium | 🔲 待修复 |
-| 10 | init 进程 unwrap | `task/mod.rs:40` | Trivial | 🔲 待修复 |
+| 10 | init 进程 unwrap | `task/mod.rs:40` | Trivial | ✅ **已修复** `5433896` |
 
 ### 🟡 P2 — 架构改进（中期）
 
