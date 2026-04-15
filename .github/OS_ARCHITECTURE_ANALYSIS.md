@@ -38,6 +38,9 @@
 | 2025-07-15 | PID allocator panic（fork bomb DOS 崩溃内核） | ✅ 已修复 | `101dcc2` |
 | 2025-07-15 | remove_from_pid2process panic（并发 wait 崩溃） | ✅ 已修复 | `101dcc2` |
 | 2025-07-15 | PidAllocator::dealloc assert（double-free 防御） | ✅ 已修复 | `101dcc2` |
+| 2025-07-15 | kill(0,sig) 排除自身（POSIX 要求包含） | ✅ 已修复 | `8288516` |
+| 2025-07-15 | kill(-1,sig) 未排除 init/PID 1（POSIX 要求排除） | ✅ 已修复 | `8288516` |
+| 2025-07-15 | kill(-pgid,sig) 排除自身（POSIX 要求包含） | ✅ 已修复 | `8288516` |
 
 ---
 
@@ -47,7 +50,7 @@
 |---------|------|-----------|
 | 🔴 CRITICAL | ~~7~~ 2 remaining | ~~COW fork TLB~~⚠️误报、~~LoongArch FP~~✅、~~eentry 竞态~~✅、~~unreachable~~✅、~~ELF panic~~✅、~~PID panic~~✅ |
 | 🟠 HIGH | ~~12~~ 7 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink~~✅、~~flush-lock 竞态~~✅、wakeup TOCTOU⚠️已缓解、~~remove_pid panic~~✅ |
-| 🟡 MEDIUM | 15+ | cgroup OOM 未回滚、信号缺乏进程组投递、PRMD 魔法数字 |
+| 🟡 MEDIUM | 15+ | ~~cgroup OOM 未回滚~~、~~信号进程组投递~~✅、PRMD 魔法数字 |
 | 🟢 LOW | 10+ | DTB 解析静默失败、死代码、注释缺失 |
 
 ### 顶级架构风险（按影响排序）
