@@ -32,6 +32,7 @@
 | — | P1 #5: mprotect 无 TLB flush | ⚠️ 误报 | syscall_mprotect 已有 sfence.vma |
 | — | P1 #6: wait4 收割竞态 | ⚠️ 死代码 | `current_process_has_child()` 从未被调用 |
 | 2025-07-14 | P1 #7: deferred unlink 竞态（try_borrow_mut 跳过锁定进程） | ✅ 已修复 | `949c6ed` |
+| 2025-07-15 | FS-RACE: read_all/pread_at/read/pwrite_at flush-lock 竞态（7处） | ✅ 已修复 | `72888c5` |
 | — | P1 #8: wakeup_task TOCTOU | ⚠️ 已缓解 | `in_ready_queue` 原子标志已阻止双入队 |
 | — | MM-5: move_user_range frame 泄漏 | ⚠️ 理论性 | 错误路径在实践中不可达 |
 
@@ -42,7 +43,7 @@
 | 严重等级 | 数量 | 代表性问题 |
 |---------|------|-----------|
 | 🔴 CRITICAL | ~~7~~ 3 remaining | ~~COW fork TLB~~⚠️误报、~~LoongArch FP~~✅、~~eentry 竞态~~✅、~~unreachable~~✅、~~ELF panic~~✅ |
-| 🟠 HIGH | ~~12~~ 9 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink 竞态~~✅、wakeup TOCTOU⚠️已缓解 |
+| 🟠 HIGH | ~~12~~ 8 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink~~✅、~~flush-lock 竞态~~✅、wakeup TOCTOU⚠️已缓解 |
 | 🟡 MEDIUM | 15+ | cgroup OOM 未回滚、信号缺乏进程组投递、PRMD 魔法数字 |
 | 🟢 LOW | 10+ | DTB 解析静默失败、死代码、注释缺失 |
 
@@ -165,8 +166,8 @@ let _ext4_guard = ext4_lock();  // procfs 读取需要 ext4 全局锁！
 
 | 竞态 | 位置 | 影响 |
 |-----|------|------|
-| `read_all()` flush 与 lock 之间窗口 | `inode.rs:386-415` | 另一个任务可在此间修改/截断文件 |
-| `has_open_inode_fd_refs()` 跳过锁住的进程 | `inode.rs:679-706` | 误判无引用 → 提前 unlink |
+| `read_all()` flush 与 lock 之间窗口 | `inode.rs:386-415` | ✅ **已修复** `72888c5` — 提取 `flush_inner()` 消除 7 处竞态窗口 |
+| `has_open_inode_fd_refs()` 跳过锁住的进程 | `inode.rs:679-706` | ✅ **已修复** `949c6ed` — 保守返回 true |
 | deferred unlink 检查与执行之间 | `inode.rs:1142-1151` | 新 FD 打开后仍被 unlink |
 | 路径解析中 symlink TOCTOU | `path_utils.rs:754-768` | symlink 目标被并发修改 |
 
@@ -415,8 +416,8 @@ Syscall 层有 18+ unsafe 块**无安全注释**，主要在：
 |---|------|------|-----------|------|
 | 5 | mprotect 无 TLB flush | `memory_set.rs:1604-1621` | Easy | ⚠️ **误报** — syscall_mprotect 已有 sfence.vma |
 | 6 | wait4 收割竞态 | `processor.rs:457-478` | Medium | ⚠️ **死代码** — 该函数从未被调用 |
-| 7 | deferred unlink 竞态 | `inode.rs:1142-1151` | Medium | 🔲 待修复 |
-| 8 | wakeup_task TOCTOU | `manager.rs:547-588` | Medium | 🔲 待修复 |
+| 7 | deferred unlink 竞态 | `inode.rs:1142-1151` | Medium | ✅ **已修复** `949c6ed` |
+| 8 | wakeup_task TOCTOU | `manager.rs:547-588` | Medium | ⚠️ **已缓解** — in_ready_queue 原子标志 |
 | 9 | 161 个 unsafe 块无注释 | 全局 | Medium | 🔲 待修复 |
 | 10 | init 进程 unwrap | `task/mod.rs:40` | Trivial | 🔲 待修复 |
 
