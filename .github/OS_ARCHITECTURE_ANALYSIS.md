@@ -31,6 +31,9 @@
 | — | P0 #1: COW fork 父 PTE 无 TLB flush | ⚠️ 误报 | trampoline 已有 sfence.vma |
 | — | P1 #5: mprotect 无 TLB flush | ⚠️ 误报 | syscall_mprotect 已有 sfence.vma |
 | — | P1 #6: wait4 收割竞态 | ⚠️ 死代码 | `current_process_has_child()` 从未被调用 |
+| 2025-07-14 | P1 #7: deferred unlink 竞态（try_borrow_mut 跳过锁定进程） | ✅ 已修复 | `949c6ed` |
+| — | P1 #8: wakeup_task TOCTOU | ⚠️ 已缓解 | `in_ready_queue` 原子标志已阻止双入队 |
+| — | MM-5: move_user_range frame 泄漏 | ⚠️ 理论性 | 错误路径在实践中不可达 |
 
 ---
 
@@ -39,7 +42,7 @@
 | 严重等级 | 数量 | 代表性问题 |
 |---------|------|-----------|
 | 🔴 CRITICAL | ~~7~~ 3 remaining | ~~COW fork TLB~~⚠️误报、~~LoongArch FP~~✅、~~eentry 竞态~~✅、~~unreachable~~✅、~~ELF panic~~✅ |
-| 🟠 HIGH | ~~12~~ 10 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、deferred unlink 竞态 |
+| 🟠 HIGH | ~~12~~ 9 remaining | ~~mprotect TLB~~⚠️误报、~~wait4 reap~~⚠️死代码、~~deferred unlink 竞态~~✅、wakeup TOCTOU⚠️已缓解 |
 | 🟡 MEDIUM | 15+ | cgroup OOM 未回滚、信号缺乏进程组投递、PRMD 魔法数字 |
 | 🟢 LOW | 10+ | DTB 解析静默失败、死代码、注释缺失 |
 
