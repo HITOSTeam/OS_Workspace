@@ -34,3 +34,8 @@ exampleOs/
 # store useless old files
 .legacy/
 loongarch_img_info/
+
+# AI tool state
+.codex
+.claude/
+.kiro/
