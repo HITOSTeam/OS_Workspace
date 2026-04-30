@@ -44,7 +44,7 @@ Initialization order in `main.rs`: `mm → log → trap → time → fs → task
 | Module | Role |
 |---|---|
 | `task/processor.rs` + `task/manager.rs` | Per-hart processor + global task manager |
-| `syscall/filesystem.rs` | Heavy syscall layer; ongoing refactor to push logic down into subsystems |
+| `syscall/filesystem/` | Filesystem syscalls split into 17 files (io, mount, stat, path, etc.) |
 | `fs/` | `procfs`, `pipe`, `net_socket`, `socketpair`, `pseudo`, `mountns` |
 | `mm/` | Page tables, COW, lazy fault, user copy |
 | `ext4-fs/` | Block-layer filesystem (separate crate); currently guarded by a global `ext4_lock()` |
@@ -53,11 +53,11 @@ Initialization order in `main.rs`: `mm → log → trap → time → fs → task
 
 ## Known Architecture Risks (Priority Order)
 
-Consult `OSGuide/parts/architecture_improvement_roadmap.md` for full details. Top items:
+Consult `OSGuide/roadmap.md` and `OSGuide/parts/code_structure_audit.md` for full details. Top items:
 
 1. **Global `ext4_lock()`** — serializes all filesystem ops; needs per-inode/per-dir lock granularity
 2. **`/proc` pseudo-fs coupling** — procfs content still has ext4 inode dependencies; move to pure in-memory generation
-3. **`syscall/filesystem.rs` monolith** — shared logic (path resolution, fd validation, umask) should move into subsystem helpers
+3. ~~**`syscall/filesystem.rs` monolith**~~ — ✅ split into `syscall/filesystem/` (17 files); remaining large files tracked in Issue #6
 4. **`exec` glibc magic-offset patch** — fragile private-layout hack; replace with proper ELF/auxv semantics
 5. **Global task manager lock** — bottleneck under SMP; needs per-hart run queues with work stealing
 
@@ -138,4 +138,4 @@ After each batch of work, launch a `code-review` agent on the uncommitted change
 
 - `OSGuide/ltp_test_summary.md` — per-family test status
 - `OSGuide/roadmap.md` — current phase and priorities
-- `OSGuide/parts/architecture_improvement_roadmap.md` — subsystem risk list and governance work
+- `OSGuide/parts/code_structure_audit.md` — code structure audit and improvement tracking
