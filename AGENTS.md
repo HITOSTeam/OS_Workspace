@@ -10,7 +10,7 @@
 
 - `OSGuide/ltp_test_summary.md`
 - `OSGuide/roadmap.md`
-- `OSGuide/parts/architecture_improvement_roadmap.md`
+- `OSGuide/parts/code_structure_audit.md`
 
 ## Project Structure
 
