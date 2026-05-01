@@ -39,7 +39,7 @@ copy_cargo_config: prepare_submit
 	rsync -av --exclude='.git' --exclude='*.log' cargo-config/ $(SUBMIT_FOLDER)/cargo-config/
 
 copy_workspace: prepare_submit
-	cp -f cargo.toml $(SUBMIT_FOLDER)/
+	cp -f Cargo.toml $(SUBMIT_FOLDER)/
 
 copy_submit_makefile: prepare_submit
 	cp -f $(SUBMIT_MAKEFILE) $(SUBMIT_FOLDER)/Makefile
