@@ -29,7 +29,7 @@ const LTP_ENV_EPOLL_CREATE_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_epoll_cre
 const LTP_ENV_READLINK_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_readlink_fix.so\0";
 const LTP_ENV_SIGNAL_WAIT_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_signal_wait_fix.so\0";
 const FOCUS_READINESS_SMOKES: bool = false;
-const READINESS_SMOKES: [&str; 13] = [
+const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
     "/user/nested_epoll_ctl_del_smoke.bin",
@@ -43,6 +43,7 @@ const READINESS_SMOKES: [&str; 13] = [
     "/user/mq_notify_signal_smoke.bin",
     "/user/mq_unlink_epoll_smoke.bin",
     "/user/timerfd_epoll_smoke.bin",
+    "/user/dup3_lock_cleanup_smoke.bin",
 ];
 const FOCUS_PROCFS_SMOKES: bool = false;
 const PROCFS_SMOKES: [&str; 2] = [

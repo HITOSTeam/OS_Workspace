@@ -117,6 +117,25 @@ git commit -m "chore: update submodule pointers"
 
 如果当前任务只需要在最终合并时统一记录指针，也可以在最后再做这一步。
 
+### 4. 更新 workspace 指针前的分支检查
+
+根仓库记录的是 `os/`、`OSGuide/` 子仓库的具体 commit，而不是分支名。因此更新 submodule 指针前，必须先确认子仓库停在团队希望共享的主线提交上。
+
+如果 `os/` 或 `OSGuide/` 的改动已经合并回各自的 `main`，请先把对应子仓库切回 `main` 并更新到远端主线，再回到根仓库记录指针：
+
+```sh
+git -C os checkout main
+git -C os pull --ff-only
+
+git -C OSGuide checkout main
+git -C OSGuide pull --ff-only
+
+git add os OSGuide
+git commit -m "chore: update submodule pointers"
+```
+
+不要在子仓库仍停留在个人开发分支时直接 `git add os OSGuide`。否则根仓库会把 workspace 指针记录到个人分支上的 commit，其他人更新 workspace 时就会被带到这个分支提交，而不是合并后的主线提交。
+
 ## 五、拉取别人最新代码
 
 只执行根仓库 `git pull` 不够，还需要更新子仓库：
@@ -162,7 +181,24 @@ sed -n '1,200p' output.md
 python3 tools/find_ltp_error.py output.md
 ```
 
-## 八、常见错误
+## 八、不要在已合并的分支上继续开发
+
+PR 合并后，**必须为下一个任务创建新分支**，不要在同一个老分支上继续提交。
+
+原因：当你在老分支上继续工作，然后对 `main` 做 `rebase` 时，Git 会改写所有 commit 的 hash（因为 parent 变了）。此时本地分支和远端的老分支就会分叉——内容相同但 hash 不同，普通 `push` 会被拒绝，只能 force push。如果有协作者基于远端老分支工作，force push 会破坏他们的历史。
+
+正确做法：
+
+```sh
+# PR 合并后，回到 main 并拉取最新
+git checkout main
+git pull --ff-only
+
+# 为新任务创建新分支
+git checkout -b feat/next-task
+```
+
+## 九、常见错误
 
 - 在根仓库修改了 `os/`，但没有进入 `os/` 提交
 - 修改了 `OSGuide/`，但没有单独提交文档仓库
