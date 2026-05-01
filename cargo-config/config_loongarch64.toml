@@ -2,4 +2,4 @@
 target = "loongarch64-unknown-none"
 
 [target.loongarch64-unknown-none]
-rustflags = ["-Clink-arg=-Tsrc/linker_loongarch.ld", "-Cforce-frame-pointers=yes"]
+rustflags = ["-Cforce-frame-pointers=yes"]
