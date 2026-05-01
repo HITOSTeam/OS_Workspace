@@ -117,6 +117,25 @@ git commit -m "chore: update submodule pointers"
 
 如果当前任务只需要在最终合并时统一记录指针，也可以在最后再做这一步。
 
+### 4. 更新 workspace 指针前的分支检查
+
+根仓库记录的是 `os/`、`OSGuide/` 子仓库的具体 commit，而不是分支名。因此更新 submodule 指针前，必须先确认子仓库停在团队希望共享的主线提交上。
+
+如果 `os/` 或 `OSGuide/` 的改动已经合并回各自的 `main`，请先把对应子仓库切回 `main` 并更新到远端主线，再回到根仓库记录指针：
+
+```sh
+git -C os checkout main
+git -C os pull --ff-only
+
+git -C OSGuide checkout main
+git -C OSGuide pull --ff-only
+
+git add os OSGuide
+git commit -m "chore: update submodule pointers"
+```
+
+不要在子仓库仍停留在个人开发分支时直接 `git add os OSGuide`。否则根仓库会把 workspace 指针记录到个人分支上的 commit，其他人更新 workspace 时就会被带到这个分支提交，而不是合并后的主线提交。
+
 ## 五、拉取别人最新代码
 
 只执行根仓库 `git pull` 不够，还需要更新子仓库：
