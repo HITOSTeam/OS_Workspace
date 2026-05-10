@@ -21,13 +21,6 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 const LTP_ENV_CGROUPS_ROOT_MUSL: &[u8] = b"CGROUPS_TESTROOT=/musl/ltp/testcases/bin\0";
 const LTP_ENV_CGROUPS_ROOT_GLIBC: &[u8] = b"CGROUPS_TESTROOT=/glibc/ltp/testcases/bin\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
-const LTP_ENV_CLONE04_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_clone_fix.so\0";
-const LTP_ENV_SBRK01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sbrk_fix.so\0";
-const LTP_ENV_RECVMMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_recvmmsg_fix.so\0";
-const LTP_ENV_SENDMSG01_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sendmsg_fix.so\0";
-const LTP_ENV_EPOLL_CREATE_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_epoll_create_fix.so\0";
-const LTP_ENV_READLINK_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_readlink_fix.so\0";
-const LTP_ENV_SIGNAL_WAIT_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_signal_wait_fix.so\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
@@ -142,8 +135,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         status
     }
 
-    const MUSL_COMPAT_PRELOADS_SUPPORTED: bool = cfg!(target_arch = "riscv64");
-
     let pid = fork();
     if pid == 0 {
         // doio is a low-level engine that blocks on stdin when run directly.
@@ -203,29 +194,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             || name.ends_with("/stop_freeze_sleep_thaw_cont.sh")
             || name.ends_with("/vfork_freeze.sh")
             || name.ends_with("/run_freezer.sh");
-        let is_musl_clone04 =
-            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/clone04");
-        let is_musl_sbrk_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
-            && (name.contains("/musl/ltp/testcases/bin/brk02")
-                || name.contains("/musl/ltp/testcases/bin/sbrk01")
-                || name.contains("/musl/ltp/testcases/bin/shmt09")
-                || name.contains("/musl/ltp/testcases/bin/mmapstress02")
-                || name.contains("/musl/ltp/testcases/bin/mmapstress03")
-                || name.contains("/musl/ltp/testcases/bin/mmapstress05")
-                || name.contains("/musl/ltp/testcases/bin/mmapstress06"));
-        let is_musl_recvmmsg01 =
-            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/recvmmsg01");
-        let is_musl_sendmsg01 =
-            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/sendmsg01");
-        let is_musl_epoll_case =
-            MUSL_COMPAT_PRELOADS_SUPPORTED && name.contains("/musl/ltp/testcases/bin/epoll");
-        let is_musl_readlink_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
-            && (name.contains("/musl/ltp/testcases/bin/readlink03")
-                || name.contains("/musl/ltp/testcases/bin/readlinkat02"));
-        let is_musl_signal_wait_compat_case = MUSL_COMPAT_PRELOADS_SUPPORTED
-            && (name.contains("/musl/ltp/testcases/bin/sigrelse01")
-                || name.contains("/musl/ltp/testcases/bin/sigtimedwait01")
-                || name.contains("/musl/ltp/testcases/bin/sigwaitinfo01"));
         let is_msgstress01 = name.contains("/ltp/testcases/bin/msgstress01");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
@@ -287,84 +255,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_TIMEOUT_MUL_SLOW.as_ptr(),
             core::ptr::null(),
         ];
-        // The musl runtime in the bundled image predates a clone(NULL stack)
-        // fix. Inject a tiny compatibility shim for clone04 only.
-        let ltp_envs_clone04 = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_CLONE04_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_envs_sbrk_compat = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_SBRK01_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        // musl recvmmsg() wrapper in this image touches msgvec before the syscall;
-        // preload a raw-syscall shim so EFAULT cases behave like Linux.
-        let ltp_envs_recvmmsg01 = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_RECVMMSG01_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_envs_sendmsg01 = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_SENDMSG01_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        // The bundled musl epoll_create() ignores size and always succeeds.
-        // Inject a wrapper that validates size to match Linux libc behavior.
-        let ltp_envs_epoll = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_EPOLL_CREATE_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_envs_readlink = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_READLINK_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
-        // The bundled musl reserves signal 34 internally and restarts
-        // sigtimedwait()/sigwaitinfo() on EINTR, which breaks these LTP cases.
-        let ltp_envs_signal_wait = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_SIGNAL_WAIT_PRELOAD.as_ptr(),
-            core::ptr::null(),
-        ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
             if is_ltp_mmap1 || is_msgstress01 {
@@ -375,20 +265,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
                 } else {
                     &empty_envs[..]
                 }
-            } else if is_musl_clone04 {
-                &ltp_envs_clone04[..]
-            } else if is_musl_sbrk_compat_case {
-                &ltp_envs_sbrk_compat[..]
-            } else if is_musl_recvmmsg01 {
-                &ltp_envs_recvmmsg01[..]
-            } else if is_musl_sendmsg01 {
-                &ltp_envs_sendmsg01[..]
-            } else if is_musl_epoll_case {
-                &ltp_envs_epoll[..]
-            } else if is_musl_readlink_compat_case {
-                &ltp_envs_readlink[..]
-            } else if is_musl_signal_wait_compat_case {
-                &ltp_envs_signal_wait[..]
             } else if is_freezer_controller_script && is_musl_ltp {
                 &ltp_musl_envs_cgroup_freezer[..]
             } else if is_freezer_controller_script && is_glibc_ltp {
