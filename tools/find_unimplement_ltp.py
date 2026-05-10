@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""List LTP tests in ltp_all.md that are not covered in ltp_dependence/mod.rs.
+"""List LTP tests in ltp_all.md that are not covered under ltp_dependence/.
+
+Scans runnable .rs files below `user/src/bin/ltp_dependence/` (that is,
+`tasks/*.rs` and `submit_plan.rs`, excluding the explicit `tasks/unrun.rs`
+backlog) and collects every quoted literal as a potential test name. The
+difference against `ltp_all.md` is then reported, optionally compressed into
+`prefix[first-last]` ranges.
 
 Consecutive tests that share the same alphabetic prefix and differ only in a
 trailing numeric suffix are compressed into a single range line, e.g.::
@@ -91,13 +97,16 @@ def _read_ltp_all(ltp_all_path: Path) -> list[str]:
     return lines
 
 
-def _read_covered_tests(mod_rs_path: Path) -> set[str]:
-    text = mod_rs_path.read_text(encoding="utf-8")
+def _read_covered_tests(sources: list[Path]) -> set[str]:
     covered: set[str] = set()
-    for literal in re.findall(r'"([^"]+)"', text):
-        head = literal.strip().split()[0] if literal.strip() else ""
-        if head:
-            covered.add(head)
+    for path in sources:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for literal in re.findall(r'"([^"]+)"', text):
+            head = literal.strip().split()[0] if literal.strip() else ""
+            if head:
+                covered.add(head)
     return covered
 
 
@@ -107,7 +116,7 @@ def _read_covered_tests(mod_rs_path: Path) -> set[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="List LTP tests in ltp_all.md that are not covered in ltp_dependence/mod.rs",
+        description="List LTP tests in ltp_all.md that are not covered in runnable ltp_dependence lists",
     )
     parser.add_argument(
         "--root",
@@ -136,15 +145,21 @@ def main() -> int:
 
     root: Path = args.root
     ltp_all_path = root / "ltp_all.md"
-    mod_rs_path = root / "user" / "src" / "bin" / "ltp_dependence" / "mod.rs"
+    ltp_dir = root / "user" / "src" / "bin" / "ltp_dependence"
 
     if not ltp_all_path.exists():
         raise SystemExit(f"ltp_all.md not found: {ltp_all_path}")
-    if not mod_rs_path.exists():
-        raise SystemExit(f"mod.rs not found: {mod_rs_path}")
+    if not ltp_dir.exists():
+        raise SystemExit(f"ltp_dependence/ not found: {ltp_dir}")
+
+    # Scan runnable .rs files under ltp_dependence/. The unrun module is an
+    # explicit backlog, so counting it as covered hides missing tests.
+    sources = sorted(
+        path for path in ltp_dir.rglob("*.rs") if path.name != "unrun.rs"
+    )
 
     ltp_all = _read_ltp_all(ltp_all_path)
-    covered = _read_covered_tests(mod_rs_path)
+    covered = _read_covered_tests(sources)
 
     missing = sorted({item for item in ltp_all if item not in covered})
 
@@ -157,7 +172,7 @@ def main() -> int:
     display = missing if args.no_compress else _compress(missing)
 
     print(f"Total in ltp_all.md  : {len(ltp_all)}")
-    print(f"Covered in mod.rs    : {len(covered)}")
+    print(f"Covered in runnable lists : {len(covered)}")
     print(f"Missing (raw)        : {len(missing)}")
     print(f"Missing (compressed) : {len(display)}")
 
