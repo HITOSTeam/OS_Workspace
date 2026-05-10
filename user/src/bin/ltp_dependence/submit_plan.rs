@@ -5,7 +5,7 @@ fn run_for_both_libcs(run_group: fn(&str, &[&str]), tasks: &[&str]) {
     run_group("/glibc", tasks);
 }
 
-const BATCH_20260304_BLOCKED_TASKS: [&str; 1] = ["dma_thread_diotest"];
+const IO_BLOCKED_TASKS: [&str; 1] = ["dma_thread_diotest"];
 const FOCUS_BLOCKER_DEBUG: bool = false;
 const BLOCKER_FOCUSED_TASKS: [&str; 6] = [
     "write_freezing.sh",
@@ -124,30 +124,30 @@ const FS_BIND_DEBUG_TASKS: [&str; 8] = [
     "fs_bind07.sh",
     "fs_bind08.sh",
 ];
-const RUN_20260302_IO: bool = false;
-const RUN_20260302_MM: bool = false;
-const RUN_20260302_THREADING: bool = false;
+const RUN_AIO_DIO: bool = false;
+const RUN_MM: bool = false;
+const RUN_THREADING: bool = false;
 const FOCUS_PTRACE_DEBUG: bool = false;
 const PTRACE_FOCUSED_TASKS: [&str; 3] = ["ptrace11", "ptrace01", "run_sched_cliserv.sh"];
-const RUN_20260305_PHASE1: bool = false;
-const RUN_20260305_PHASE1_META_XATTR: bool = false;
-const RUN_20260305_PHASE2: bool = false;
-const RUN_20260305_PHASE3: bool = false;
-const RUN_20260305_PHASE4: bool = false;
-const RUN_20260305_PHASE5: bool = false;
-const BATCH_20260306_MUSL_BLOCKED_TASKS: [&str; 1] = ["pathconf02"];
+const RUN_FS_META_INOTIFY_XATTR: bool = false;
+const RUN_FS_META_CHOWN_XATTR: bool = false;
+const RUN_PIDFD_PRCTL: bool = false;
+const RUN_IOCTL_IOURING_OPEN: bool = false;
+const RUN_NS_MOUNT: bool = false;
+const RUN_KCMP: bool = false;
+const PATHCONF_MUSL_BLOCKED_TASKS: [&str; 1] = ["pathconf02"];
 const RUN_FORK_SMOKE: bool = false;
-const RUN_20260306_PHASE1: bool = false;
-const RUN_20260306_PHASE2: bool = false;
-const RUN_20260306_PHASE3: bool = false;
-const RUN_20260306_PHASE4: bool = false;
-const RUN_20260306_PHASE5: bool = false;
-const RUN_20260308_PHASE1: bool = false;
-const RUN_20260308_PHASE2: bool = false;
-const RUN_20260308_PHASE3: bool = false;
-const RUN_20260308_PHASE4: bool = false;
-const RUN_20260308_PHASE5: bool = false;
-const RUN_20260309_CORE100: bool = false;
+const RUN_FANOTIFY: bool = false;
+const RUN_MOUNT_API: bool = false;
+const RUN_NS_MOUNT_FOLLOWUP: bool = false;
+const RUN_PIDNS_MODULE: bool = false;
+const RUN_IO_PERF_SYSINFO: bool = false;
+const RUN_CGROUP_CORE_CPU: bool = false;
+const RUN_CGROUP_MEM_PID: bool = false;
+const RUN_SECURITY_KEYS_CRYPTO: bool = false;
+const RUN_SECURITY_BPF_CVE: bool = false;
+const RUN_UNAME_SYSFS_ASLR: bool = false;
+const RUN_CORE100: bool = false;
 
 fn filtered_tasks(tasks: &[&'static str], blocked: &[&str]) -> alloc::vec::Vec<&'static str> {
     tasks
@@ -158,16 +158,16 @@ fn filtered_tasks(tasks: &[&'static str], blocked: &[&str]) -> alloc::vec::Vec<&
 }
 
 fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
-    if !(RUN_20260306_PHASE1
-        || RUN_20260306_PHASE2
-        || RUN_20260306_PHASE3
-        || RUN_20260306_PHASE4
-        || RUN_20260306_PHASE5
-        || RUN_20260308_PHASE1
-        || RUN_20260308_PHASE2
-        || RUN_20260308_PHASE3
-        || RUN_20260308_PHASE4
-        || RUN_20260308_PHASE5)
+    if !(RUN_FANOTIFY
+        || RUN_MOUNT_API
+        || RUN_NS_MOUNT_FOLLOWUP
+        || RUN_PIDNS_MODULE
+        || RUN_IO_PERF_SYSINFO
+        || RUN_CGROUP_CORE_CPU
+        || RUN_CGROUP_MEM_PID
+        || RUN_SECURITY_KEYS_CRYPTO
+        || RUN_SECURITY_BPF_CVE
+        || RUN_UNAME_SYSFS_ASLR)
     {
         if RUN_FORK_SMOKE {
             run_group("/musl", FORK_TASKS.as_ref());
@@ -234,86 +234,86 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
         run_for_both_libcs(run_group, FS_BIND_DEBUG_TASKS.as_ref());
     }
 
-    if RUN_20260302_IO {
+    if RUN_AIO_DIO {
         let tasks = filtered_tasks(
-            BATCH_20260302_IO_AIO_DIO_TASKS.as_ref(),
-            &BATCH_20260304_BLOCKED_TASKS,
+            AIO_DIO_CORE_TASKS.as_ref(),
+            &IO_BLOCKED_TASKS,
         );
         run_for_both_libcs(run_group, tasks.as_slice());
     }
-    if RUN_20260302_MM {
-        run_for_both_libcs(run_group, BATCH_20260302_MM_TASKS.as_ref());
+    if RUN_MM {
+        run_for_both_libcs(run_group, MM_MMAP_MADVISE_TASKS.as_ref());
     }
-    if RUN_20260302_THREADING {
-        run_for_both_libcs(run_group, BATCH_20260302_THREADING_TASKS.as_ref());
+    if RUN_THREADING {
+        run_for_both_libcs(run_group, THREADING_PTRACE_TASKS.as_ref());
     }
     if FOCUS_PTRACE_DEBUG {
         run_for_both_libcs(run_group, PTRACE_FOCUSED_TASKS.as_ref());
     }
 
-    if RUN_20260305_PHASE1 {
+    if RUN_FS_META_INOTIFY_XATTR {
         run_for_both_libcs(
             run_group,
-            BATCH_20260305_FS_META_INOTIFY_XATTR_TASKS.as_ref(),
+            FS_META_INOTIFY_XATTR_TASKS.as_ref(),
         );
     }
-    if RUN_20260305_PHASE1_META_XATTR {
-        run_for_both_libcs(run_group, BATCH_20260305_FS_META_CHOWN_XATTR_TASKS.as_ref());
+    if RUN_FS_META_CHOWN_XATTR {
+        run_for_both_libcs(run_group, FS_META_CHOWN_XATTR_TASKS.as_ref());
     }
-    if RUN_20260305_PHASE2 {
-        run_for_both_libcs(run_group, BATCH_20260305_PIDFD_PRCTL_TASKS.as_ref());
+    if RUN_PIDFD_PRCTL {
+        run_for_both_libcs(run_group, PIDFD_PRCTL_TASKS.as_ref());
     }
-    if RUN_20260305_PHASE3 {
-        run_for_both_libcs(run_group, BATCH_20260305_IOCTL_IOURING_OPEN_TASKS.as_ref());
+    if RUN_IOCTL_IOURING_OPEN {
+        run_for_both_libcs(run_group, IOCTL_IOURING_OPEN_TASKS.as_ref());
     }
-    if RUN_20260305_PHASE4 {
-        run_for_both_libcs(run_group, BATCH_20260305_NS_TASKS.as_ref());
+    if RUN_NS_MOUNT {
+        run_for_both_libcs(run_group, NS_MOUNT_CORE_TASKS.as_ref());
     }
-    if RUN_20260305_PHASE5 {
-        run_for_both_libcs(run_group, BATCH_20260305_MISC_TASKS.as_ref());
+    if RUN_KCMP {
+        run_for_both_libcs(run_group, KCMP_TASKS.as_ref());
     }
 
-    if RUN_20260306_PHASE1 {
-        run_for_both_libcs(run_group, BATCH_20260306_FANOTIFY_CORE_TASKS.as_ref());
+    if RUN_FANOTIFY {
+        run_for_both_libcs(run_group, FANOTIFY_CORE_TASKS.as_ref());
     }
-    if RUN_20260306_PHASE2 {
-        run_for_both_libcs(run_group, BATCH_20260306_MOUNT_API_TASKS.as_ref());
+    if RUN_MOUNT_API {
+        run_for_both_libcs(run_group, MOUNT_API_TASKS.as_ref());
     }
-    if RUN_20260306_PHASE3 {
-        run_for_both_libcs(run_group, BATCH_20260306_NS_MOUNT_FOLLOWUP_TASKS.as_ref());
+    if RUN_NS_MOUNT_FOLLOWUP {
+        run_for_both_libcs(run_group, NS_MOUNT_FOLLOWUP_TASKS.as_ref());
     }
-    if RUN_20260306_PHASE4 {
-        run_for_both_libcs(run_group, BATCH_20260306_PIDNS_MODULE_TASKS.as_ref());
+    if RUN_PIDNS_MODULE {
+        run_for_both_libcs(run_group, PIDNS_MODULE_TASKS.as_ref());
     }
-    if RUN_20260306_PHASE5 {
+    if RUN_IO_PERF_SYSINFO {
         let musl_tasks = filtered_tasks(
-            BATCH_20260306_MISC_DEVICE_QUERY_TASKS.as_ref(),
-            &BATCH_20260306_MUSL_BLOCKED_TASKS,
+            IO_PERF_SYSINFO_PATHCONF_TASKS.as_ref(),
+            &PATHCONF_MUSL_BLOCKED_TASKS,
         );
         run_group("/musl", musl_tasks.as_slice());
-        run_group("/glibc", BATCH_20260306_MISC_DEVICE_QUERY_TASKS.as_ref());
+        run_group("/glibc", IO_PERF_SYSINFO_PATHCONF_TASKS.as_ref());
     }
 
-    if RUN_20260308_PHASE1 {
-        run_for_both_libcs(run_group, BATCH_20260308_CGROUP_CORE_CPU_TASKS.as_ref());
+    if RUN_CGROUP_CORE_CPU {
+        run_for_both_libcs(run_group, CGROUP_CORE_CPU_TASKS.as_ref());
     }
-    if RUN_20260308_PHASE2 {
-        run_for_both_libcs(run_group, BATCH_20260308_CGROUP_MEM_PID_TASKS.as_ref());
+    if RUN_CGROUP_MEM_PID {
+        run_for_both_libcs(run_group, CGROUP_MEM_PID_TASKS.as_ref());
     }
-    if RUN_20260308_PHASE3 {
+    if RUN_SECURITY_KEYS_CRYPTO {
         run_for_both_libcs(
             run_group,
-            BATCH_20260308_SECURITY_KEYS_CRYPTO_TASKS.as_ref(),
+            SECURITY_KEYS_CRYPTO_TASKS.as_ref(),
         );
     }
-    if RUN_20260308_PHASE4 {
-        run_for_both_libcs(run_group, BATCH_20260308_SECURITY_BPF_CVE_TASKS.as_ref());
+    if RUN_SECURITY_BPF_CVE {
+        run_for_both_libcs(run_group, SECURITY_BPF_CVE_TASKS.as_ref());
     }
-    if RUN_20260308_PHASE5 {
-        run_for_both_libcs(run_group, BATCH_20260308_MISC_FEATURES_TASKS.as_ref());
+    if RUN_UNAME_SYSFS_ASLR {
+        run_for_both_libcs(run_group, UNAME_SYSFS_ASLR_TASKS.as_ref());
     }
-    if RUN_20260309_CORE100 {
-        run_for_both_libcs(run_group, BATCH_20260309_CORE100_TASKS.as_ref());
+    if RUN_CORE100 {
+        run_for_both_libcs(run_group, CORE100_TASKS.as_ref());
     }
 
     // waitpid part
