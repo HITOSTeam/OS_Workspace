@@ -1,11 +1,10 @@
 //! Topic batches originally assembled as periodic "uncovered 100" pushes.
 //!
-//! Most arrays here are toggled live by the `RUN_*` booleans in
-//! [`super::super::submit_plan`]; a minority are still parked here as
-//! reference material (they ship the same shape as the active batches but
-//! their `RUN_*` flag has never been enabled). Names describe the syscall
-//! family covered; the historical `BATCH_YYYYMMDD_*` prefix has been
-//! dropped because it did not help with navigation.
+//! These arrays are historical task groups that can be selected from
+//! [`super::super::submit_plan`] by uncommenting the corresponding group.
+//! Names describe the syscall family covered; the historical
+//! `BATCH_YYYYMMDD_*` prefix has been dropped because it did not help with
+//! navigation.
 //
 // Auto-extracted from the original flat `mod.rs`; test names are
 // preserved verbatim so the set consumed by `submit_plan.rs` is unchanged.
@@ -14,7 +13,7 @@
 
 // FS metadata + sync / stat / pipe / sendfile / splice / vmsplice group.
 // fs metadata+sync -> stat/statx -> pipe/sendfile/splice/vmsplice.
-const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
+pub const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
     "fallocate01",
     "fallocate02",
     "fallocate03",
@@ -37,7 +36,7 @@ const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
     "readdir21",
 ];
 
-const STAT_LFS_EXT_TASKS: [&str; 20] = [
+pub const STAT_LFS_EXT_TASKS: [&str; 20] = [
     "fstat02_64",
     "fstat03_64",
     "fstatfs01",
@@ -60,16 +59,16 @@ const STAT_LFS_EXT_TASKS: [&str; 20] = [
     "statx05",
 ];
 
-const STATX_EXT_TASKS: [&str; 7] = [
+pub const STATX_EXT_TASKS: [&str; 7] = [
     "statx06", "statx07", "statx08", "statx09", "statx10", "statx11", "statx12",
 ];
 
-const PIPE_CORE_TASKS: [&str; 13] = [
+pub const PIPE_CORE_TASKS: [&str; 13] = [
     "pipe01", "pipe02", "pipe03", "pipe04", "pipe05", "pipe06", "pipe07", "pipe08", "pipe09",
     "pipe10", "pipe11", "pipe12", "pipe13",
 ];
 
-const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
+pub const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
     "pipe14",
     "pipe15",
     "pipe2_01",
@@ -92,7 +91,7 @@ const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
     "splice05",
 ];
 
-const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
+pub const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
     "sendfile07",
     "sendfile07_64",
     "sendfile08",
@@ -118,7 +117,7 @@ const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
 // Credential *_16 compatibility + POSIX MQ / SysV IPC core group.
 // Priority from ltp summary Section 2 + Section 8:
 // credential *_16 compatibility -> POSIX MQ + SysV IPC core.
-const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
+pub const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
     "cap_bounds_r",
     "cap_bounds_rw",
     "cap_bset_inh_bounds",
@@ -141,7 +140,7 @@ const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
     "getresuid01_16",
 ];
 
-const CRED16_MUTATION_TASKS: [&str; 40] = [
+pub const CRED16_MUTATION_TASKS: [&str; 40] = [
     "getresuid02_16",
     "getresuid03_16",
     "getuid01_16",
@@ -184,7 +183,7 @@ const CRED16_MUTATION_TASKS: [&str; 40] = [
     "setreuid06_16",
 ];
 
-const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
+pub const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
     "setreuid07_16",
     "setuid01_16",
     "setuid03_16",
@@ -207,7 +206,7 @@ const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
     "semget02",
 ];
 
-const SYSV_SHM_CORE_TASKS: [&str; 19] = [
+pub const SYSV_SHM_CORE_TASKS: [&str; 19] = [
     "shmat02", "shmat03", "shmat04", "shmat1", "shmctl01", "shmctl02", "shmctl03", "shmctl04",
     "shmctl05", "shmctl06", "shmctl07", "shmctl08", "shmdt01", "shmdt02", "shmget03", "shmget04",
     "shmget05", "shmget06", "shmt02",
