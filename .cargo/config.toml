@@ -1,0 +1,18 @@
+# 让 cargo / rust-analyzer 在工作目录是 repo 根时,默认按 riscv64 内核 target 解析代码。
+#
+# 真实构建仍由 Makefile 控制:os/Makefile 会把 cargo-config/{config,config_loongarch64}.toml
+# 拷贝到 os/.cargo/config.toml,而 cargo 找 config.toml 的顺序是 cwd → 父目录,所以
+# 子目录(os/)的 .cargo/config.toml 总是覆盖根目录这一份,不会影响 riscv/loongarch 切换。
+#
+# 这一份只服务于 IDE/LSP:nvim 启动 rust-analyzer 时 cwd 是 repo 根,默认拿 host target
+# 走,会让 #[cfg(target_arch="riscv64")] 全部不激活,代码飙红。声明 build.target 后
+# rust-analyzer 就按 riscv64 cfg 解析整个 workspace。
+#
+# 如果你日常更多看 loongarch 代码,把下面两处 riscv64gc-unknown-none-elf 换成
+# loongarch64-unknown-none 即可。
+
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = ["-Cforce-frame-pointers=yes"]
