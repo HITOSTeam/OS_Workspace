@@ -597,8 +597,9 @@ pub const PIDNS_MODULE_TASKS: [&str; 20] = [
     "membarrier01",
 ];
 
-// `pathconf02` stays in this batch, but submit_plan currently runs it only
-// in glibc lanes because musl's wrapper does not validate path errors here.
+// `pathconf02` stays in this batch. It passes on glibc but is expected to
+// fail on musl because musl pathconf() does not validate bad paths for
+// _PC_LINK_MAX; it returns the static _POSIX_LINK_MAX value instead.
 pub const IO_PERF_SYSINFO_PATHCONF_TASKS: [&str; 20] = [
     "ioprio_get01",
     "ioprio_set01",

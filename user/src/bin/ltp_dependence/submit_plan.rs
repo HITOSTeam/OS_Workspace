@@ -168,6 +168,10 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::SETRLIMIT_TASKS,
     // &super::GETRLIMIT_TASKS,
     // &super::ROBUST_TID_TASKS,
+    // NOTE：
+    // pathconf02 is expected to fail on musl: musl pathconf() ignores the
+    // path argument for _PC_LINK_MAX and returns a constant instead of errno.
+    //
     // &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
     // &super::KCMP_TASKS,
     //
@@ -392,6 +396,10 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::SETRLIMIT_TASKS,
     // &super::GETRLIMIT_TASKS,
     // &super::ROBUST_TID_TASKS,
+    // NOTE:
+    // pathconf02 is expected to fail on musl: musl pathconf() ignores the
+    // path argument for _PC_LINK_MAX and returns a constant instead of errno.
+    //
     // &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
     // &super::KCMP_TASKS,
     //
