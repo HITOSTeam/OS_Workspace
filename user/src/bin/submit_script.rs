@@ -18,9 +18,11 @@ const LTP_ENV_PATH: &[u8] =
     b"PATH=/extra/bin:/user:/:/bin:/usr/bin:/musl:/glibc:/musl/ltp/testcases/bin:/glibc/ltp/testcases/bin\0";
 const LTP_ENV_ROOT_MUSL: &[u8] = b"LTPROOT=/musl/ltp\0";
 const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
-const LTP_ENV_CGROUPS_ROOT_MUSL: &[u8] = b"CGROUPS_TESTROOT=/musl/ltp/testcases/bin\0";
-const LTP_ENV_CGROUPS_ROOT_GLIBC: &[u8] = b"CGROUPS_TESTROOT=/glibc/ltp/testcases/bin\0";
-const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
+// Case-specific LTP env knobs are intentionally disabled for now. Re-enable
+// them beside the corresponding test batches when those batches are active.
+// const LTP_ENV_CGROUPS_ROOT_MUSL: &[u8] = b"CGROUPS_TESTROOT=/musl/ltp/testcases/bin\0";
+// const LTP_ENV_CGROUPS_ROOT_GLIBC: &[u8] = b"CGROUPS_TESTROOT=/glibc/ltp/testcases/bin\0";
+// const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
@@ -44,6 +46,8 @@ const PROCFS_SMOKES: [&str; 2] = [
     "/user/mount_namespace_smoke.bin",
 ];
 
+/// 运行ltp测试 使用 的脚本，由于目前ltp存在部分没法通过以及卡死
+/// 的情况，所以我们不能使用ltp_all.s和来运行
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let group = if dir.contains("musl") {
         "ltp-musl"
@@ -64,6 +68,8 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         for arg in parts {
             extra_args.push(arg);
         }
+        // 目前已经进入 /musl 或 /glibc 但是测试在ltp下面
+        // 拼接成完整相对路径运行，而不是cd 进入，参考ltp_testcode.sh进行
         let path = resolve_ltp_case_path(dir, script);
         println!("RUN LTP CASE {}", script);
         let ret = run_script(path.as_str(), &extra_args);
@@ -86,7 +92,11 @@ fn path_exists(path: &str) -> bool {
     true
 }
 
+// 将ltp测试名 （fork01 fork02 ) 与 dir (glibc)组装起来，获得真正的测试名称
+
 fn resolve_ltp_case_path(dir: &str, script: &str) -> String {
+    // dir : /glibc /musl
+    // script : fork01 fork 02
     let basename = script.rsplit('/').next().unwrap_or(script);
 
     let mut installed = String::from(dir);
@@ -119,6 +129,7 @@ fn run_named_cases(group: &str, cases: &[&str]) {
     }
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
+/// 运行name 的测试文件。使用fork + exec子进程进行
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
     fn normalize_ltp_wait_status(status: i32) -> i32 {
         // Linux wait status: exited children encode code in high byte.
@@ -137,38 +148,16 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
 
     let pid = fork();
     if pid == 0 {
-        // doio is a low-level engine that blocks on stdin when run directly.
-        // Feed it with iogen through a simple shell pipeline.
-        let doio_pipeline_case = name.ends_with("/ltp/testcases/bin/doio") && extra_args.is_empty();
         let mut path = String::from(name);
         let mut owned_args: Vec<String> = Vec::new();
-        if doio_pipeline_case {
-            let mut bin_dir = String::from(name);
-            bin_dir.truncate(bin_dir.len() - "doio".len());
 
-            let mut iogen = bin_dir.clone();
-            iogen.push_str("iogen");
-            let mut doio = bin_dir;
-            doio.push_str("doio");
-
-            let mut pipeline_cmd = String::new();
-            pipeline_cmd.push_str(iogen.as_str());
-            pipeline_cmd.push_str(" -i 30s -s read,write 500b:/tmp/doio.f1 1000b:/tmp/doio.f2 | ");
-            pipeline_cmd.push_str(doio.as_str());
-            pipeline_cmd.push_str(" -akv -n 2");
-
-            path = String::from("/bin/sh");
-            for arg in ["-c", pipeline_cmd.as_str()] {
-                let mut s = String::from(arg);
-                s.push('\0');
-                owned_args.push(s);
-            }
-        } else {
-            for arg in extra_args.iter().copied() {
-                let mut s = String::from(arg);
-                s.push('\0');
-                owned_args.push(s);
-            }
+        // Disabled case-specific adapter: doio used to be run as
+        // `iogen ... | doio ...` through /bin/sh to avoid blocking on stdin.
+        // Re-enable that path when doio enters an active batch again.
+        for arg in extra_args.iter().copied() {
+            let mut s = String::from(arg);
+            s.push('\0');
+            owned_args.push(s);
         }
         path.push('\0');
         let mut args: Vec<*const u8> = Vec::with_capacity(owned_args.len() + 2);
@@ -180,21 +169,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         let is_ltp_case = name.contains("/ltp/testcases/");
         let is_musl_ltp = name.contains("/musl/ltp/testcases/");
         let is_glibc_ltp = name.contains("/glibc/ltp/testcases/");
-        let is_ltp_mmap1 = name.ends_with("/mmap1");
-        let is_freezer_controller_script = name.ends_with("/write_freezing.sh")
-            || name.ends_with("/freeze_write_freezing.sh")
-            || name.ends_with("/freeze_thaw.sh")
-            || name.ends_with("/freeze_self_thaw.sh")
-            || name.ends_with("/freeze_sleep_thaw.sh")
-            || name.ends_with("/freeze_move_thaw.sh")
-            || name.ends_with("/freeze_cancel.sh")
-            || name.ends_with("/freeze_kill_thaw.sh")
-            || name.ends_with("/fork_freeze.sh")
-            || name.ends_with("/stop_freeze_thaw_cont.sh")
-            || name.ends_with("/stop_freeze_sleep_thaw_cont.sh")
-            || name.ends_with("/vfork_freeze.sh")
-            || name.ends_with("/run_freezer.sh");
-        let is_msgstress01 = name.contains("/ltp/testcases/bin/msgstress01");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
         let ltp_musl_envs = [
@@ -215,61 +189,13 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_ROOT_GLIBC.as_ptr(),
             core::ptr::null(),
         ];
-        let ltp_musl_envs_cgroup_freezer = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_CGROUPS_ROOT_MUSL.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_glibc_envs_cgroup_freezer = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_GLIBC.as_ptr(),
-            LTP_ENV_CGROUPS_ROOT_GLIBC.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_musl_envs_slow_timeout = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_MUSL.as_ptr(),
-            LTP_ENV_TIMEOUT_MUL_SLOW.as_ptr(),
-            core::ptr::null(),
-        ];
-        let ltp_glibc_envs_slow_timeout = [
-            LTP_ENV_DEV.as_ptr(),
-            LTP_ENV_DEV_FS_TYPE.as_ptr(),
-            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
-            LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
-            LTP_ENV_ROOT_GLIBC.as_ptr(),
-            LTP_ENV_TIMEOUT_MUL_SLOW.as_ptr(),
-            core::ptr::null(),
-        ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
-            if is_ltp_mmap1 || is_msgstress01 {
-                if is_musl_ltp {
-                    &ltp_musl_envs_slow_timeout[..]
-                } else if is_glibc_ltp {
-                    &ltp_glibc_envs_slow_timeout[..]
-                } else {
-                    &empty_envs[..]
-                }
-            } else if is_freezer_controller_script && is_musl_ltp {
-                &ltp_musl_envs_cgroup_freezer[..]
-            } else if is_freezer_controller_script && is_glibc_ltp {
-                &ltp_glibc_envs_cgroup_freezer[..]
-            } else if is_musl_ltp {
+            // Disabled case-specific env selection:
+            // - mmap1/msgstress01 used LTP_TIMEOUT_MUL=4
+            // - freezer controller scripts used CGROUPS_TESTROOT
+            // Restore these only when enabling the matching focused batches.
+            if is_musl_ltp {
                 &ltp_musl_envs[..]
             } else if is_glibc_ltp {
                 &ltp_glibc_envs[..]

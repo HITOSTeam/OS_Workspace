@@ -458,6 +458,9 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+/// 对所有groups 里的组逐个运行测试
+/// groups是一个二维数组
+/// 使用 run_group 对其 运行测试
 fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     for &tasks in groups {
         run_group("/musl", tasks);

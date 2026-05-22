@@ -34,7 +34,6 @@ pub const CREAT_CORE_TASKS: [&str; 6] = [
     "creat01", "creat03", "creat04", "creat05", "creat06", "creat08",
 ];
 
-
 // Stat-family descriptor tests.
 pub const FSTAT_TASKS: [&str; 3] = ["fstat02", "fstat03", "fstatat01"];
 // fstatfs01 requires free mount devices from LTP harness and currently breaks
