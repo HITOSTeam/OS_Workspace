@@ -12,6 +12,15 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::WAITID_TASKS,
     // &super::CLONE_WAIT_EXIT_CORE_TASKS,
     // &super::EXEC_FAMILY_CORE_TASKS,
+    //
+    // NOTE: CLONE_EXEC_CHROOT_GROUPS_TASKS 在默认 musl runtime 下会卡在
+    // clone08，失败发生在进入内核前。官方 musl 的公开 clone() wrapper 会拒绝
+    // CLONE_THREAD / CLONE_CHILD_CLEARTID / CLONE_SETTLS，并在用户态直接返回
+    // EINVAL；glibc 版 clone08 能进入内核并通过。若要把这一组当作正常双 libc
+    // 回归批次，需要先重建 LTP/raw clone wrapper，或者临时显式启用 LD_PRELOAD
+    // adapter。可选 adapter 保留在 /extra/libltp_clone_fix.so，源码为
+    // ext4-fs-packer/extra/libltp_clone_fix.S；submit_script.rs 默认不启用。
+    //
     // &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
     // &super::THREADING_PTRACE_TASKS,
     // &super::PIDFD_PRCTL_TASKS,
