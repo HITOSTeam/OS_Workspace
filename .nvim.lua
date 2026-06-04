@@ -19,7 +19,31 @@ vim.g.rustaceanvim = vim.tbl_deep_extend('force', vim.g.rustaceanvim or {}, {
         cargo = {
           target = 'riscv64gc-unknown-none-elf',
           allFeatures = false,
+          buildScripts = {
+            enable = false,
+          },
         },
+        procMacro = {
+          enable = false,
+        },
+        cachePriming = {
+          enable = false,
+          numThreads = 2,
+        },
+        files = {
+          exclude = {
+            'target',
+            'os/target',
+            'exampleOs',
+            'submit_repo',
+            'testsuits-for-oskernel',
+            'testscripts-for-oskernel',
+            'OSGuide',
+            '.tmp',
+          },
+        },
+        numThreads = 2,
+        checkOnSave = false,
         check = {
           -- no_std 内核没有 test/bench target,allTargets=true 会让 ra 跑
           -- `cargo check --all-targets` 然后在 test/bench 编译阶段炸出无意义错误。
