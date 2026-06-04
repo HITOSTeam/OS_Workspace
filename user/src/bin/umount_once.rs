@@ -18,7 +18,9 @@ fn with_c_path<T>(path: &str, f: impl FnOnce(*const u8) -> T) -> T {
 }
 
 fn linux_umount2(target: &str, flags: usize) -> isize {
-    with_c_path(target, |ptr| syscall(SYSCALL_UMOUNT2, [ptr as usize, flags, 0, 0, 0, 0]))
+    with_c_path(target, |ptr| {
+        syscall(SYSCALL_UMOUNT2, [ptr as usize, flags, 0, 0, 0, 0])
+    })
 }
 
 #[unsafe(no_mangle)]

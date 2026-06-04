@@ -321,28 +321,13 @@ pub const UNRUN_MATH_TASKS: [&str; 9] = [
 // Pseudoterminal / line-discipline tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/pty
 pub const UNRUN_PTY_TASKS: [&str; 9] = [
-    "hangup01",
-    "ptem01",
-    "pty01",
-    "pty02",
-    "pty03",
-    "pty04",
-    "pty05",
-    "pty06",
-    "pty07",
+    "hangup01", "ptem01", "pty01", "pty02", "pty03", "pty04", "pty05", "pty06", "pty07",
 ];
 
 // Keyctl watch-queue notification tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/watchqueue
 pub const UNRUN_WATCHQUEUE_TASKS: [&str; 9] = [
-    "wqueue01",
-    "wqueue02",
-    "wqueue03",
-    "wqueue04",
-    "wqueue05",
-    "wqueue06",
-    "wqueue07",
-    "wqueue08",
+    "wqueue01", "wqueue02", "wqueue03", "wqueue04", "wqueue05", "wqueue06", "wqueue07", "wqueue08",
     "wqueue09",
 ];
 
@@ -360,91 +345,53 @@ pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 6] = [
 // Input subsystem / evdev tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/input
 pub const UNRUN_INPUT_TASKS: [&str; 6] = [
-    "input01",
-    "input02",
-    "input03",
-    "input04",
-    "input05",
-    "input06",
+    "input01", "input02", "input03", "input04", "input05", "input06",
 ];
 
 // Scheduler / deadline / cfs tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/sched
-pub const UNRUN_SCHED_TASKS: [&str; 3] = [
-    "autogroup01",
-    "proc_sched_rt01",
-    "starvation",
-];
+pub const UNRUN_SCHED_TASKS: [&str; 3] = ["autogroup01", "proc_sched_rt01", "starvation"];
 
 // Controller-Area-Network socket tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/can
-pub const UNRUN_CAN_TASKS: [&str; 3] = [
-    "can_bcm01",
-    "can_filter",
-    "can_rcv_own_msgs",
-];
+pub const UNRUN_CAN_TASKS: [&str; 3] = ["can_bcm01", "can_filter", "can_rcv_own_msgs"];
 
 // Random-instruction crash-me stress.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/crashme
-pub const UNRUN_CRASHME_TASKS: [&str; 3] = [
-    "crash01",
-    "crash02",
-    "f00f",
-];
+pub const UNRUN_CRASHME_TASKS: [&str; 3] = ["crash01", "crash02", "f00f"];
 
 // Udev / uevent tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/uevent
-pub const UNRUN_UEVENT_TASKS: [&str; 3] = [
-    "uevent01",
-    "uevent02",
-    "uevent03",
-];
+pub const UNRUN_UEVENT_TASKS: [&str; 3] = ["uevent01", "uevent02", "uevent03"];
 
 // Network feature probes.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.features
-pub const UNRUN_NET_FEATURES_TASKS: [&str; 1] = [
-    "fanout01",
-];
+pub const UNRUN_NET_FEATURES_TASKS: [&str; 1] = ["fanout01"];
 
 // Interrupt-handling tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/irq
-pub const UNRUN_IRQ_TASKS: [&str; 1] = [
-    "irqbalance01",
-];
+pub const UNRUN_IRQ_TASKS: [&str; 1] = ["irqbalance01"];
 
 // cgroup-controller scenarios not in cgroup batches.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/controllers
-pub const UNRUN_CONTROLLERS_TASKS: [&str; 1] = [
-    "memcg_test_3",
-];
+pub const UNRUN_CONTROLLERS_TASKS: [&str; 1] = ["memcg_test_3"];
 
 // Container / namespace stress not in NS batches.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/containers
-pub const UNRUN_CONTAINERS_TASKS: [&str; 1] = [
-    "netns_netlink",
-];
+pub const UNRUN_CONTAINERS_TASKS: [&str; 1] = ["netns_netlink"];
 
 // Smack LSM tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/smack
-pub const UNRUN_SMACK_TASKS: [&str; 2] = [
-    "smack_set_socket_labels",
-    "smack_notroot",
-];
+pub const UNRUN_SMACK_TASKS: [&str; 2] = ["smack_set_socket_labels", "smack_notroot"];
 
 // Memory allocator utility tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/syscalls
-pub const UNRUN_MALLOC_TASKS: [&str; 2] = [
-    "mallinfo01",
-    "mallocstress",
-];
+pub const UNRUN_MALLOC_TASKS: [&str; 2] = ["mallinfo01", "mallocstress"];
 
 // Security hardening / CPU side-channel tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/cve (meltdown)
 //                testsuits-for-oskernel/ltp-full-20240524/runtest/mm (stack_clash)
-pub const UNRUN_SECURITY_HARDENING_TASKS: [&str; 2] = [
-    "meltdown",
-    "stack_clash",
-];
+pub const UNRUN_SECURITY_HARDENING_TASKS: [&str; 2] = ["meltdown", "stack_clash"];
 
 // cgroup memory controller tests not in the existing UNRUN_CONTROLLERS_TASKS.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/controllers
@@ -457,9 +404,7 @@ pub const UNRUN_MEMCG_CTRL_TASKS: [&str; 4] = [
 
 // Virtual-socket (AF_VSOCK) test.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/syscalls
-pub const UNRUN_VSOCK_TASKS: [&str; 1] = [
-    "vsock01",
-];
+pub const UNRUN_VSOCK_TASKS: [&str; 1] = ["vsock01"];
 
 // Network traffic control / routing binary tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.ipv6 and net.tcp_cmds
@@ -474,16 +419,11 @@ pub const UNRUN_NET_TC_ROUTE_TASKS: [&str; 6] = [
 
 // Power-management scheduler helper.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/testcases/kernel/power_management
-pub const UNRUN_PM_BINARY_TASKS: [&str; 1] = [
-    "pm_get_sched_values",
-];
+pub const UNRUN_PM_BINARY_TASKS: [&str; 1] = ["pm_get_sched_values"];
 
 // Miscellaneous device / ioctl tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/syscalls
-pub const UNRUN_MISC_DEVICE_TASKS: [&str; 2] = [
-    "eject_check_tray",
-    "test_ioctl",
-];
+pub const UNRUN_MISC_DEVICE_TASKS: [&str; 2] = ["eject_check_tray", "test_ioctl"];
 
 // Commands / shell-wrapper tests (LTP "commands" runtest suite).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/commands
@@ -627,16 +567,11 @@ pub const UNRUN_FS_RACER_TASKS: [&str; 10] = [
 
 // fsx filesystem exerciser.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FSX_TASKS: [&str; 1] = [
-    "fsx.sh",
-];
+pub const UNRUN_FSX_TASKS: [&str; 1] = ["fsx.sh"];
 
 // Advanced filesystem tests (iso9660, quota).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FS_ADVANCED_TASKS: [&str; 2] = [
-    "isofs.sh",
-    "quota_remount_test01.sh",
-];
+pub const UNRUN_FS_ADVANCED_TASKS: [&str; 2] = ["isofs.sh", "quota_remount_test01.sh"];
 
 // cgroup regression shell tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/controllers
@@ -699,9 +634,7 @@ pub const UNRUN_IMA_TASKS: [&str; 9] = [
 
 // Smack LSM shell tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/smack
-pub const UNRUN_SMACK_SHELL_TASKS: [&str; 1] = [
-    "smack_file_access.sh",
-];
+pub const UNRUN_SMACK_SHELL_TASKS: [&str; 1] = ["smack_file_access.sh"];
 
 // TPM (Trusted Platform Module) tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/tpm_tools
@@ -758,11 +691,8 @@ pub const UNRUN_TRACING_TASKS: [&str; 3] = [
 
 // Kernel misc: binfmt_misc and dynamic_debug.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/kernel_misc
-pub const UNRUN_MISC_KERNEL_SHELL_TASKS: [&str; 3] = [
-    "binfmt_misc01.sh",
-    "binfmt_misc02.sh",
-    "dynamic_debug01.sh",
-];
+pub const UNRUN_MISC_KERNEL_SHELL_TASKS: [&str; 3] =
+    ["binfmt_misc01.sh", "binfmt_misc02.sh", "dynamic_debug01.sh"];
 
 // Network command-line tool tests (ping, ifconfig, routing, iptables, tc, etc.).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.tcp_cmds and net.ipv6
@@ -833,18 +763,11 @@ pub const UNRUN_NET_NFS_TASKS: [&str; 11] = [
 
 // TCP congestion-control and DCCP tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.tcp_cmds
-pub const UNRUN_NET_TCP_CC_TASKS: [&str; 3] = [
-    "bbr01.sh",
-    "bbr02.sh",
-    "dctcp01.sh",
-];
+pub const UNRUN_NET_TCP_CC_TASKS: [&str; 3] = ["bbr01.sh", "bbr02.sh", "dctcp01.sh"];
 
 // SCTP/DCCP protocol tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.sctp
-pub const UNRUN_NET_SCTP_DCCP_TASKS: [&str; 2] = [
-    "dccp01.sh",
-    "sctp01.sh",
-];
+pub const UNRUN_NET_SCTP_DCCP_TASKS: [&str; 2] = ["dccp01.sh", "sctp01.sh"];
 
 // Network tunnelling tests (GRE, FOU, GENEVE, SIT).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.ipv6
@@ -904,66 +827,42 @@ pub const UNRUN_NET_BROKEN_IP_TASKS: [&str; 8] = [
 
 // NUMA topology tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/numa
-pub const UNRUN_NUMA_SHELL_TASKS: [&str; 1] = [
-    "numa01.sh",
-];
+pub const UNRUN_NUMA_SHELL_TASKS: [&str; 1] = ["numa01.sh"];
 
 // zram device-driver tests (additional .sh entries alongside binary zram03).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/kernel_misc
-pub const UNRUN_ZRAM_TASKS: [&str; 2] = [
-    "zram01.sh",
-    "zram02.sh",
-];
+pub const UNRUN_ZRAM_TASKS: [&str; 2] = ["zram01.sh", "zram02.sh"];
 
 // Kernel locking and RCU torture tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/kernel_misc
-pub const UNRUN_LOCK_RCU_TASKS: [&str; 2] = [
-    "lock_torture.sh",
-    "rcu_torture.sh",
-];
+pub const UNRUN_LOCK_RCU_TASKS: [&str; 2] = ["lock_torture.sh", "rcu_torture.sh"];
 
 // VMA / virtual-memory-area test (shell wrapper).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/mm
-pub const UNRUN_VMA_SHELL_TASKS: [&str; 1] = [
-    "vma05.sh",
-];
+pub const UNRUN_VMA_SHELL_TASKS: [&str; 1] = ["vma05.sh"];
 
 // Filesystem link stress test.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FS_LINK_TASKS: [&str; 1] = [
-    "linktest.sh",
-];
+pub const UNRUN_FS_LINK_TASKS: [&str; 1] = ["linktest.sh"];
 
 // NFT (nftables) network test.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.tcp_cmds
-pub const UNRUN_NFT_TASKS: [&str; 1] = [
-    "nft01.sh",
-];
+pub const UNRUN_NFT_TASKS: [&str; 1] = ["nft01.sh"];
 
 // Network traceroute / tracepath tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.tcp_cmds
-pub const UNRUN_TRACEROUTE_TASKS: [&str; 2] = [
-    "tracepath01.sh",
-    "traceroute01.sh",
-];
+pub const UNRUN_TRACEROUTE_TASKS: [&str; 2] = ["tracepath01.sh", "traceroute01.sh"];
 
 // Sound subsystem CVE regression tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/cve
-pub const UNRUN_SOUND_CVE_TASKS: [&str; 2] = [
-    "snd_seq01",
-    "snd_timer01",
-];
+pub const UNRUN_SOUND_CVE_TASKS: [&str; 2] = ["snd_seq01", "snd_timer01"];
 
 // cgroup controller functional tests (shell).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/controllers
-pub const UNRUN_CGROUP_CTRL_SHELL_TASKS: [&str; 1] = [
-    "test_controllers.sh",
-];
+pub const UNRUN_CGROUP_CTRL_SHELL_TASKS: [&str; 1] = ["test_controllers.sh"];
 
 // Read-only filesystem bind tests (fs_readonly runtest suite).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs_readonly
-pub const UNRUN_FS_READONLY_TASKS: [&str; 1] = [
-    "test_robind.sh",
-];
+pub const UNRUN_FS_READONLY_TASKS: [&str; 1] = ["test_robind.sh"];
 
 // Total UNRUN entries: 649 (309 original + 340 new additions)

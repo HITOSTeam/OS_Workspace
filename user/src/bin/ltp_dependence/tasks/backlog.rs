@@ -116,7 +116,8 @@ pub const CLOCK_TIMERFD_SIGNALFD_TASKS: [&str; 12] = [
     "signalfd01",
 ];
 
-pub const UTIME_UNAME_ARCH_PRCTL_TASKS: [&str; 4] = ["utime01", "utimensat01", "uname04", "arch_prctl01"];
+pub const UTIME_UNAME_ARCH_PRCTL_TASKS: [&str; 4] =
+    ["utime01", "utimensat01", "uname04", "arch_prctl01"];
 
 // Next 100-target campaign (5 x 20) for network core + xattr core.
 // Batch order is arranged for incremental bring-up:
@@ -320,8 +321,7 @@ pub const MPROTECT_MREMAP_MSYNC_TASKS: [&str; 20] = [
     "mincore03",
 ];
 
-pub const CREAT_USERFAULTFD_TASKS: [&str; 3] =
-    ["creat07", "creat09", "userfaultfd01"];
+pub const CREAT_USERFAULTFD_TASKS: [&str; 3] = ["creat07", "creat09", "userfaultfd01"];
 
 // New 100-test target set (2026-02-24) selected from uncovered tests.
 // Ordered for "one batch at a time" progress: signal -> sched -> time -> ipc -> fs io.
