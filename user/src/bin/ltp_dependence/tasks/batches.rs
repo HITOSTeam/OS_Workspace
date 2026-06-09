@@ -212,7 +212,7 @@ pub const SYSV_SHM_CORE_TASKS: [&str; 19] = [
     "shmget05", "shmget06", "shmt02",
 ];
 
-// SysV SHM follow-up cases (passed on both musl and glibc).
+// SysV SHM follow-up cases. musl shmt09 currently needs separate runtime-wrapper handling.
 pub const SYSV_SHM_FOLLOWUP_TASKS: [&str; 9] = [
     "shmget02", "shmt03", "shmt04", "shmt05", "shmt06", "shmt07", "shmt08", "shmt09", "shmt10",
 ];
@@ -233,7 +233,7 @@ pub const IPC_NAMESPACE_TASKS: [&str; 12] = [
     "semtest_2ns",
 ];
 
-// SysV message-queue stress case (passed on both musl and glibc).
+// SysV message-queue stress case. Currently functionally TPASS but returns TWARN/nonzero.
 pub const SYSV_MSG_STRESS_TASKS: [&str; 1] = ["msgstress01"];
 
 // AIO / direct-I/O group.
