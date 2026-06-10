@@ -3,7 +3,7 @@
 use super::error::{Ext4Error, Result};
 use super::layout::*;
 use super::vfs::Inode;
-use super::{get_block_cache, BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice, get_block_cache};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
@@ -57,6 +57,9 @@ impl Ext4FileSystem {
         let is_64bit = superblock.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT != 0;
         let desc_size = superblock.desc_size();
         let block_size = superblock.block_size();
+        if block_size != BLOCK_SZ {
+            return Err(Ext4Error::Unsupported);
+        }
         let num_groups = superblock.block_group_count();
 
         // Read group descriptors

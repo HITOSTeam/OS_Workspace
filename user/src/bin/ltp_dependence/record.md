@@ -96,6 +96,38 @@
     // timerfd_settime02 is a long runtime-style race test; in the combined run
     // both musl and glibc variants exited with "Nothing bad happened" and pass.
     //
+    // 时间 / 资源 / 系统信息
+    // &super::GETITIMER_TASKS,
+    // &super::SETITIMER_TASKS,
+    // &super::GETRUSAGE_TASKS,
+    // &super::CLOCK_GETTIME_TASKS,
+    // &super::CLOCK_SETTIME_TASKS,
+    // &super::CLOCK_RES_TASKS,
+    // &super::CLOCK_NANOSLEEP_TASKS,
+    // &super::TIME_MISC_TASKS,
+    // &super::ALARM_TASKS,
+    // &super::POSIX_TIMER_TASKS,
+    // &super::ADJTIMEX_SETTIMEOFDAY_UTIME_TASKS,
+    // &super::UTIME_UNAME_ARCH_PRCTL_TASKS,
+    // &super::SETRLIMIT_TASKS,
+    // &super::GETRLIMIT_TASKS,
+    // &super::ROBUST_TID_TASKS,
+    // verified on riscv64 musl+glibc with no FAIL/TBROK:
+    // getitimer/setitimer, getrusage, clock_gettime/settime/getres/
+    // nanosleep, gettimeofday/times/nanosleep, alarm, POSIX timers,
+    // adjtimex/clock_adjtime/settimeofday/utime/utimes/leapsec,
+    // utimensat/uname/arch_prctl, setrlimit/getrlimit, and robust-list/
+    // set_tid_address cases pass. Fixed during this batch: utimensat now
+    // follows Linux EFAULT/EPERM/UTIME_OMIT ordering, and wait reaping
+    // accumulates zombie child CPU time so times03 reports nonzero
+    // tms_cutime/tms_cstime after waitpid().
+    // Expected TCONF/skip: libc wrapper EFAULT probes for getrusage02,
+    // adjtimex02, and clock_nanosleep01; CONFIG_TIME_NS checks in
+    // clock_gettime03/clock_nanosleep03; unsupported alarm clock ids
+    // CLOCK_BOOTTIME*, CLOCK_REALTIME_ALARM, and CLOCK_TAI in clock_getres
+    // and POSIX timer cases; riscv64 has no futimesat/stime syscall here;
+    // arch_prctl01 is x86-specific.
+    //
     // 基础文件 I/O / fd / fcntl
     // &super::CWD_DIR_TASKS,
     // &super::ACCESS_TASKS,

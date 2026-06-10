@@ -585,7 +585,8 @@ impl Inode {
             // Leaf node - extents are directly in i_block
             let extent_ptr = unsafe { (header_ptr as *const u8).add(12) as *const Ext4Extent };
 
-            for i in 0..header.eh_entries as usize {
+            let entries = core::cmp::min(header.eh_entries as usize, EXTENTS_IN_INODE);
+            for i in 0..entries {
                 let extent = unsafe { &*extent_ptr.add(i) };
                 extents.push(*extent);
             }
@@ -596,6 +597,7 @@ impl Inode {
                 inode_block.as_ptr() as *const u8,
                 block_size,
                 &mut extents,
+                EXTENTS_IN_INODE,
             );
         }
 
@@ -609,11 +611,13 @@ impl Inode {
         node_ptr: *const u8,
         block_size: usize,
         extents: &mut Vec<Ext4Extent>,
+        max_entries: usize,
     ) {
         if header.eh_depth == 0 {
             // Leaf node
             let extent_ptr = unsafe { node_ptr.add(12) as *const Ext4Extent };
-            for i in 0..header.eh_entries as usize {
+            let entries = core::cmp::min(header.eh_entries as usize, max_entries);
+            for i in 0..entries {
                 let extent = unsafe { &*extent_ptr.add(i) };
                 extents.push(*extent);
             }
@@ -621,7 +625,8 @@ impl Inode {
             // Internal node - follow index entries
             let idx_ptr = unsafe { node_ptr.add(12) as *const Ext4ExtentIdx };
 
-            for i in 0..header.eh_entries as usize {
+            let entries = core::cmp::min(header.eh_entries as usize, max_entries);
+            for i in 0..entries {
                 let idx = unsafe { &*idx_ptr.add(i) };
                 let child_block = idx.leaf_block() as usize;
 
@@ -643,6 +648,7 @@ impl Inode {
                         child_buf.as_ptr(),
                         block_size,
                         extents,
+                        EXTENTS_PER_NODE,
                     );
                 }
             }
@@ -876,11 +882,11 @@ impl Inode {
             let guard = cache.lock();
             let data = guard.get_bytes(0, BLOCK_SZ);
             let header = unsafe { &*(data.as_ptr() as *const Ext4ExtentHeader) };
+            indexes.push(pblock);
             if !header.is_valid() {
                 return;
             }
 
-            indexes.push(pblock);
             let idx_ptr = unsafe { data.as_ptr().add(12) as *const Ext4ExtentIdx };
             let entries = core::cmp::min(header.eh_entries as usize, EXTENTS_PER_NODE);
             let mut child_blocks = Vec::new();
@@ -1007,6 +1013,64 @@ impl Inode {
         Ok(())
     }
 
+    fn alloc_extent_metadata_blocks(fs: &mut Ext4FileSystem, count: usize) -> Result<Vec<u64>> {
+        let mut blocks = Vec::new();
+        for _ in 0..count {
+            let Some(block) = fs.alloc_block() else {
+                Self::dealloc_extent_metadata_blocks(fs, &blocks);
+                return Err(Ext4Error::NoSpace);
+            };
+            blocks.push(block);
+        }
+        Ok(blocks)
+    }
+
+    fn dealloc_extent_metadata_blocks(fs: &mut Ext4FileSystem, blocks: &[u64]) {
+        for &block in blocks {
+            fs.dealloc_block(block);
+        }
+    }
+
+    fn write_extent_root_index_in_inode(
+        inode: &mut Ext4Inode,
+        child_blocks: &[u64],
+        extents: &[Ext4Extent],
+        depth: u16,
+        stride: usize,
+    ) {
+        let header_ptr = inode.i_block.as_mut_ptr() as *mut Ext4ExtentHeader;
+        let header = unsafe { &mut *header_ptr };
+        header.eh_magic = Ext4ExtentHeader::MAGIC;
+        header.eh_entries = child_blocks.len() as u16;
+        header.eh_max = EXTENTS_IN_INODE as u16;
+        header.eh_depth = depth;
+        header.eh_generation = 0;
+
+        let idx_ptr =
+            unsafe { (inode.i_block.as_mut_ptr() as *mut u8).add(12) as *mut Ext4ExtentIdx };
+        for i in 0..EXTENTS_IN_INODE {
+            let dst = unsafe { &mut *idx_ptr.add(i) };
+            if i < child_blocks.len() {
+                let start = i * stride;
+                let ei_block = extents.get(start).map(|e| e.ee_block).unwrap_or(0);
+                let child = child_blocks[i];
+                *dst = Ext4ExtentIdx {
+                    ei_block,
+                    ei_leaf_lo: (child & 0xFFFF_FFFF) as u32,
+                    ei_leaf_hi: (child >> 32) as u16,
+                    ei_unused: 0,
+                };
+            } else {
+                *dst = Ext4ExtentIdx {
+                    ei_block: 0,
+                    ei_leaf_lo: 0,
+                    ei_leaf_hi: 0,
+                    ei_unused: 0,
+                };
+            }
+        }
+    }
+
     fn write_extents_to_inode(
         &self,
         inode: &mut Ext4Inode,
@@ -1014,18 +1078,16 @@ impl Inode {
         fs: &mut Ext4FileSystem,
     ) -> Result<()> {
         inode.i_flags |= EXT4_EXTENTS_FL;
-        let (mut leaf_blocks, mut index_blocks) =
+        let (old_leaf_blocks, old_index_blocks) =
             Self::extent_tree_blocks(inode, &self.block_device);
 
         // If the extents fit in the inode, store as a depth-0 leaf.
         if extents.len() <= EXTENTS_IN_INODE {
-            for b in leaf_blocks {
-                fs.dealloc_block(b);
-            }
-            for b in index_blocks {
-                fs.dealloc_block(b);
-            }
             let r = Self::write_extents_leaf_in_inode(inode, extents);
+            if r.is_ok() {
+                Self::dealloc_extent_metadata_blocks(fs, &old_leaf_blocks);
+                Self::dealloc_extent_metadata_blocks(fs, &old_index_blocks);
+            }
             extents_cache_invalidate(self.inode_num, &self.block_device);
             return r;
         }
@@ -1038,75 +1100,43 @@ impl Inode {
             }
         }
 
-        while leaf_blocks.len() < need_leaf {
-            let b = fs.alloc_block().ok_or(Ext4Error::NoSpace)?;
-            leaf_blocks.push(b);
-        }
-        while leaf_blocks.len() > need_leaf {
-            if let Some(b) = leaf_blocks.pop() {
-                fs.dealloc_block(b);
-            }
-        }
+        let leaf_blocks = Self::alloc_extent_metadata_blocks(fs, need_leaf)?;
 
         for (i, pblock) in leaf_blocks.iter().copied().enumerate() {
             let start = i * EXTENTS_PER_NODE;
             let end = core::cmp::min(extents.len(), start + EXTENTS_PER_NODE);
-            Self::write_extent_leaf_block(&self.block_device, pblock, &extents[start..end])?;
+            if let Err(e) =
+                Self::write_extent_leaf_block(&self.block_device, pblock, &extents[start..end])
+            {
+                Self::dealloc_extent_metadata_blocks(fs, &leaf_blocks);
+                return Err(e);
+            }
         }
 
         // Depth-1: the inode root points directly to leaf blocks.
         if need_leaf <= EXTENTS_IN_INODE {
-            for b in index_blocks {
-                fs.dealloc_block(b);
-            }
-
-            let header_ptr = inode.i_block.as_mut_ptr() as *mut Ext4ExtentHeader;
-            let header = unsafe { &mut *header_ptr };
-            header.eh_magic = Ext4ExtentHeader::MAGIC;
-            header.eh_entries = leaf_blocks.len() as u16;
-            header.eh_max = EXTENTS_IN_INODE as u16;
-            header.eh_depth = 1;
-            header.eh_generation = 0;
-
-            let idx_ptr =
-                unsafe { (inode.i_block.as_mut_ptr() as *mut u8).add(12) as *mut Ext4ExtentIdx };
-            for i in 0..EXTENTS_IN_INODE {
-                let dst = unsafe { &mut *idx_ptr.add(i) };
-                if i < leaf_blocks.len() {
-                    let start = i * EXTENTS_PER_NODE;
-                    let ei_block = extents.get(start).map(|e| e.ee_block).unwrap_or(0);
-                    let leaf = leaf_blocks[i];
-                    *dst = Ext4ExtentIdx {
-                        ei_block,
-                        ei_leaf_lo: (leaf & 0xFFFF_FFFF) as u32,
-                        ei_leaf_hi: (leaf >> 32) as u16,
-                        ei_unused: 0,
-                    };
-                } else {
-                    *dst = Ext4ExtentIdx {
-                        ei_block: 0,
-                        ei_leaf_lo: 0,
-                        ei_leaf_hi: 0,
-                        ei_unused: 0,
-                    };
-                }
-            }
-
+            Self::write_extent_root_index_in_inode(
+                inode,
+                &leaf_blocks,
+                extents,
+                1,
+                EXTENTS_PER_NODE,
+            );
+            Self::dealloc_extent_metadata_blocks(fs, &old_leaf_blocks);
+            Self::dealloc_extent_metadata_blocks(fs, &old_index_blocks);
             extents_cache_invalidate(self.inode_num, &self.block_device);
             return Ok(());
         }
 
         // Depth-2: the inode root points to index blocks, which point to leaf blocks.
         let need_index = (need_leaf + EXTENTS_PER_NODE - 1) / EXTENTS_PER_NODE;
-        while index_blocks.len() < need_index {
-            let b = fs.alloc_block().ok_or(Ext4Error::NoSpace)?;
-            index_blocks.push(b);
-        }
-        while index_blocks.len() > need_index {
-            if let Some(b) = index_blocks.pop() {
-                fs.dealloc_block(b);
+        let index_blocks = match Self::alloc_extent_metadata_blocks(fs, need_index) {
+            Ok(blocks) => blocks,
+            Err(e) => {
+                Self::dealloc_extent_metadata_blocks(fs, &leaf_blocks);
+                return Err(e);
             }
-        }
+        };
 
         for (i, pblock) in index_blocks.iter().copied().enumerate() {
             let leaf_start = i * EXTENTS_PER_NODE;
@@ -1123,41 +1153,23 @@ impl Inode {
                     ei_unused: 0,
                 });
             }
-            Self::write_extent_index_block(&self.block_device, pblock, &entries, 1)?;
-        }
-
-        let header_ptr = inode.i_block.as_mut_ptr() as *mut Ext4ExtentHeader;
-        let header = unsafe { &mut *header_ptr };
-        header.eh_magic = Ext4ExtentHeader::MAGIC;
-        header.eh_entries = index_blocks.len() as u16;
-        header.eh_max = EXTENTS_IN_INODE as u16;
-        header.eh_depth = 2;
-        header.eh_generation = 0;
-
-        let idx_ptr =
-            unsafe { (inode.i_block.as_mut_ptr() as *mut u8).add(12) as *mut Ext4ExtentIdx };
-        for i in 0..EXTENTS_IN_INODE {
-            let dst = unsafe { &mut *idx_ptr.add(i) };
-            if i < index_blocks.len() {
-                let start = i * EXTENTS_PER_NODE * EXTENTS_PER_NODE;
-                let ei_block = extents.get(start).map(|e| e.ee_block).unwrap_or(0);
-                let child = index_blocks[i];
-                *dst = Ext4ExtentIdx {
-                    ei_block,
-                    ei_leaf_lo: (child & 0xFFFF_FFFF) as u32,
-                    ei_leaf_hi: (child >> 32) as u16,
-                    ei_unused: 0,
-                };
-            } else {
-                *dst = Ext4ExtentIdx {
-                    ei_block: 0,
-                    ei_leaf_lo: 0,
-                    ei_leaf_hi: 0,
-                    ei_unused: 0,
-                };
+            if let Err(e) = Self::write_extent_index_block(&self.block_device, pblock, &entries, 1)
+            {
+                Self::dealloc_extent_metadata_blocks(fs, &leaf_blocks);
+                Self::dealloc_extent_metadata_blocks(fs, &index_blocks);
+                return Err(e);
             }
         }
 
+        Self::write_extent_root_index_in_inode(
+            inode,
+            &index_blocks,
+            extents,
+            2,
+            EXTENTS_PER_NODE * EXTENTS_PER_NODE,
+        );
+        Self::dealloc_extent_metadata_blocks(fs, &old_leaf_blocks);
+        Self::dealloc_extent_metadata_blocks(fs, &old_index_blocks);
         extents_cache_invalidate(self.inode_num, &self.block_device);
         Ok(())
     }
