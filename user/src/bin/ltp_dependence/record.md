@@ -479,6 +479,11 @@
     // unsupported IPv6, 32-bit compat-only setsockopt03 variant, optional
     // sockopt kernel-config subcases, and old select/__newselect/pselect6
     // time64 syscall variants absent on riscv64.
+    // UNRUN_NET_FEATURES_TASKS currently contains fanout01 only. It was
+    // checked on musl+glibc and cleanly TCONF-skips because CONFIG_NET_NS is
+    // absent, so it does not yet exercise AF_PACKET/PACKET_FANOUT semantics.
+    // UNRUN_CAN_TASKS cleanly TCONF-skip on musl+glibc because the image has
+    // no vcan driver/modules, so they do not yet exercise PF_CAN RAW/BCM.
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
