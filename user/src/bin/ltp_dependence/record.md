@@ -90,6 +90,21 @@
     // proc-fd/O_TMPFILE openat04 lock ordering. ioctl loop/sg/btrfs and
     // openat2/io_uring cases are expected TCONF or ENOSYS in this image.
     //
+    // 网络 / socket / net command
+    // NET_SOCKET_CONN_TASKS pass on musl+glibc. Expected TCONF: socketcall*
+    // on riscv64, unsupported SCTP/UDP-Lite/IPv6/NET_NS and optional fd
+    // classes in accept/fanotify/io_uring/memfd_secret subcases.
+    // NET_SEND_RECV_TASKS pass on musl+glibc after keeping libc-wrapper
+    // sensitive recvmmsg01/sendmsg01 in NET_SEND_RECV_GLIBC_ONLY_TASKS.
+    // Those two cases intentionally pass bad user pointers; bundled musl
+    // dereferences them before the syscall, while glibc reaches the kernel
+    // and validates Linux EFAULT behavior. Expected TCONF: IPv6, RDS, SCTP
+    // and NET_NS dependent subcases in this image.
+    // NET_SOCKOPT_POLL_TASKS pass on musl+glibc. Expected TCONF/skips:
+    // unsupported IPv6, 32-bit compat-only setsockopt03 variant, optional
+    // sockopt kernel-config subcases, and old select/__newselect/pselect6
+    // time64 syscall variants absent on riscv64.
+    //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
     // brk01, sbrk01-02, mmap01-06, mmap09, and mprotect01-02 pass on glibc.

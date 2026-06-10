@@ -188,6 +188,8 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // 网络 / socket / net command
     // &super::NET_SOCKET_CONN_TASKS,
     // &super::NET_SEND_RECV_TASKS,
+    // recvmmsg01/sendmsg01 are glibc-only below: the bundled musl wrappers
+    // dereference intentionally bad user pointers before entering the kernel.
     // &super::NET_SOCKOPT_POLL_TASKS,
     // &super::UNRUN_NET_SCTP_TASKS,
     // &super::UNRUN_NET_IPV6_LIB_TASKS,
@@ -283,6 +285,11 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     //
     // 综合批次
     // &super::CORE100_TASKS,
+];
+
+const RISCV_GLIBC_ONLY_LTP_GROUPS: &[LtpGroup] = &[
+    // 网络 / socket libc-wrapper-sensitive error paths
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
@@ -513,6 +520,11 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+const LOONGARCH_GLIBC_ONLY_LTP_GROUPS: &[LtpGroup] = &[
+    // 网络 / socket libc-wrapper-sensitive error paths
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+];
+
 /// 对所有groups 里的组逐个运行测试
 /// groups是一个二维数组
 /// 使用 run_group 对其 运行测试
@@ -523,10 +535,18 @@ fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     }
 }
 
+fn run_ltp_groups_in_dir(run_group: fn(&str, &[&str]), dir: &str, groups: &[LtpGroup]) {
+    for &tasks in groups {
+        run_group(dir, tasks);
+    }
+}
+
 pub fn run_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, RISCV_LTP_GROUPS);
+    run_ltp_groups_in_dir(run_group, "/glibc", RISCV_GLIBC_ONLY_LTP_GROUPS);
 }
 
 pub fn run_non_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, LOONGARCH_LTP_GROUPS);
+    run_ltp_groups_in_dir(run_group, "/glibc", LOONGARCH_GLIBC_ONLY_LTP_GROUPS);
 }
