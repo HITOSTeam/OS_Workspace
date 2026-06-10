@@ -192,9 +192,8 @@ pub const NET_SOCKOPT_POLL_TASKS: [&str; 20] = [
     "pselect02",
 ];
 
-pub const EPOLL_CORE_TASKS: [&str; 20] = [
+pub const EPOLL_CORE_TASKS: [&str; 19] = [
     "epoll_create01",
-    "epoll_create02",
     "epoll_create1_01",
     "epoll_create1_02",
     "epoll_ctl01",
@@ -214,6 +213,11 @@ pub const EPOLL_CORE_TASKS: [&str; 20] = [
     "epoll_pwait03",
     "epoll_pwait04",
 ];
+
+// Default musl maps epoll_create(size) to epoll_create1(0) without preserving
+// invalid size values, so epoll_create02 cannot test the kernel errno path
+// there. Glibc validates size like Linux user space expects.
+pub const EPOLL_GLIBC_ONLY_TASKS: [&str; 1] = ["epoll_create02"];
 
 pub const XATTR_CORE_TASKS: [&str; 20] = [
     "getxattr01",
@@ -263,7 +267,7 @@ pub const CLONE_EXEC_CHROOT_GROUPS_TASKS: [&str; 20] = [
     "setgroups02",
 ];
 
-pub const SIGACTION_SIGNAL_CORE_TASKS: [&str; 20] = [
+pub const SIGACTION_SIGNAL_CORE_TASKS: [&str; 17] = [
     "sigaction01",
     "sigaction02",
     "sigaltstack01",
@@ -276,15 +280,18 @@ pub const SIGACTION_SIGNAL_CORE_TASKS: [&str; 20] = [
     "signal06",
     "sigpending02",
     "sigprocmask01",
-    "sigrelse01",
     "sigsuspend01",
-    "sigtimedwait01",
     "sigwait01",
-    "sigwaitinfo01",
     "rt_sigaction01",
     "rt_sigaction02",
     "rt_sigaction03",
 ];
+
+// Default musl reserves one extra internal real-time signal and its libc
+// signal-wait wrappers do not match the shipped LTP expectations here. The
+// glibc binaries exercise the Linux kernel ABI successfully; keep the optional
+// musl raw-syscall adapter in /extra disabled by default.
+pub const SIGNAL_GLIBC_ONLY_TASKS: [&str; 3] = ["sigrelse01", "sigtimedwait01", "sigwaitinfo01"];
 
 pub const READ_WRITE_LSEEK_TASKS: [&str; 20] = [
     "read01", "read02", "read03", "read04", "readv01", "readv02", "write02", "write03", "write04",

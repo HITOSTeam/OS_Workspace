@@ -259,6 +259,15 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // Default musl exposes NGROUPS=32 in setgroups03, but Linux kernel
+    // setgroups(2) uses NGROUPS_MAX=65536. Keep the kernel-limit probe in the
+    // glibc lane instead of weakening kernel semantics for musl's test macro.
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+];
+
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // 基础烟测
     // &super::LTP_TEST_POINTS,
@@ -487,6 +496,12 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+];
+
 /// 对所有groups 里的组逐个运行测试
 /// groups是一个二维数组
 /// 使用 run_group 对其 运行测试
@@ -497,10 +512,18 @@ fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     }
 }
 
+fn run_ltp_glibc_only_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
+    for &tasks in groups {
+        run_group("/glibc", tasks);
+    }
+}
+
 pub fn run_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, RISCV_LTP_GROUPS);
+    run_ltp_glibc_only_groups(run_group, RISCV_LTP_GLIBC_ONLY_GROUPS);
 }
 
 pub fn run_non_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, LOONGARCH_LTP_GROUPS);
+    run_ltp_glibc_only_groups(run_group, LOONGARCH_LTP_GLIBC_ONLY_GROUPS);
 }

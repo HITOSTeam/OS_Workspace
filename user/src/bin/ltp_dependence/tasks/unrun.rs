@@ -267,7 +267,7 @@ pub const UNRUN_NUMA_TASKS: [&str; 19] = [
 // Filesystem integration, quota, AIO, lazytime, ftest stress.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
 pub const UNRUN_FS_TASKS: [&str; 18] = [
-    "fs_di",
+    "fs_di -d /fs_di_ltp",
     "fs_fill",
     "ftest01",
     "ftest02",
@@ -350,7 +350,11 @@ pub const UNRUN_INPUT_TASKS: [&str; 6] = [
 
 // Scheduler / deadline / cfs tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/sched
-pub const UNRUN_SCHED_TASKS: [&str; 3] = ["autogroup01", "proc_sched_rt01", "starvation"];
+pub const UNRUN_SCHED_TASKS: [&str; 3] = [
+    "autogroup01",
+    "proc_sched_rt01",
+    "starvation -l 50000 -t 60",
+];
 
 // Controller-Area-Network socket tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/can

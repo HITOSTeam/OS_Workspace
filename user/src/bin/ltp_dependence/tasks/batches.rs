@@ -117,14 +117,13 @@ pub const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
 // Credential *_16 compatibility + POSIX MQ / SysV IPC core group.
 // Priority from ltp summary Section 2 + Section 8:
 // credential *_16 compatibility -> POSIX MQ + SysV IPC core.
-pub const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
+pub const CAP_CRED16_QUERY_TASKS: [&str; 19] = [
     "cap_bounds_r",
     "cap_bounds_rw",
     "cap_bset_inh_bounds",
     "capset03",
     "capset04",
     "check_pe",
-    "check_simple_capset",
     "getegid01_16",
     "getegid02_16",
     "geteuid01_16",
@@ -140,7 +139,11 @@ pub const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
     "getresuid01_16",
 ];
 
-pub const CRED16_MUTATION_TASKS: [&str; 40] = [
+// `check_simple_capset` returns 1 when LTP is built without libcap instead of
+// reporting TCONF, so it is kept out of the normal capability regression set.
+pub const CRED_CAP_LIBCAP_BUILD_GAP_TASKS: [&str; 1] = ["check_simple_capset"];
+
+pub const CRED16_MUTATION_TASKS: [&str; 39] = [
     "getresuid02_16",
     "getresuid03_16",
     "getuid01_16",
@@ -158,7 +161,6 @@ pub const CRED16_MUTATION_TASKS: [&str; 40] = [
     "setgid03_16",
     "setgroups01_16",
     "setgroups02_16",
-    "setgroups03",
     "setgroups03_16",
     "setgroups04",
     "setgroups04_16",
@@ -182,6 +184,11 @@ pub const CRED16_MUTATION_TASKS: [&str; 40] = [
     "setreuid05_16",
     "setreuid06_16",
 ];
+
+// Keep setgroups03 as a Linux kernel-limit check on glibc. The default musl
+// build exposes NGROUPS=32 in this test, while Linux setgroups(2) accepts up to
+// NGROUPS_MAX=65536, so the musl variant expects the wrong EINVAL boundary.
+pub const CRED_SETGROUPS_GLIBC_ONLY_TASKS: [&str; 1] = ["setgroups03"];
 
 pub const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
     "setreuid07_16",
