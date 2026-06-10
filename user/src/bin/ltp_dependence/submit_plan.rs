@@ -34,6 +34,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PROC_TID_TASKS,
     // &super::SCHED_NICE_CORE_TASKS,
     // &super::SCHED_TC_TASKS,
+    // &["starvation"],
     // &super::UNRUN_SCHED_TASKS,
     //
     // 凭证 / capability / key
@@ -107,7 +108,11 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PIPE_SENDFILE_SPLICE_TASKS,
     // &super::TEE_VMSPLICE_FADVISE_TASKS,
     // &super::AIO_DIO_CORE_TASKS,
+    // &["dma_thread_diotest"],
+    // &["dma_thread_diotest -w 2"],
     // &super::IOCTL_IOURING_OPEN_TASKS,
+    // &["fsync02"],
+    // &["openat04"],
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
@@ -119,21 +124,62 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
+    // verified on glibc; musl sbrk01 is an expected libc/runtime limitation
+    // because this musl reports brk() as not implemented while raw brk syscall
+    // and the mmap/mprotect cases pass. A separate RISC-V musl lane also
+    // currently fails with status 255 when the image pairs double-float LTP
+    // binaries with a soft-float /lib/ld-musl-riscv64.so.1; that is an image
+    // ABI limitation, not a MemorySet/brk/mmap/mprotect semantic failure.
+    // mprotect01 now returns EACCES for O_RDONLY /dev/zero MAP_SHARED
+    // write-upgrade.
     // &super::MLOCK_MADVISE_CORE_TASKS,
+    // verified on musl+glibc; madvise01/02 unsupported advice subcases and
+    // process_madvise01 CONFIG_SWAP check are expected LTP TCONF in this image.
     // &super::MPROTECT_MREMAP_MSYNC_TASKS,
     // &super::MM_MMAP_MADVISE_TASKS,
+    // verified on glibc; musl mmapstress02/03/05/06 are expected
+    // libc/runtime sbrk limitations in this image. mmap3 uses a smaller
+    // -l 1 -n 4 profile because LTP's fixed 60s stress workload must let
+    // worker threads finish cleanup before the 90s harness timeout.
+    // mmap16, mmapstress08, mlock2, memory-failure, memcg, core-dump, and
+    // hugepage-only subcases are expected TCONF for the current image/config.
     // &super::MM_OOM_TASKS,
+    // verified on musl+glibc; oom02-05 are expected TCONF in this image
+    // because the bundled LTP lacks libnuma development support.
+    // UNRUN_MM_TASKS status:
+    // data_space, kallsyms, mem02, mtest01, stack_space, thp01, vma01, and
+    // min_free_kbytes pass on musl+glibc.
+    // ksm01/03/05/07 are expected CONFIG_KSM TCONF in this image;
+    // ksm02/04/06 are expected libnuma TCONF in this image.
+    // swapping01 is expected CONFIG_SWAP TCONF in this image.
+    // thp02-04 are expected TCONF because transparent huge pages / huge
+    // pages are unsupported in the current kernel config.
+    // vma02/vma04 are expected TCONF in this image because the bundled LTP
+    // lacks libnuma development support; vma03 is expected TCONF on riscv64
+    // because it is a 32-bit mmap2 overflow regression test.
+    // max_map_count passes on musl+glibc after MAP_SHARED anonymous mmap
+    // became lazy and procfs read caches large /proc/<pid>/maps snapshots.
     // &super::UNRUN_MM_TASKS,
+    // UNRUN_HUGETLB_TASKS are expected TCONF in this image because
+    // hugetlbfs/huge pages are unsupported; hugeshmat04 also requires at
+    // least 2048MB MemAvailable.
     // &super::UNRUN_HUGETLB_TASKS,
+    // UNRUN_NUMA_TASKS are expected TCONF in this image: migrate_pages*,
+    // move_pages*, and set_mempolicy01-04 require libnuma development
+    // support; set_mempolicy05 is arch-gated by LTP.
     // &super::UNRUN_NUMA_TASKS,
+    // numa01.sh is expected TCONF in this image because bc is absent.
     // &super::UNRUN_NUMA_SHELL_TASKS,
     // &super::UNRUN_MALLOC_TASKS,
+    // vma05.sh is expected TCONF in this image because gdb is absent; a
+    // real run would also need coredump/core_uses_pid support.
     // &super::UNRUN_VMA_SHELL_TASKS,
     //
     // IPC / POSIX MQ / SysV IPC
     // &super::SYSV_IPC_CORE_TASKS,
     // &super::SYSV_IPC_EXT_TASKS,
     // &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
+    // &["shmat02", "shmat03", "shmat04", "shmdt01", "shmdt02", "shmt02"],
     // &super::SYSV_SHM_CORE_TASKS,
     // &super::SYSV_SHM_FOLLOWUP_TASKS,
     // &super::IPC_NAMESPACE_TASKS,
