@@ -162,6 +162,8 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // 网络 / socket / net command
     // &super::NET_SOCKET_CONN_TASKS,
     // &super::NET_SEND_RECV_TASKS,
+    // recvmmsg01/sendmsg01 are glibc-only below: the bundled musl wrappers
+    // dereference intentionally bad user pointers before entering the kernel.
     // &super::NET_SOCKOPT_POLL_TASKS,
     // &super::UNRUN_NET_SCTP_TASKS,
     // &super::UNRUN_NET_IPV6_LIB_TASKS,
@@ -266,6 +268,8 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // setgroups(2) uses NGROUPS_MAX=65536. Keep the kernel-limit probe in the
     // glibc lane instead of weakening kernel semantics for musl's test macro.
     // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // Network libc-wrapper-sensitive error paths.
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
@@ -500,6 +504,7 @@ const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
     // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
 ];
 
 /// 对所有groups 里的组逐个运行测试

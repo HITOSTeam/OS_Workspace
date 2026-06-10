@@ -146,10 +146,9 @@ pub const NET_SOCKET_CONN_TASKS: [&str; 20] = [
     "listen01",
 ];
 
-pub const NET_SEND_RECV_TASKS: [&str; 20] = [
+pub const NET_SEND_RECV_TASKS: [&str; 18] = [
     "recv01",
     "recvfrom01",
-    "recvmmsg01",
     "recvmsg01",
     "recvmsg02",
     "recvmsg03",
@@ -157,7 +156,6 @@ pub const NET_SEND_RECV_TASKS: [&str; 20] = [
     "send02",
     "sendmmsg01",
     "sendmmsg02",
-    "sendmsg01",
     "sendmsg02",
     "sendmsg03",
     "sendto01",
@@ -168,6 +166,12 @@ pub const NET_SEND_RECV_TASKS: [&str; 20] = [
     "getsockopt01",
     "getsockopt02",
 ];
+
+// These error-path tests intentionally pass invalid user pointers through the
+// libc wrapper. The bundled musl wrappers touch those pointers in userspace
+// before issuing the syscall, so the kernel cannot return Linux EFAULT there.
+// Keep them in the glibc lane, whose wrappers enter the kernel like Linux.
+pub const NET_SEND_RECV_GLIBC_ONLY_TASKS: [&str; 2] = ["recvmmsg01", "sendmsg01"];
 
 pub const NET_SOCKOPT_POLL_TASKS: [&str; 20] = [
     "setsockopt01",

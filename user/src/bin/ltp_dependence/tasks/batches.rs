@@ -288,7 +288,7 @@ pub const MM_MMAP_MADVISE_TASKS: [&str; 48] = [
     "mmap08",
     "mmap1",
     "mmap2",
-    "mmap3",
+    "mmap3 -l 1 -n 4",
     "mmap10",
     "mmap11",
     "mmap12",
