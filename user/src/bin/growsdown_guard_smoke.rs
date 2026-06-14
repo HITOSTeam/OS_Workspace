@@ -4,7 +4,7 @@
 #[macro_use]
 extern crate user;
 
-use user::syscall::{exit, fork, syscall, waitpid};
+use user::syscall::{SIGSEGV, exit, fork, syscall, waitpid};
 
 const PAGE_SIZE: usize = 4096;
 const GROW_START: usize = 0x35_0000_0000;
@@ -37,6 +37,10 @@ fn mmap_anon(addr: usize, len: usize, flags: usize) -> isize {
 
 fn munmap(addr: usize, len: usize) -> isize {
     syscall(SYSCALL_MUNMAP, [addr, len, 0, 0, 0, 0])
+}
+
+fn wait_termsig(status: i32) -> i32 {
+    status & 0x7f
 }
 
 #[unsafe(no_mangle)]
@@ -86,7 +90,7 @@ pub fn main() -> i32 {
 
     let mut status = 0i32;
     assert_eq!(waitpid(child, &mut status), child);
-    assert_ne!(status & 0x7f, 0);
+    assert_eq!(wait_termsig(status), SIGSEGV);
 
     assert_eq!(munmap(blocker, PAGE_SIZE), 0);
     assert_eq!(munmap(GROW_START, PAGE_SIZE), 0);

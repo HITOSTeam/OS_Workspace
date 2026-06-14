@@ -39,6 +39,7 @@ const DIR_INDEX_CACHE_MAX: usize = 64;
 const EXTENTS_CACHE_MAX: usize = 256;
 const EXTENTS_IN_INODE: usize = (15 * 4 - 12) / 12;
 const EXTENTS_PER_NODE: usize = (BLOCK_SZ - 12) / 12;
+const EXTENT_TREE_MAX_DEPTH: u16 = 5;
 
 lazy_static! {
     static ref DIR_INDEX_CACHE: Mutex<BTreeMap<InodeCacheKey, Arc<Mutex<DirIndex>>>> =
@@ -577,7 +578,7 @@ impl Inode {
         let header_ptr = inode_block.as_ptr() as *const Ext4ExtentHeader;
         let header = unsafe { &*header_ptr };
 
-        if !header.is_valid() {
+        if !header.is_valid() || header.eh_depth > EXTENT_TREE_MAX_DEPTH {
             return extents;
         }
 
@@ -592,12 +593,15 @@ impl Inode {
             }
         } else {
             // Internal node - need to follow index entries
+            let mut visited_blocks = Vec::new();
             self.parse_extent_tree_recursive(
                 header,
                 inode_block.as_ptr() as *const u8,
                 block_size,
                 &mut extents,
                 EXTENTS_IN_INODE,
+                header.eh_depth,
+                &mut visited_blocks,
             );
         }
 
@@ -612,7 +616,12 @@ impl Inode {
         block_size: usize,
         extents: &mut Vec<Ext4Extent>,
         max_entries: usize,
+        remaining_depth: u16,
+        visited_blocks: &mut Vec<u64>,
     ) {
+        if header.eh_depth != remaining_depth || remaining_depth > EXTENT_TREE_MAX_DEPTH {
+            return;
+        }
         if header.eh_depth == 0 {
             // Leaf node
             let extent_ptr = unsafe { node_ptr.add(12) as *const Ext4Extent };
@@ -629,6 +638,10 @@ impl Inode {
             for i in 0..entries {
                 let idx = unsafe { &*idx_ptr.add(i) };
                 let child_block = idx.leaf_block() as usize;
+                if child_block == 0 || visited_blocks.contains(&(child_block as u64)) {
+                    continue;
+                }
+                visited_blocks.push(child_block as u64);
 
                 // Extent metadata is written through the block cache.  Read it
                 // back through the same cache so dirty leaf/index blocks are
@@ -642,13 +655,18 @@ impl Inode {
                 }
 
                 let child_header = unsafe { &*(child_buf.as_ptr() as *const Ext4ExtentHeader) };
-                if child_header.is_valid() {
+                if child_header.is_valid()
+                    && remaining_depth > 0
+                    && child_header.eh_depth == remaining_depth - 1
+                {
                     self.parse_extent_tree_recursive(
                         child_header,
                         child_buf.as_ptr(),
                         block_size,
                         extents,
                         EXTENTS_PER_NODE,
+                        remaining_depth - 1,
+                        visited_blocks,
                     );
                 }
             }
@@ -859,7 +877,7 @@ impl Inode {
     fn extent_tree_depth(inode: &Ext4Inode) -> Option<u16> {
         let header_ptr = inode.i_block.as_ptr() as *const Ext4ExtentHeader;
         let header = unsafe { &*header_ptr };
-        if !header.is_valid() {
+        if !header.is_valid() || header.eh_depth > EXTENT_TREE_MAX_DEPTH {
             return None;
         }
         Some(header.eh_depth)
@@ -871,7 +889,12 @@ impl Inode {
         depth: u16,
         leaves: &mut Vec<u64>,
         indexes: &mut Vec<u64>,
+        visited_blocks: &mut Vec<u64>,
     ) {
+        if pblock == 0 || depth > EXTENT_TREE_MAX_DEPTH || visited_blocks.contains(&pblock) {
+            return;
+        }
+        visited_blocks.push(pblock);
         if depth == 0 {
             leaves.push(pblock);
             return;
@@ -883,7 +906,7 @@ impl Inode {
             let data = guard.get_bytes(0, BLOCK_SZ);
             let header = unsafe { &*(data.as_ptr() as *const Ext4ExtentHeader) };
             indexes.push(pblock);
-            if !header.is_valid() {
+            if !header.is_valid() || header.eh_depth != depth {
                 return;
             }
 
@@ -898,7 +921,14 @@ impl Inode {
         };
 
         for child in child_blocks {
-            Self::collect_extent_tree_block(block_device, child, depth - 1, leaves, indexes);
+            Self::collect_extent_tree_block(
+                block_device,
+                child,
+                depth - 1,
+                leaves,
+                indexes,
+                visited_blocks,
+            );
         }
     }
 
@@ -908,7 +938,7 @@ impl Inode {
     ) -> (Vec<u64>, Vec<u64>) {
         let header_ptr = inode.i_block.as_ptr() as *const Ext4ExtentHeader;
         let header = unsafe { &*header_ptr };
-        if !header.is_valid() || header.eh_depth == 0 {
+        if !header.is_valid() || header.eh_depth == 0 || header.eh_depth > EXTENT_TREE_MAX_DEPTH {
             return (Vec::new(), Vec::new());
         }
 
@@ -916,6 +946,7 @@ impl Inode {
             unsafe { (inode.i_block.as_ptr() as *const u8).add(12) as *const Ext4ExtentIdx };
         let mut leaves = Vec::new();
         let mut indexes = Vec::new();
+        let mut visited_blocks = Vec::new();
         for i in 0..core::cmp::min(header.eh_entries as usize, EXTENTS_IN_INODE) {
             let idx = unsafe { &*idx_ptr.add(i) };
             Self::collect_extent_tree_block(
@@ -924,6 +955,7 @@ impl Inode {
                 header.eh_depth - 1,
                 &mut leaves,
                 &mut indexes,
+                &mut visited_blocks,
             );
         }
         (leaves, indexes)
