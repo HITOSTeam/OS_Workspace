@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Ext4 packer that creates an ext4 image with:
@@ -103,6 +103,15 @@ fn main() -> anyhow::Result<()> {
         println!("Copying extra files from '{}'...", extra.display());
         copy_dir_contents(extra, &staging_extra)?;
 
+        let rootfs_overlay = extra.join("rootfs");
+        if rootfs_overlay.is_dir() {
+            println!(
+                "Overlaying rootfs files from '{}'...",
+                rootfs_overlay.display()
+            );
+            copy_dir_contents(&rootfs_overlay, &staging_dir)?;
+        }
+
         // UnixBench scripts create temp files in their working directory
         // (e.g., `sort.$$` in `tst.sh`). Ensure those dirs are writable.
         make_unixbench_dirs_writable(&staging_dir)?;
@@ -121,7 +130,9 @@ fn main() -> anyhow::Result<()> {
 
     // Check mke2fs availability
     if Command::new("mke2fs").arg("-V").output().is_err() {
-        eprintln!("`mke2fs` not found. Please install e2fsprogs (provides mke2fs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs");
+        eprintln!(
+            "`mke2fs` not found. Please install e2fsprogs (provides mke2fs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs"
+        );
         std::process::exit(1);
     }
 
@@ -173,7 +184,9 @@ fn main() -> anyhow::Result<()> {
 fn seed_from_base_image(staging_root: &PathBuf, base_image: &PathBuf) -> anyhow::Result<()> {
     // `debugfs` is provided by e2fsprogs (same as mke2fs).
     if Command::new("debugfs").arg("-V").output().is_err() {
-        eprintln!("`debugfs` not found. Please install e2fsprogs (provides debugfs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs");
+        eprintln!(
+            "`debugfs` not found. Please install e2fsprogs (provides debugfs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs"
+        );
         std::process::exit(1);
     }
     let rdump_cmd = format!("rdump / {}", staging_root.display());

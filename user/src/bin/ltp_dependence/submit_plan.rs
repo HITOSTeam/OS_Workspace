@@ -132,16 +132,38 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     //
     // IPC / POSIX MQ / SysV IPC
     // &super::SYSV_IPC_CORE_TASKS,
+    // verified on riscv64 musl+glibc. semop02 reports expected TCONF for
+    // semtimedop-only cases when running the plain semop variant.
     // &super::SYSV_IPC_EXT_TASKS,
+    // verified on riscv64 musl+glibc. Expected TCONF/skip: msgctl04 and
+    // semctl03 libc EFAULT variants, msgctl05/semctl08 time_high fields, and
+    // msgget04/msgrcv03 CONFIG_CHECKPOINT_RESTORE.
     // &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
+    // verified on riscv64 musl+glibc. Expected TCONF/skip: 16-bit setuid/
+    // setreuid compat cases are unsupported on this platform; msgget05 needs
+    // CONFIG_CHECKPOINT_RESTORE. POSIX MQ and SysV msg/sem follow-up cases pass.
     // &super::SYSV_SHM_CORE_TASKS,
+    // verified on riscv64 musl+glibc except shmat1: the old pthread stress case
+    // hangs near the tail of its unsynchronized done_shmat handoff in this harness
+    // and needs separate scheduler/runtime investigation.
     // &super::SYSV_SHM_FOLLOWUP_TASKS,
+    // verified on riscv64: glibc passes all follow-up cases; musl passes except
+    // shmt09, whose sbrk failure occurs in user space before entering the kernel.
+    // Optional libltp_sbrk_fix.so is kept available but not enabled by default.
     // &super::IPC_NAMESPACE_TASKS,
+    // verified on riscv64 musl+glibc. mqns_01-04 are expected CONFIG_USER_NS
+    // TCONF in this image; SysV msg/sem/shm namespace communication cases pass.
     // &super::SYSV_MSG_STRESS_TASKS,
+    // msgstress01 functionally receives all messages on riscv64 musl+glibc, but
+    // both variants return 4 because LTP emits TWARN "Out of runtime during
+    // forking"; keep it out of verified groups until stress/runtime scale is
+    // adjusted or investigated separately.
     //
     // 网络 / socket / net command
     // &super::NET_SOCKET_CONN_TASKS,
     // &super::NET_SEND_RECV_TASKS,
+    // recvmmsg01/sendmsg01 are glibc-only below: the bundled musl wrappers
+    // dereference intentionally bad user pointers before entering the kernel.
     // &super::NET_SOCKOPT_POLL_TASKS,
     // &super::UNRUN_NET_SCTP_TASKS,
     // &super::UNRUN_NET_IPV6_LIB_TASKS,
@@ -237,6 +259,18 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     //
     // 综合批次
     // &super::CORE100_TASKS,
+];
+
+const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // Default musl exposes NGROUPS=32 in setgroups03, but Linux kernel
+    // setgroups(2) uses NGROUPS_MAX=65536. Keep the kernel-limit probe in the
+    // glibc lane instead of weakening kernel semantics for musl's test macro.
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // Network libc-wrapper-sensitive error paths.
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    // &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
@@ -467,6 +501,13 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+];
+
 /// 对所有groups 里的组逐个运行测试
 /// groups是一个二维数组
 /// 使用 run_group 对其 运行测试
@@ -477,10 +518,18 @@ fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     }
 }
 
+fn run_ltp_glibc_only_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
+    for &tasks in groups {
+        run_group("/glibc", tasks);
+    }
+}
+
 pub fn run_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, RISCV_LTP_GROUPS);
+    run_ltp_glibc_only_groups(run_group, RISCV_LTP_GLIBC_ONLY_GROUPS);
 }
 
 pub fn run_non_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, LOONGARCH_LTP_GROUPS);
+    run_ltp_glibc_only_groups(run_group, LOONGARCH_LTP_GLIBC_ONLY_GROUPS);
 }

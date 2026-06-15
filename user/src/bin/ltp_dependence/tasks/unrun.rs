@@ -267,7 +267,7 @@ pub const UNRUN_NUMA_TASKS: [&str; 19] = [
 // Filesystem integration, quota, AIO, lazytime, ftest stress.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
 pub const UNRUN_FS_TASKS: [&str; 18] = [
-    "fs_di",
+    "fs_di -d /fs_di_ltp",
     "fs_fill",
     "ftest01",
     "ftest02",
@@ -333,14 +333,12 @@ pub const UNRUN_WATCHQUEUE_TASKS: [&str; 9] = [
 
 // IPv6 protocol library tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.ipv6_lib
-pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 6] = [
-    "asapi_01",
-    "asapi_02",
-    "asapi_03",
-    "getaddrinfo_01",
-    "in6_01",
-    "in6_02",
-];
+pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 5] =
+    ["asapi_02", "asapi_03", "getaddrinfo_01", "in6_01", "in6_02"];
+
+// The bundled musl getprotobyname() table does not resolve "hopopt", while
+// glibc reads the rootfs protocols database and reaches the kernel checks.
+pub const UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS: [&str; 1] = ["asapi_01"];
 
 // Input subsystem / evdev tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/input
@@ -350,7 +348,11 @@ pub const UNRUN_INPUT_TASKS: [&str; 6] = [
 
 // Scheduler / deadline / cfs tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/sched
-pub const UNRUN_SCHED_TASKS: [&str; 3] = ["autogroup01", "proc_sched_rt01", "starvation"];
+pub const UNRUN_SCHED_TASKS: [&str; 3] = [
+    "autogroup01",
+    "proc_sched_rt01",
+    "starvation -l 50000 -t 60",
+];
 
 // Controller-Area-Network socket tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/can

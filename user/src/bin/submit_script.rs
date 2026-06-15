@@ -22,6 +22,8 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // them beside the corresponding test batches when those batches are active.
 // const LTP_ENV_CGROUPS_ROOT_MUSL: &[u8] = b"CGROUPS_TESTROOT=/musl/ltp/testcases/bin\0";
 // const LTP_ENV_CGROUPS_ROOT_GLIBC: &[u8] = b"CGROUPS_TESTROOT=/glibc/ltp/testcases/bin\0";
+// Optional adapter for the bundled musl sched_* libc wrappers:
+// const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
 // const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 14] = [
@@ -41,9 +43,28 @@ const READINESS_SMOKES: [&str; 14] = [
     "/user/dup3_lock_cleanup_smoke.bin",
 ];
 const FOCUS_PROCFS_SMOKES: bool = false;
-const PROCFS_SMOKES: [&str; 2] = [
+const PROCFS_SMOKES: [&str; 3] = [
     "/user/proc_magic_links_smoke.bin",
     "/user/mount_namespace_smoke.bin",
+    "/user/proc_maps_stack_smoke.bin",
+];
+const FOCUS_MEMORY_SMOKES: bool = false;
+const MEMORY_SMOKES: [&str; 15] = [
+    "/user/file_mmap_lazy_fault_smoke.bin",
+    "/user/shared_file_alias_smoke.bin",
+    "/user/shared_file_cross_mm_smoke.bin",
+    "/user/shared_file_kernel_write_smoke.bin",
+    "/user/shared_file_fault_cache_smoke.bin",
+    "/user/shared_file_truncate_cache_smoke.bin",
+    "/user/cow_mprotect_smoke.bin",
+    "/user/clone_vm_mmap_smoke.bin",
+    "/user/clone_vm_sysv_shm_smoke.bin",
+    "/user/memfd_mremap_shared_smoke.bin",
+    "/user/sysv_shm_mremap_smoke.bin",
+    "/user/mmap_placement_smoke.bin",
+    "/user/growsdown_guard_smoke.bin",
+    "/user/stack_madvise_dontneed_smoke.bin",
+    "/user/private_file_madvise_dontneed_smoke.bin",
 ];
 
 /// 运行ltp测试 使用 的脚本，由于目前ltp存在部分没法通过以及卡死
@@ -129,6 +150,7 @@ fn run_named_cases(group: &str, cases: &[&str]) {
     }
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
+
 /// 运行name 的测试文件。使用fork + exec子进程进行
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
     fn normalize_ltp_wait_status(status: i32) -> i32 {
@@ -151,9 +173,6 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         let mut path = String::from(name);
         let mut owned_args: Vec<String> = Vec::new();
 
-        // Disabled case-specific adapter: doio used to be run as
-        // `iogen ... | doio ...` through /bin/sh to avoid blocking on stdin.
-        // Re-enable that path when doio enters an active batch again.
         for arg in extra_args.iter().copied() {
             let mut s = String::from(arg);
             s.push('\0');
@@ -205,6 +224,30 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         } else {
             &empty_envs[..]
         };
+        if is_ltp_case && name.ends_with("/doio") {
+            // doio consumes requests from stdin; mirror LTP's fs iogen01
+            // pipeline instead of execing doio directly and blocking.
+            let bin_dir = &name[..name.len() - "/doio".len()];
+            let shell_path = String::from("/bin/sh\0");
+            let shell_arg0 = String::from("sh\0");
+            let shell_arg1 = String::from("-c\0");
+            let mut command = String::new();
+            command.push_str(bin_dir);
+            command.push_str(
+                "/iogen -i 120s -s read,write 500b:/tmp/doio.f1.$$ 1000b:/tmp/doio.f2.$$ | ",
+            );
+            command.push_str(bin_dir);
+            command.push_str("/doio -akv -n 2");
+            command.push('\0');
+            let shell_args = [
+                shell_arg0.as_ptr(),
+                shell_arg1.as_ptr(),
+                command.as_ptr(),
+                core::ptr::null(),
+            ];
+            execve(shell_path.as_str(), &shell_args, envs);
+            exit(-1);
+        }
         execve(path.as_str(), &args, envs);
         exit(-1);
     }
@@ -226,6 +269,9 @@ pub fn main() -> i32 {
         }
         if FOCUS_PROCFS_SMOKES {
             run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
+        }
+        if FOCUS_MEMORY_SMOKES {
+            run_named_cases("memory-smoke", MEMORY_SMOKES.as_ref());
         }
         // basic_test
 

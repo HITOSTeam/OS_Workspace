@@ -1,6 +1,6 @@
 //! Block cache manager for ext4 filesystem
 
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec;
