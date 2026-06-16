@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Ext4 packer that creates an ext4 image with:

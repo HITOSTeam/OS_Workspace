@@ -131,10 +131,14 @@ pub fn sleep(period_ms: usize) {
         sec: (period_ms / 1000) as u64,
         usec: ((period_ms % 1000) * 1000) as u64,
     };
-    let _ = syscall(
-        SYSCALL_NANOSLEEP,
-        [&tv as *const TimeVal as usize, 0, 0, 0, 0, 0],
-    );
+    let _ = syscall(SYSCALL_NANOSLEEP, [
+        &tv as *const TimeVal as usize,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]);
 }
 
 fn sys_fork() -> isize {
@@ -145,17 +149,14 @@ pub fn fork() -> isize {
     sys_fork()
 }
 pub fn waitpid(pid_or_ne: isize, exit_code: &mut i32) -> isize {
-    syscall(
-        SYSCALL_WAITPID,
-        [
-            pid_or_ne as usize,
-            exit_code as *mut i32 as usize,
-            0,
-            0,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_WAITPID, [
+        pid_or_ne as usize,
+        exit_code as *mut i32 as usize,
+        0,
+        0,
+        0,
+        0,
+    ])
 }
 pub fn wait(exit_code: &mut i32) -> isize {
     waitpid(-1, exit_code)
@@ -167,17 +168,14 @@ pub fn exec(path: &str, args_addr: &[*const u8]) -> isize {
     if args_addr.is_empty() {
         args_addr = &[core::ptr::null()];
     }
-    syscall(
-        SYSCALL_EXEC,
-        [
-            path.as_ptr() as usize,
-            args_addr.as_ptr() as usize,
-            0,
-            0,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_EXEC, [
+        path.as_ptr() as usize,
+        args_addr.as_ptr() as usize,
+        0,
+        0,
+        0,
+        0,
+    ])
 }
 
 pub fn execve(path: &str, args_addr: &[*const u8], env_addr: &[*const u8]) -> isize {
@@ -189,17 +187,14 @@ pub fn execve(path: &str, args_addr: &[*const u8], env_addr: &[*const u8]) -> is
     if env_addr.is_empty() {
         env_addr = &[core::ptr::null()];
     }
-    syscall(
-        SYSCALL_EXEC,
-        [
-            path.as_ptr() as usize,
-            args_addr.as_ptr() as usize,
-            env_addr.as_ptr() as usize,
-            0,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_EXEC, [
+        path.as_ptr() as usize,
+        args_addr.as_ptr() as usize,
+        env_addr.as_ptr() as usize,
+        0,
+        0,
+        0,
+    ])
 }
 pub fn getpid() -> isize {
     syscall(SYSCALL_GETPID, [0, 0, 0, 0, 0, 0])
@@ -321,17 +316,14 @@ pub fn openat(dirfd: isize, file_path: &str, open_flags: usize, mode: usize) -> 
     let Ok(cstr) = CString::new(file_path) else {
         return -1;
     };
-    syscall(
-        SYSCALL_OPENAT,
-        [
-            dirfd as usize,
-            cstr.as_ptr() as usize,
-            to_linux_open_flags(open_flags),
-            mode,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_OPENAT, [
+        dirfd as usize,
+        cstr.as_ptr() as usize,
+        to_linux_open_flags(open_flags),
+        mode,
+        0,
+        0,
+    ])
 }
 pub fn close(fd: usize) -> isize {
     syscall(SYSCALL_CLOSE, [fd, 0, 0, 0, 0, 0])
@@ -359,10 +351,14 @@ pub fn mq_open(name: &str, oflag: usize, mode: usize, attr: Option<&MqAttr>) -> 
         return -1;
     };
     let attr_ptr = attr.map_or(0usize, |v| v as *const MqAttr as usize);
-    syscall(
-        SYSCALL_MQ_OPEN,
-        [cstr.as_ptr() as usize, oflag, mode, attr_ptr, 0, 0],
-    )
+    syscall(SYSCALL_MQ_OPEN, [
+        cstr.as_ptr() as usize,
+        oflag,
+        mode,
+        attr_ptr,
+        0,
+        0,
+    ])
 }
 
 pub fn mq_unlink(name: &str) -> isize {
@@ -376,17 +372,14 @@ pub fn mq_unlink(name: &str) -> isize {
 
 pub fn mq_timedsend(mqdes: usize, msg: &[u8], prio: u32, abs_timeout: Option<&TimeSpec>) -> isize {
     let timeout_ptr = abs_timeout.map_or(0usize, |v| v as *const TimeSpec as usize);
-    syscall(
-        SYSCALL_MQ_TIMEDSEND,
-        [
-            mqdes,
-            msg.as_ptr() as usize,
-            msg.len(),
-            prio as usize,
-            timeout_ptr,
-            0,
-        ],
-    )
+    syscall(SYSCALL_MQ_TIMEDSEND, [
+        mqdes,
+        msg.as_ptr() as usize,
+        msg.len(),
+        prio as usize,
+        timeout_ptr,
+        0,
+    ])
 }
 
 pub fn mq_timedreceive(
@@ -397,17 +390,14 @@ pub fn mq_timedreceive(
 ) -> isize {
     let prio_ptr = prio.map_or(0usize, |v| v as *mut u32 as usize);
     let timeout_ptr = abs_timeout.map_or(0usize, |v| v as *const TimeSpec as usize);
-    syscall(
-        SYSCALL_MQ_TIMEDRECEIVE,
-        [
-            mqdes,
-            buf.as_mut_ptr() as usize,
-            buf.len(),
-            prio_ptr,
-            timeout_ptr,
-            0,
-        ],
-    )
+    syscall(SYSCALL_MQ_TIMEDRECEIVE, [
+        mqdes,
+        buf.as_mut_ptr() as usize,
+        buf.len(),
+        prio_ptr,
+        timeout_ptr,
+        0,
+    ])
 }
 
 pub fn mq_notify(mqdes: usize, notification: Option<&Sigevent>) -> isize {
@@ -416,10 +406,14 @@ pub fn mq_notify(mqdes: usize, notification: Option<&Sigevent>) -> isize {
 }
 
 pub fn mq_getattr(mqdes: usize, attr: &mut MqAttr) -> isize {
-    syscall(
-        SYSCALL_MQ_GETSETATTR,
-        [mqdes, 0, attr as *mut MqAttr as usize, 0, 0, 0],
-    )
+    syscall(SYSCALL_MQ_GETSETATTR, [
+        mqdes,
+        0,
+        attr as *mut MqAttr as usize,
+        0,
+        0,
+        0,
+    ])
 }
 
 pub fn timerfd_create(clockid: usize, flags: usize) -> isize {
@@ -433,24 +427,25 @@ pub fn timerfd_settime(
     old_value: Option<&mut ITimerSpec>,
 ) -> isize {
     let old_value_ptr = old_value.map_or(0usize, |spec| spec as *mut ITimerSpec as usize);
-    syscall(
-        SYSCALL_TIMERFD_SETTIME,
-        [
-            fd,
-            flags,
-            new_value as *const ITimerSpec as usize,
-            old_value_ptr,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_TIMERFD_SETTIME, [
+        fd,
+        flags,
+        new_value as *const ITimerSpec as usize,
+        old_value_ptr,
+        0,
+        0,
+    ])
 }
 
 pub fn timerfd_gettime(fd: usize, curr_value: &mut ITimerSpec) -> isize {
-    syscall(
-        SYSCALL_TIMERFD_GETTIME,
-        [fd, curr_value as *mut ITimerSpec as usize, 0, 0, 0, 0],
-    )
+    syscall(SYSCALL_TIMERFD_GETTIME, [
+        fd,
+        curr_value as *mut ITimerSpec as usize,
+        0,
+        0,
+        0,
+        0,
+    ])
 }
 
 pub fn epoll_create1(flags: usize) -> isize {
@@ -463,17 +458,14 @@ pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event: Option<&EpollEvent>) 
 }
 
 pub fn epoll_wait(epfd: usize, events: &mut [EpollEvent], timeout_ms: isize) -> isize {
-    syscall(
-        SYSCALL_EPOLL_PWAIT,
-        [
-            epfd,
-            events.as_mut_ptr() as usize,
-            events.len(),
-            timeout_ms as usize,
-            0,
-            0,
-        ],
-    )
+    syscall(SYSCALL_EPOLL_PWAIT, [
+        epfd,
+        events.as_mut_ptr() as usize,
+        events.len(),
+        timeout_ms as usize,
+        0,
+        0,
+    ])
 }
 
 pub fn dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {
@@ -491,10 +483,14 @@ pub fn chdir(path: &str) -> isize {
 
 pub fn getcwd() -> String {
     let mut buf = alloc::vec![0u8; 256];
-    let ret = syscall(
-        SYSCALL_GETCWD,
-        [buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0, 0],
-    );
+    let ret = syscall(SYSCALL_GETCWD, [
+        buf.as_mut_ptr() as usize,
+        buf.len(),
+        0,
+        0,
+        0,
+        0,
+    ]);
     if ret < 0 {
         return String::from("?");
     }
@@ -503,10 +499,14 @@ pub fn getcwd() -> String {
 }
 
 pub fn getdents64(fd: usize, buf: &mut [u8]) -> isize {
-    syscall(
-        SYSCALL_GETDENTS64,
-        [fd, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0],
-    )
+    syscall(SYSCALL_GETDENTS64, [
+        fd,
+        buf.as_mut_ptr() as usize,
+        buf.len(),
+        0,
+        0,
+        0,
+    ])
 }
 
 pub fn sigreturn() -> isize {
@@ -627,17 +627,14 @@ pub fn sigaction(
     } else {
         core::ptr::null_mut()
     };
-    let ret = syscall(
-        SYSCALL_SIGACTION,
-        [
-            signum as usize,
-            action_ptr as usize,
-            old_action_ptr as usize,
-            core::mem::size_of::<u64>(),
-            0,
-            0,
-        ],
-    );
+    let ret = syscall(SYSCALL_SIGACTION, [
+        signum as usize,
+        action_ptr as usize,
+        old_action_ptr as usize,
+        core::mem::size_of::<u64>(),
+        0,
+        0,
+    ]);
     if ret >= 0 {
         if let Some(old_act) = old_action {
             old_act.handler = old_rt.handler;

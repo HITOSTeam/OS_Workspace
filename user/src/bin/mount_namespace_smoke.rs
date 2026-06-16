@@ -8,7 +8,9 @@ extern crate user;
 
 use alloc::string::{String, ToString};
 use core::str;
-use user::syscall::{CREATE, RDONLY, RDWR, close, exit, fork, getpid, open, pipe, read, syscall, waitpid, write};
+use user::syscall::{
+    CREATE, RDONLY, RDWR, close, exit, fork, getpid, open, pipe, read, syscall, waitpid, write,
+};
 
 const SYSCALL_OPENAT: usize = 56;
 const SYSCALL_READLINKAT: usize = 78;
@@ -69,44 +71,53 @@ fn with_opt_c_path<T>(path: Option<&str>, f: impl FnOnce(*const u8) -> T) -> T {
 
 fn linux_openat(dirfd: isize, path: &str, flags: usize, mode: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_OPENAT,
-            [dirfd as usize, ptr as usize, flags, mode, 0, 0],
-        )
+        syscall(SYSCALL_OPENAT, [
+            dirfd as usize,
+            ptr as usize,
+            flags,
+            mode,
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_readlinkat(dirfd: isize, path: &str, buf: &mut [u8]) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_READLINKAT,
-            [
-                dirfd as usize,
-                ptr as usize,
-                buf.as_mut_ptr() as usize,
-                buf.len(),
-                0,
-                0,
-            ],
-        )
+        syscall(SYSCALL_READLINKAT, [
+            dirfd as usize,
+            ptr as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_mkdirat(dirfd: isize, path: &str, mode: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_MKDIRAT,
-            [dirfd as usize, ptr as usize, mode, 0, 0, 0],
-        )
+        syscall(SYSCALL_MKDIRAT, [
+            dirfd as usize,
+            ptr as usize,
+            mode,
+            0,
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_unlinkat(dirfd: isize, path: &str, flags: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_UNLINKAT,
-            [dirfd as usize, ptr as usize, flags, 0, 0, 0],
-        )
+        syscall(SYSCALL_UNLINKAT, [
+            dirfd as usize,
+            ptr as usize,
+            flags,
+            0,
+            0,
+            0,
+        ])
     })
 }
 
@@ -121,17 +132,14 @@ fn linux_mount(
         with_c_path(target, |target_ptr| {
             with_opt_c_path(fs_type, |type_ptr| {
                 with_opt_c_path(data, |data_ptr| {
-                    syscall(
-                        SYSCALL_MOUNT,
-                        [
-                            source_ptr as usize,
-                            target_ptr as usize,
-                            type_ptr as usize,
-                            flags,
-                            data_ptr as usize,
-                            0,
-                        ],
-                    )
+                    syscall(SYSCALL_MOUNT, [
+                        source_ptr as usize,
+                        target_ptr as usize,
+                        type_ptr as usize,
+                        flags,
+                        data_ptr as usize,
+                        0,
+                    ])
                 })
             })
         })
@@ -147,7 +155,9 @@ fn linux_setns(fd: isize, nstype: usize) -> isize {
 }
 
 fn linux_umount2(target: &str, flags: usize) -> isize {
-    with_c_path(target, |ptr| syscall(SYSCALL_UMOUNT2, [ptr as usize, flags, 0, 0, 0, 0]))
+    with_c_path(target, |ptr| {
+        syscall(SYSCALL_UMOUNT2, [ptr as usize, flags, 0, 0, 0, 0])
+    })
 }
 
 fn readlink(path: &str) -> String {
@@ -258,7 +268,10 @@ fn read_byte(fd: usize) -> u8 {
 
 fn enter_private_mount_namespace() {
     assert_eq!(linux_unshare(CLONE_NEWNS), 0);
-    assert_eq!(linux_mount(Some("none"), "/", Some("none"), MS_REC | MS_PRIVATE, None), 0);
+    assert_eq!(
+        linux_mount(Some("none"), "/", Some("none"), MS_REC | MS_PRIVATE, None),
+        0
+    );
 }
 
 fn prepare_mount_target(paths: &MountTestPaths) {
@@ -272,13 +285,21 @@ fn restore_mount_namespace(old_ns_fd: usize) {
     assert_eq!(linux_setns(old_ns_fd as isize, CLONE_NEWNS), 0);
 }
 
-fn run_namespace_visibility_smoke(old_ns_fd: usize, mnt_link_fd: usize, old_target: &str, paths: &MountTestPaths) {
+fn run_namespace_visibility_smoke(
+    old_ns_fd: usize,
+    mnt_link_fd: usize,
+    old_target: &str,
+    paths: &MountTestPaths,
+) {
     assert_eq!(linux_unshare(CLONE_NEWNS), 0);
     let new_target = readlink("/proc/self/ns/mnt");
     assert_ne!(new_target, old_target);
     assert_symlink_fd_target(mnt_link_fd, &new_target);
 
-    assert_eq!(linux_mount(Some(&paths.src), &paths.dst, None, MS_BIND, None), 0);
+    assert_eq!(
+        linux_mount(Some(&paths.src), &paths.dst, None, MS_BIND, None),
+        0
+    );
     let mounts = read_all("/proc/self/mounts");
     assert!(proc_mounts_contains_target(&mounts, &paths.dst));
 
@@ -395,13 +416,7 @@ fn run_unbindable_case(old_ns_fd: usize, paths: &MountTestPaths) {
     enter_private_mount_namespace();
     prepare_mount_target(paths);
     assert_eq!(
-        linux_mount(
-            Some("none"),
-            &paths.dira,
-            Some("none"),
-            MS_UNBINDABLE,
-            None
-        ),
+        linux_mount(Some("none"), &paths.dira, Some("none"), MS_UNBINDABLE, None),
         0
     );
     assert_eq!(

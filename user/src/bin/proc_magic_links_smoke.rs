@@ -62,51 +62,53 @@ fn with_c_path<T>(path: &str, f: impl FnOnce(*const u8) -> T) -> T {
 
 fn linux_openat(dirfd: isize, path: &str, flags: usize, mode: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_OPENAT,
-            [dirfd as usize, ptr as usize, flags, mode, 0, 0],
-        )
+        syscall(SYSCALL_OPENAT, [
+            dirfd as usize,
+            ptr as usize,
+            flags,
+            mode,
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_readlinkat(dirfd: isize, path: &str, buf: &mut [u8]) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_READLINKAT,
-            [
-                dirfd as usize,
-                ptr as usize,
-                buf.as_mut_ptr() as usize,
-                buf.len(),
-                0,
-                0,
-            ],
-        )
+        syscall(SYSCALL_READLINKAT, [
+            dirfd as usize,
+            ptr as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_newfstatat(dirfd: isize, path: &str, st: &mut KStat, flags: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_NEWFSTATAT,
-            [
-                dirfd as usize,
-                ptr as usize,
-                st as *mut KStat as usize,
-                flags,
-                0,
-                0,
-            ],
-        )
+        syscall(SYSCALL_NEWFSTATAT, [
+            dirfd as usize,
+            ptr as usize,
+            st as *mut KStat as usize,
+            flags,
+            0,
+            0,
+        ])
     })
 }
 
 fn linux_unlinkat(dirfd: isize, path: &str, flags: usize) -> isize {
     with_c_path(path, |ptr| {
-        syscall(
-            SYSCALL_UNLINKAT,
-            [dirfd as usize, ptr as usize, flags, 0, 0, 0],
-        )
+        syscall(SYSCALL_UNLINKAT, [
+            dirfd as usize,
+            ptr as usize,
+            flags,
+            0,
+            0,
+            0,
+        ])
     })
 }
 

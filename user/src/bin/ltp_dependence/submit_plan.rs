@@ -235,10 +235,7 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
 
     if RUN_AIO_DIO {
-        let tasks = filtered_tasks(
-            AIO_DIO_CORE_TASKS.as_ref(),
-            &IO_BLOCKED_TASKS,
-        );
+        let tasks = filtered_tasks(AIO_DIO_CORE_TASKS.as_ref(), &IO_BLOCKED_TASKS);
         run_for_both_libcs(run_group, tasks.as_slice());
     }
     if RUN_MM {
@@ -252,10 +249,7 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
     }
 
     if RUN_FS_META_INOTIFY_XATTR {
-        run_for_both_libcs(
-            run_group,
-            FS_META_INOTIFY_XATTR_TASKS.as_ref(),
-        );
+        run_for_both_libcs(run_group, FS_META_INOTIFY_XATTR_TASKS.as_ref());
     }
     if RUN_FS_META_CHOWN_XATTR {
         run_for_both_libcs(run_group, FS_META_CHOWN_XATTR_TASKS.as_ref());
@@ -301,10 +295,7 @@ fn run_selected_ltp_groups(run_group: fn(&str, &[&str])) {
         run_for_both_libcs(run_group, CGROUP_MEM_PID_TASKS.as_ref());
     }
     if RUN_SECURITY_KEYS_CRYPTO {
-        run_for_both_libcs(
-            run_group,
-            SECURITY_KEYS_CRYPTO_TASKS.as_ref(),
-        );
+        run_for_both_libcs(run_group, SECURITY_KEYS_CRYPTO_TASKS.as_ref());
     }
     if RUN_SECURITY_BPF_CVE {
         run_for_both_libcs(run_group, SECURITY_BPF_CVE_TASKS.as_ref());

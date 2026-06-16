@@ -64,5 +64,6 @@ clean:
 	else \
 		rm -rf $(SUBMIT_FOLDER); \
 	fi
+	@cargo clean
 
 .PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_sdcard

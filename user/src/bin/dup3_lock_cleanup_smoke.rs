@@ -32,10 +32,14 @@ fn write_lock(fd: usize, cmd: usize) -> isize {
         l_len: 0,
         l_pid: 0,
     };
-    syscall(
-        SYSCALL_FCNTL,
-        [fd, cmd, &mut lock as *mut Flock as usize, 0, 0, 0],
-    )
+    syscall(SYSCALL_FCNTL, [
+        fd,
+        cmd,
+        &mut lock as *mut Flock as usize,
+        0,
+        0,
+        0,
+    ])
 }
 
 #[unsafe(no_mangle)]

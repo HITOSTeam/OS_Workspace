@@ -303,52 +303,52 @@ pub fn main() -> i32 {
         }
         // basic_test
 
-        // chdir("/musl");
-        // run_script("/musl/basic_testcode.sh");
+        chdir("/musl");
+        run_script("/musl/basic_testcode.sh",&[]);
 
-        // chdir("/glibc");
-        // run_script("/glibc/basic_testcode.sh");
-        // // busybox
-        // chdir("/musl");
-        // run_script("/musl/busybox_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/busybox_testcode.sh");
-        // //lua
-        // chdir("/musl");
-        // run_script("/musl/lua_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/lua_testcode.sh");
-        // // netperf
-        // chdir("/musl");
-        // run_script("/musl/netperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/netperf_testcode.sh");
+        chdir("/glibc");
+        run_script("/glibc/basic_testcode.sh",&[]);
+        // busybox
+        chdir("/musl");
+        run_script("/musl/busybox_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/busybox_testcode.sh",&[]);
+        //lua
+        chdir("/musl");
+        run_script("/musl/lua_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/lua_testcode.sh",&[]);
+        // netperf
+        chdir("/musl");
+        run_script("/musl/netperf_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/netperf_testcode.sh",&[]);
 
         // // below tests  take too long time
 
-        // //cyclic
-        // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh");
+        //cyclic
+        chdir("/musl");
+        run_script("/musl/cyclictest_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/cyclictest_testcode.sh",&[]);
 
         // // iozone
         // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh");
+        // run_script("/musl/iozone_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh");
+        // run_script("/glibc/iozone_testcode.sh",&[]);
 
         // // libctest
         // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh");
+        // run_script("/musl/libctest_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh");
+        // run_script("/glibc/libctest_testcode.sh",&[]);
 
         // // libbench
         // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh");
+        // run_script("/musl/libcbench_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh");
+        // run_script("/glibc/libcbench_testcode.sh",&[]);
 
         run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
 
@@ -361,60 +361,60 @@ pub fn main() -> i32 {
     if !cfg!(target_arch = "riscv64") {
         // basic_test
 
-        // chdir("/musl");
-        // run_script("/musl/basic_testcode.sh");
+        chdir("/musl");
+        run_script("/musl/basic_testcode.sh",&[]);
 
-        // chdir("/glibc");
-        // run_script("/glibc/basic_testcode.sh");
-        // // busybox
-        // chdir("/musl");
-        // run_script("/musl/busybox_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/busybox_testcode.sh");
-        // //lua
-        // chdir("/musl");
-        // run_script("/musl/lua_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/lua_testcode.sh");
-        // // netperf
-        // chdir("/musl");
-        // run_script("/musl/netperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/netperf_testcode.sh");
+        chdir("/glibc");
+        run_script("/glibc/basic_testcode.sh",&[]);
+        // busybox
+        chdir("/musl");
+        run_script("/musl/busybox_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/busybox_testcode.sh",&[]);
+        //lua
+        chdir("/musl");
+        run_script("/musl/lua_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/lua_testcode.sh",&[]);
+        // netperf
+        chdir("/musl");
+        run_script("/musl/netperf_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/netperf_testcode.sh",&[]);
 
         // // below tests  take too long time
 
-        // //cyclic
-        // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh");
+        //cyclic
+        chdir("/musl");
+        run_script("/musl/cyclictest_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/cyclictest_testcode.sh", &[]);
 
         // // iozone
         // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh");
+        // run_script("/musl/iozone_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh");
+        // run_script("/glibc/iozone_testcode.sh",&[]);
 
-        // libctest
+        // // libctest
         // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh");
+        // run_script("/musl/libctest_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh");
+        // run_script("/glibc/libctest_testcode.sh",&[]);
 
-        // libbench
+        // // libbench
         // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh");
+        // run_script("/musl/libcbench_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh");
+        // run_script("/glibc/libcbench_testcode.sh",&[]);
 
-        // unixbench_testcode.sh
+        // // unixbench_testcode.sh
         // chdir("/musl");
-        // run_script("/musl/unixbench_testcode.sh");
+        // run_script("/musl/unixbench_testcode.sh",&[]);
         // chdir("/glibc");
-        // run_script("/glibc/unixbench_testcode.sh");
+        // run_script("/glibc/unixbench_testcode.sh",&[]);
 
-        run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        // run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
         // // iperf (run last, to prevent the possible dead lock (dont know why todo))
         // chdir("/musl");
         // run_script("/musl/iperf_testcode.sh");

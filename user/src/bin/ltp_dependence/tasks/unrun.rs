@@ -321,28 +321,13 @@ pub const UNRUN_MATH_TASKS: [&str; 9] = [
 // Pseudoterminal / line-discipline tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/pty
 pub const UNRUN_PTY_TASKS: [&str; 9] = [
-    "hangup01",
-    "ptem01",
-    "pty01",
-    "pty02",
-    "pty03",
-    "pty04",
-    "pty05",
-    "pty06",
-    "pty07",
+    "hangup01", "ptem01", "pty01", "pty02", "pty03", "pty04", "pty05", "pty06", "pty07",
 ];
 
 // Keyctl watch-queue notification tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/watchqueue
 pub const UNRUN_WATCHQUEUE_TASKS: [&str; 9] = [
-    "wqueue01",
-    "wqueue02",
-    "wqueue03",
-    "wqueue04",
-    "wqueue05",
-    "wqueue06",
-    "wqueue07",
-    "wqueue08",
+    "wqueue01", "wqueue02", "wqueue03", "wqueue04", "wqueue05", "wqueue06", "wqueue07", "wqueue08",
     "wqueue09",
 ];
 
@@ -360,74 +345,43 @@ pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 6] = [
 // Input subsystem / evdev tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/input
 pub const UNRUN_INPUT_TASKS: [&str; 6] = [
-    "input01",
-    "input02",
-    "input03",
-    "input04",
-    "input05",
-    "input06",
+    "input01", "input02", "input03", "input04", "input05", "input06",
 ];
 
 // Scheduler / deadline / cfs tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/sched
-pub const UNRUN_SCHED_TASKS: [&str; 3] = [
-    "autogroup01",
-    "proc_sched_rt01",
-    "starvation",
-];
+pub const UNRUN_SCHED_TASKS: [&str; 3] = ["autogroup01", "proc_sched_rt01", "starvation"];
 
 // Controller-Area-Network socket tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/can
-pub const UNRUN_CAN_TASKS: [&str; 3] = [
-    "can_bcm01",
-    "can_filter",
-    "can_rcv_own_msgs",
-];
+pub const UNRUN_CAN_TASKS: [&str; 3] = ["can_bcm01", "can_filter", "can_rcv_own_msgs"];
 
 // Random-instruction crash-me stress.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/crashme
-pub const UNRUN_CRASHME_TASKS: [&str; 3] = [
-    "crash01",
-    "crash02",
-    "f00f",
-];
+pub const UNRUN_CRASHME_TASKS: [&str; 3] = ["crash01", "crash02", "f00f"];
 
 // Udev / uevent tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/uevent
-pub const UNRUN_UEVENT_TASKS: [&str; 3] = [
-    "uevent01",
-    "uevent02",
-    "uevent03",
-];
+pub const UNRUN_UEVENT_TASKS: [&str; 3] = ["uevent01", "uevent02", "uevent03"];
 
 // Network feature probes.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.features
-pub const UNRUN_NET_FEATURES_TASKS: [&str; 1] = [
-    "fanout01",
-];
+pub const UNRUN_NET_FEATURES_TASKS: [&str; 1] = ["fanout01"];
 
 // Interrupt-handling tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/irq
-pub const UNRUN_IRQ_TASKS: [&str; 1] = [
-    "irqbalance01",
-];
+pub const UNRUN_IRQ_TASKS: [&str; 1] = ["irqbalance01"];
 
 // cgroup-controller scenarios not in cgroup batches.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/controllers
-pub const UNRUN_CONTROLLERS_TASKS: [&str; 1] = [
-    "memcg_test_3",
-];
+pub const UNRUN_CONTROLLERS_TASKS: [&str; 1] = ["memcg_test_3"];
 
 // Container / namespace stress not in NS batches.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/containers
-pub const UNRUN_CONTAINERS_TASKS: [&str; 1] = [
-    "netns_netlink",
-];
+pub const UNRUN_CONTAINERS_TASKS: [&str; 1] = ["netns_netlink"];
 
 // Smack LSM tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/smack
-pub const UNRUN_SMACK_TASKS: [&str; 1] = [
-    "smack_set_socket_labels",
-];
+pub const UNRUN_SMACK_TASKS: [&str; 1] = ["smack_set_socket_labels"];
 
 // Total UNRUN entries: 309
