@@ -1,40 +1,36 @@
 MODE ?= release
 SUBMIT ?= 1
+EXT4_REBUILD ?= 1
 
 OS_DIR := os
 USER_DIR := user
 CARGO_CONFIG := cargo-config/config.toml
-EXT4_PACKER_DIR := ext4-fs-packer
-USER_APP_DIR := os/results
-DISK_IMG := disk.img
-DISK_SIZE ?= 1G
-BASE_IMG ?= img/disk.img
-BASE_IMG_TAR ?= img/disk.tar
-BASE_IMG_TAR_XZ ?= img/disk.tar.xz
-BASE_IMG_ARG :=
-ifneq ($(strip $(BASE_IMG)),)
-BASE_IMG_ARG := -b $(abspath $(BASE_IMG))
-BASE_IMG_DEP := base-img
-endif
-SDCARD_RV_IMG ?= ./sdcard-rv.img
-SMP ?= 1
+EXT4_IMG := ext4-fs-packer/target/fs.ext4
+SDCARD_RV_IMG ?= sdcard-rv.img
+SDCARD_LA_IMG ?= sdcard-la.img
+SMP ?= 2
 MEM ?= 1G
+DOCKER_IMAGE ?= docker.educg.net/cg/os-contest:20260510
+
 
 # Only append the extra virtio disk if the file exists
-ifneq (,$(wildcard $(DISK_IMG)))
-DISK_ARGS := -drive file=$(DISK_IMG),if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
+ifneq (,$(wildcard disk.img))
+DISK_ARGS := -drive file=disk.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
 else
 DISK_ARGS :=
 endif
 
 RISC_TARGET := riscv64gc-unknown-none-elf
-RISC_ELF := $(OS_DIR)/target/$(RISC_TARGET)/$(MODE)/os
-LOONGARCH_ELF ?= $(OS_DIR)/target/loongarch64-unknown-none/$(MODE)/os
+LOONGARCH_TARGET := loongarch64-unknown-none
+RISC_ELF := target/$(RISC_TARGET)/$(MODE)/os
+LOONGARCH_ELF := target/$(LOONGARCH_TARGET)/$(MODE)/os
 
 KERNEL_RV := kernel-rv
 KERNEL_LA := kernel-la
+DISK_RV := disk.img
+DISK_LA := disk-la.img
 
-all: prepare-cargo build-rv build-la disk-img
+all: prepare-cargo build-rv build-la disk-rv disk-la
 
 prepare-cargo:
 	@mkdir -p $(OS_DIR)/.cargo $(USER_DIR)/.cargo
@@ -42,52 +38,43 @@ prepare-cargo:
 	@cp $(CARGO_CONFIG) $(USER_DIR)/.cargo/config.toml
 
 build-rv: prepare-cargo
-	@$(MAKE) -C $(OS_DIR) KERNEL MODE=$(MODE) SUBMIT=$(SUBMIT)
+	@$(MAKE) -C $(OS_DIR) ARCH=riscv64 MODE=$(MODE) SUBMIT=$(SUBMIT) kernel
 	@cp $(RISC_ELF) $(KERNEL_RV)
 
-build-la: build-rv
-	@if [ -f "$(LOONGARCH_ELF)" ]; then \
-		cp "$(LOONGARCH_ELF)" "$(KERNEL_LA)"; \
-	else \
-		echo "warning: loongarch64 kernel not found, copying $(KERNEL_RV) as placeholder"; \
-		cp "$(KERNEL_RV)" "$(KERNEL_LA)"; \
-	fi
+build-la: prepare-cargo
+	@$(MAKE) -C $(OS_DIR) ARCH=loongarch64 MODE=$(MODE) SUBMIT=$(SUBMIT) kernel
+	@cp $(LOONGARCH_ELF) $(KERNEL_LA)
 
 clean:
 	@$(MAKE) -C $(OS_DIR) clean
-	@rm -f $(KERNEL_RV) $(KERNEL_LA)
+	@rm -f $(KERNEL_RV) $(KERNEL_LA) 
 
-disk-img: build-rv $(BASE_IMG_DEP)
-	@cd $(EXT4_PACKER_DIR) && cargo run --release -- \
-		-u ../$(USER_APP_DIR) \
-		$(BASE_IMG_ARG) \
-		-t ../ \
-		-S $(DISK_SIZE) \
-		-o $(DISK_IMG)
-	cp disk.img disk-rv.img
+disk-rv: prepare-cargo
+	@$(MAKE) -C $(OS_DIR) ARCH=riscv64 MODE=$(MODE) SUBMIT=$(SUBMIT) EXT4_REBUILD=$(EXT4_REBUILD) ext4_img
 
-base-img:
-	@if [ ! -f "$(BASE_IMG)" ]; then \
-		if [ -f "$(BASE_IMG_TAR)" ]; then \
-			echo "📦 Extracting base image from $(BASE_IMG_TAR)..."; \
-			tar -xf "$(BASE_IMG_TAR)" -C "$(dir $(BASE_IMG))"; \
-		elif [ -f "$(BASE_IMG_TAR_XZ)" ]; then \
-			echo "📦 Extracting base image from $(BASE_IMG_TAR_XZ)..."; \
-			tar -xf "$(BASE_IMG_TAR_XZ)" -C "$(dir $(BASE_IMG))"; \
-		else \
-			echo "❌ Base image not found: $(BASE_IMG)"; \
-			exit 1; \
-		fi; \
-	fi
+disk-la: prepare-cargo
+	@$(MAKE) -C $(OS_DIR) ARCH=loongarch64 MODE=$(MODE) SUBMIT=$(SUBMIT) EXT4_REBUILD=$(EXT4_REBUILD) ext4_img
 
 run-rv: build-rv
-	qemu-system-riscv64 -machine virt -kernel $(KERNEL_RV) -m $(MEM) -nographic -smp $(SMP) \
-		-bios default \
-		-drive file=$(SDCARD_RV_IMG),if=none,format=raw,id=x0 \
-		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
-		-no-reboot \
-		-device virtio-net-device,netdev=net -netdev user,id=net \
-		-rtc base=utc \
-		$(DISK_ARGS)
+	qemu-system-riscv64 -machine virt -kernel ${KERNEL_RV} -m $(MEM) -nographic -smp $(SMP) -bios default \
+        -drive file=$(SDCARD_RV_IMG),if=none,format=raw,id=x0 \
+        -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -no-reboot -device virtio-net-device,netdev=net -netdev user,id=net \
+        -rtc base=utc \
+        -drive file=disk.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
 
-.PHONY: all prepare-cargo build-rv build-la clean disk-img run-rv base-img
+run-la: build-la
+	qemu-system-loongarch64 -kernel ${KERNEL_LA} -m $(MEM) -nographic -smp $(SMP) \
+        -drive file=$(SDCARD_LA_IMG),if=none,format=raw,id=x0  \
+        -device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0 -no-reboot  -device virtio-net-pci,netdev=net0 \
+        -netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555  \
+        -rtc base=utc \
+        -drive file=disk-la.img,if=none,format=raw,id=x1 -device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1
+
+
+start-docker:
+	docker run --rm -it \
+		-v "$(CURDIR)":/mnt/OS_Workspace/submit_repo \
+		-w /mnt/OS_Workspace/submit_repo \
+		$(DOCKER_IMAGE) \
+		/bin/bash
+.PHONY: all prepare-cargo build-rv build-la clean disk-rv disk-la run-rv

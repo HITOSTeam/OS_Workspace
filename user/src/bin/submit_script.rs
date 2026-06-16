@@ -324,7 +324,7 @@ pub fn main() -> i32 {
         chdir("/glibc");
         run_script("/glibc/netperf_testcode.sh",&[]);
 
-        // // below tests  take too long time
+        // below tests  take too long time
 
         //cyclic
         chdir("/musl");
@@ -332,31 +332,37 @@ pub fn main() -> i32 {
         chdir("/glibc");
         run_script("/glibc/cyclictest_testcode.sh",&[]);
 
-        // // iozone
-        // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh",&[]);
+        // iozone
+        chdir("/musl");
+        run_script("/musl/iozone_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/iozone_testcode.sh",&[]);
 
-        // // libctest
-        // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh",&[]);
+        // libctest
+        chdir("/musl");
+        run_script("/musl/libctest_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/libctest_testcode.sh",&[]);
 
-        // // libbench
-        // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh",&[]);
+        // libbench
+        chdir("/musl");
+        run_script("/musl/libcbench_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/libcbench_testcode.sh",&[]);
+
+        // unixbench_testcode.sh
+        chdir("/musl");
+        run_script("/musl/unixbench_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/unixbench_testcode.sh",&[]);
 
         run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
 
-        // // iperf (run last, to prevent the possible dead lock (dont know why todo))
-        // chdir("/musl");
-        // run_script("/musl/iperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iperf_testcode.sh");
+        // iperf (run last, to prevent the possible dead lock (dont know why todo))
+        chdir("/musl");
+        run_script("/musl/iperf_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/iperf_testcode.sh",&[]);
     }
     if !cfg!(target_arch = "riscv64") {
         // basic_test
@@ -390,36 +396,36 @@ pub fn main() -> i32 {
         chdir("/glibc");
         run_script("/glibc/cyclictest_testcode.sh", &[]);
 
-        // // iozone
-        // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh",&[]);
+        // iozone
+        chdir("/musl");
+        run_script("/musl/iozone_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/iozone_testcode.sh",&[]);
 
-        // // libctest
-        // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh",&[]);
+        // libctest
+        chdir("/musl");
+        run_script("/musl/libctest_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/libctest_testcode.sh",&[]);
 
-        // // libbench
-        // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh",&[]);
+        // libbench
+        chdir("/musl");
+        run_script("/musl/libcbench_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/libcbench_testcode.sh",&[]);
 
-        // // unixbench_testcode.sh
-        // chdir("/musl");
-        // run_script("/musl/unixbench_testcode.sh",&[]);
-        // chdir("/glibc");
-        // run_script("/glibc/unixbench_testcode.sh",&[]);
+        // unixbench_testcode.sh
+        chdir("/musl");
+        run_script("/musl/unixbench_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/unixbench_testcode.sh",&[]);
 
-        // run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
-        // // iperf (run last, to prevent the possible dead lock (dont know why todo))
-        // chdir("/musl");
-        // run_script("/musl/iperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iperf_testcode.sh");
+        run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        // iperf (run last, to prevent the possible dead lock (dont know why todo))
+        chdir("/musl");
+        run_script("/musl/iperf_testcode.sh",&[]);
+        chdir("/glibc");
+        run_script("/glibc/iperf_testcode.sh",&[]);
     }
 
     println!("#### ALL TESTS DONE ####");

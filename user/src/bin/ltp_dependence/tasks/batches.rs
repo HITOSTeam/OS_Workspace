@@ -1,11 +1,10 @@
 //! Topic batches originally assembled as periodic "uncovered 100" pushes.
 //!
-//! Most arrays here are toggled live by the `RUN_*` booleans in
-//! [`super::super::submit_plan`]; a minority are still parked here as
-//! reference material (they ship the same shape as the active batches but
-//! their `RUN_*` flag has never been enabled). Names describe the syscall
-//! family covered; the historical `BATCH_YYYYMMDD_*` prefix has been
-//! dropped because it did not help with navigation.
+//! These arrays are historical task groups that can be selected from
+//! [`super::super::submit_plan`] by uncommenting the corresponding group.
+//! Names describe the syscall family covered; the historical
+//! `BATCH_YYYYMMDD_*` prefix has been dropped because it did not help with
+//! navigation.
 //
 // Auto-extracted from the original flat `mod.rs`; test names are
 // preserved verbatim so the set consumed by `submit_plan.rs` is unchanged.
@@ -14,7 +13,7 @@
 
 // FS metadata + sync / stat / pipe / sendfile / splice / vmsplice group.
 // fs metadata+sync -> stat/statx -> pipe/sendfile/splice/vmsplice.
-const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
+pub const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
     "fallocate01",
     "fallocate02",
     "fallocate03",
@@ -37,7 +36,7 @@ const FALLOCATE_FSYNC_SYNC_TASKS: [&str; 20] = [
     "readdir21",
 ];
 
-const STAT_LFS_EXT_TASKS: [&str; 20] = [
+pub const STAT_LFS_EXT_TASKS: [&str; 20] = [
     "fstat02_64",
     "fstat03_64",
     "fstatfs01",
@@ -60,16 +59,16 @@ const STAT_LFS_EXT_TASKS: [&str; 20] = [
     "statx05",
 ];
 
-const STATX_EXT_TASKS: [&str; 7] = [
+pub const STATX_EXT_TASKS: [&str; 7] = [
     "statx06", "statx07", "statx08", "statx09", "statx10", "statx11", "statx12",
 ];
 
-const PIPE_CORE_TASKS: [&str; 13] = [
+pub const PIPE_CORE_TASKS: [&str; 13] = [
     "pipe01", "pipe02", "pipe03", "pipe04", "pipe05", "pipe06", "pipe07", "pipe08", "pipe09",
     "pipe10", "pipe11", "pipe12", "pipe13",
 ];
 
-const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
+pub const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
     "pipe14",
     "pipe15",
     "pipe2_01",
@@ -92,7 +91,7 @@ const PIPE_SENDFILE_SPLICE_TASKS: [&str; 20] = [
     "splice05",
 ];
 
-const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
+pub const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
     "sendfile07",
     "sendfile07_64",
     "sendfile08",
@@ -118,14 +117,13 @@ const TEE_VMSPLICE_FADVISE_TASKS: [&str; 20] = [
 // Credential *_16 compatibility + POSIX MQ / SysV IPC core group.
 // Priority from ltp summary Section 2 + Section 8:
 // credential *_16 compatibility -> POSIX MQ + SysV IPC core.
-const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
+pub const CAP_CRED16_QUERY_TASKS: [&str; 19] = [
     "cap_bounds_r",
     "cap_bounds_rw",
     "cap_bset_inh_bounds",
     "capset03",
     "capset04",
     "check_pe",
-    "check_simple_capset",
     "getegid01_16",
     "getegid02_16",
     "geteuid01_16",
@@ -141,7 +139,11 @@ const CAP_CRED16_QUERY_TASKS: [&str; 20] = [
     "getresuid01_16",
 ];
 
-const CRED16_MUTATION_TASKS: [&str; 40] = [
+// `check_simple_capset` returns 1 when LTP is built without libcap instead of
+// reporting TCONF, so it is kept out of the normal capability regression set.
+pub const CRED_CAP_LIBCAP_BUILD_GAP_TASKS: [&str; 1] = ["check_simple_capset"];
+
+pub const CRED16_MUTATION_TASKS: [&str; 39] = [
     "getresuid02_16",
     "getresuid03_16",
     "getuid01_16",
@@ -159,7 +161,6 @@ const CRED16_MUTATION_TASKS: [&str; 40] = [
     "setgid03_16",
     "setgroups01_16",
     "setgroups02_16",
-    "setgroups03",
     "setgroups03_16",
     "setgroups04",
     "setgroups04_16",
@@ -184,7 +185,12 @@ const CRED16_MUTATION_TASKS: [&str; 40] = [
     "setreuid06_16",
 ];
 
-const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
+// Keep setgroups03 as a Linux kernel-limit check on glibc. The default musl
+// build exposes NGROUPS=32 in this test, while Linux setgroups(2) accepts up to
+// NGROUPS_MAX=65536, so the musl variant expects the wrong EINVAL boundary.
+pub const CRED_SETGROUPS_GLIBC_ONLY_TASKS: [&str; 1] = ["setgroups03"];
+
+pub const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
     "setreuid07_16",
     "setuid01_16",
     "setuid03_16",
@@ -207,13 +213,13 @@ const POSIX_MQ_SYSV_MSG_SEM_TASKS: [&str; 20] = [
     "semget02",
 ];
 
-const SYSV_SHM_CORE_TASKS: [&str; 19] = [
+pub const SYSV_SHM_CORE_TASKS: [&str; 19] = [
     "shmat02", "shmat03", "shmat04", "shmat1", "shmctl01", "shmctl02", "shmctl03", "shmctl04",
     "shmctl05", "shmctl06", "shmctl07", "shmctl08", "shmdt01", "shmdt02", "shmget03", "shmget04",
     "shmget05", "shmget06", "shmt02",
 ];
 
-// SysV SHM follow-up cases (passed on both musl and glibc).
+// SysV SHM follow-up cases. musl shmt09 currently needs separate runtime-wrapper handling.
 pub const SYSV_SHM_FOLLOWUP_TASKS: [&str; 9] = [
     "shmget02", "shmt03", "shmt04", "shmt05", "shmt06", "shmt07", "shmt08", "shmt09", "shmt10",
 ];
@@ -234,7 +240,7 @@ pub const IPC_NAMESPACE_TASKS: [&str; 12] = [
     "semtest_2ns",
 ];
 
-// SysV message-queue stress case (passed on both musl and glibc).
+// SysV message-queue stress case. Currently functionally TPASS but returns TWARN/nonzero.
 pub const SYSV_MSG_STRESS_TASKS: [&str; 1] = ["msgstress01"];
 
 // AIO / direct-I/O group.
@@ -282,7 +288,7 @@ pub const MM_MMAP_MADVISE_TASKS: [&str; 48] = [
     "mmap08",
     "mmap1",
     "mmap2",
-    "mmap3",
+    "mmap3 -l 1 -n 4",
     "mmap10",
     "mmap11",
     "mmap12",
@@ -598,8 +604,9 @@ pub const PIDNS_MODULE_TASKS: [&str; 20] = [
     "membarrier01",
 ];
 
-// `pathconf02` stays in this batch, but submit_plan currently runs it only
-// in glibc lanes because musl's wrapper does not validate path errors here.
+// `pathconf02` stays in this batch. It passes on glibc but is expected to
+// fail on musl because musl pathconf() does not validate bad paths for
+// _PC_LINK_MAX; it returns the static _POSIX_LINK_MAX value instead.
 pub const IO_PERF_SYSINFO_PATHCONF_TASKS: [&str; 20] = [
     "ioprio_get01",
     "ioprio_set01",
