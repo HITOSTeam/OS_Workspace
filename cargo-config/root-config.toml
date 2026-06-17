@@ -1,0 +1,12 @@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/rcore-os/riscv"]
+git = "https://github.com/rcore-os/riscv"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor/cargo-vendor"
+
+[net]
+offline = true

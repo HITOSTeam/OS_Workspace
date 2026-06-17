@@ -8,11 +8,10 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     //
     // 进程生命周期 / exec / wait / 线程
     // &super::FORK_TASKS,
-    // &super::WAITPID_TASKS,
-    // &super::WAITID_TASKS,
-    // &super::CLONE_WAIT_EXIT_CORE_TASKS,
-    // &super::EXEC_FAMILY_CORE_TASKS,
-    
+    &super::WAITPID_TASKS,
+    &super::WAITID_TASKS,
+    &super::CLONE_WAIT_EXIT_CORE_TASKS,
+    &super::EXEC_FAMILY_CORE_TASKS,
     // // NOTE: CLONE_EXEC_CHROOT_GROUPS_TASKS 在默认 musl runtime 下会卡在
     // // clone08，失败发生在进入内核前。官方 musl 的公开 clone() wrapper 会拒绝
     // // CLONE_THREAD / CLONE_CHILD_CLEARTID / CLONE_SETTLS，并在用户态直接返回
@@ -20,22 +19,22 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // // 回归批次，需要先重建 LTP/raw clone wrapper，或者临时显式启用 LD_PRELOAD
     // // adapter。可选 adapter 保留在 /extra/libltp_clone_fix.so，源码为
     // // ext4-fs-packer/extra/libltp_clone_fix.S；submit_script.rs 默认不启用。
-    
+
     // &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
     // &super::THREADING_PTRACE_TASKS,
     // &super::PIDFD_PRCTL_TASKS,
-    
+
     // // 进程身份 / 会话 / 调度
-    // &super::PROCINFO_TASKS,
-    // &super::PGRP_SESSION_TASKS,
-    // &super::SETPGRP_TASKS,
-    // &super::GETPRIORITY_TASKS,
-    // &super::SETPRIORITY_TASKS,
-    // &super::PROC_TID_TASKS,
+    &super::PROCINFO_TASKS,
+    &super::PGRP_SESSION_TASKS,
+    &super::SETPGRP_TASKS,
+    &super::GETPRIORITY_TASKS,
+    &super::SETPRIORITY_TASKS,
+    &super::PROC_TID_TASKS,
     // &super::SCHED_NICE_CORE_TASKS,
     // &super::SCHED_TC_TASKS,
     // &super::UNRUN_SCHED_TASKS,
-    
+
     // // 凭证 / capability / key
     // &super::GETRES_TASKS,
     // &super::CRED_SET_CORE_TASKS,
@@ -45,34 +44,35 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CRED_KEY_CAP_CORE_TASKS,
     // &super::CAP_CRED16_QUERY_TASKS,
     // &super::CRED16_MUTATION_TASKS,
-    
+
     // // 信号 / futex / eventfd / timerfd / epoll
     // &super::SIGACTION_SIGNAL_CORE_TASKS,
     // &super::KILL_PAUSE_TGKILL_TASKS,
     // &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
     // &super::EVENTFD_FUTEX_TIMERFD_TASKS,
     // &super::EPOLL_CORE_TASKS,
-    
+
     // // 基础文件 I/O / fd / fcntl
-    // &super::CWD_DIR_TASKS,
-    // &super::ACCESS_TASKS,
-    // &super::FACCESSAT_TASKS,
-    // &super::CLOSE_TASKS,
-    // &super::OPEN_CORE_TASKS,
-    // &super::OPEN_EXT_TASKS,
-    // &super::OPENAT_CORE_TASKS,
-    // &super::CLOSE_RANGE_CORE_TASKS,
-    // &super::UMASK_TASKS,
-    // &super::DUP_CORE_TASKS,
-    // &super::DUP_FCNTL_TASKS,
-    // &super::READ_WRITE_LSEEK_TASKS,
-    // &super::PREAD_PWRITE_PREADV_TASKS,
-    // &super::PREADV2_PWRITEV2_TASKS,
-    // &super::FCNTL_BASIC_TASKS,
-    // &super::FCNTL_EXTENDED_TASKS,
-    // &super::FCNTL_MISC_TASKS,
-    // &super::FCNTL_LEASE_TASKS,
-    
+    &super::CWD_DIR_TASKS,
+    &super::ACCESS_TASKS,
+    &super::FACCESSAT_TASKS,
+    &super::CLOSE_TASKS,
+    &super::OPEN_CORE_TASKS,
+    &super::OPEN_EXT_TASKS,
+    &super::OPENAT_CORE_TASKS,
+    &super::CLOSE_RANGE_CORE_TASKS,
+    &super::UMASK_TASKS,
+    &super::DUP_CORE_TASKS,
+    &super::DUP_FCNTL_TASKS,
+    &super::READ_WRITE_LSEEK_TASKS,
+    &super::PREAD_PWRITE_PREADV_TASKS,
+    &super::PREADV2_PWRITEV2_TASKS,
+    &super::FCNTL_BASIC_TASKS,
+    &super::FCNTL_EXTENDED_TASKS,
+    &super::FCNTL_MISC_TASKS,
+    &super::FCNTL_LEASE_TASKS,
+    //临时把fork放到最后面,这个比较消耗时间,而且不知道能不能正确退出
+    &super::FORK_TASKS,
     // // 文件元数据 / 目录树 / 链接 / xattr
     // &super::CHOWN_TASKS,
     // &super::CHMOD_TASKS,
@@ -100,7 +100,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::FS_META_INOTIFY_XATTR_TASKS,
     // &super::STAT_LFS_EXT_TASKS,
     // &super::STATX_EXT_TASKS,
-    
+
     // // 高级文件 I/O / pipe / splice / AIO / io_uring
     // &super::FALLOCATE_FSYNC_SYNC_TASKS,
     // &super::PIPE_CORE_TASKS,
@@ -108,7 +108,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::TEE_VMSPLICE_FADVISE_TASKS,
     // &super::AIO_DIO_CORE_TASKS,
     // &super::IOCTL_IOURING_OPEN_TASKS,
-    
+
     // // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
     // &super::MOUNT_API_TASKS,
@@ -116,7 +116,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
     // &super::UNAME_SYSFS_ASLR_TASKS,
-    
+
     // // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
     // &super::MLOCK_MADVISE_CORE_TASKS,
@@ -129,7 +129,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::UNRUN_NUMA_SHELL_TASKS,
     // &super::UNRUN_MALLOC_TASKS,
     // &super::UNRUN_VMA_SHELL_TASKS,
-    
+
     // // IPC / POSIX MQ / SysV IPC
     // &super::SYSV_IPC_CORE_TASKS,
     // // verified on riscv64 musl+glibc. semop02 reports expected TCONF for
@@ -159,7 +159,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // // both variants return 4 because LTP emits TWARN "Out of runtime during
     // // forking"; keep it out of verified groups until stress/runtime scale is
     // // adjusted or investigated separately.
-    
+
     // // 网络 / socket / net command
     // &super::NET_SOCKET_CONN_TASKS,
     // &super::NET_SEND_RECV_TASKS,
@@ -183,7 +183,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::UNRUN_CAN_TASKS,
     // &super::UNRUN_NFT_TASKS,
     // &super::UNRUN_TRACEROUTE_TASKS,
-    
+
     // // 时间 / 资源 / 系统信息
     // &super::GETITIMER_TASKS,
     // &super::SETITIMER_TASKS,
@@ -203,15 +203,15 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // // NOTE：
     // // pathconf02 is expected to fail on musl: musl pathconf() ignores the
     // // path argument for _PC_LINK_MAX and returns a constant instead of errno.
-    
+
     // &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
     // &super::KCMP_TASKS,
-    
+
     // // UTS / random / misc identity
     // &super::UTS_NAME_TASKS,
     // &super::UTS_QUERY_TASKS,
     // &super::GETRANDOM_TASKS,
-    
+
     // // cgroup / controller / freezer / resource controllers
     // &super::CGROUP_CORE_CPU_TASKS,
     // &super::CGROUP_MEM_PID_TASKS,
@@ -220,7 +220,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::UNRUN_MEMCG_CTRL_TASKS,
     // &super::UNRUN_CGROUP_REGRESSION_TASKS,
     // &super::UNRUN_CGROUP_CTRL_SHELL_TASKS,
-    
+
     // // security / crypto / CVE / LSM
     // &super::SECURITY_KEYS_CRYPTO_TASKS,
     // &super::SECURITY_BPF_CVE_TASKS,
@@ -229,7 +229,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::UNRUN_SECURITY_HARDENING_TASKS,
     // &super::UNRUN_IMA_TASKS,
     // &super::UNRUN_SOUND_CVE_TASKS,
-    
+
     // // 命令 / 设备 / 内核杂项 / 压力类
     // &super::UNRUN_SYSCALLS_TASKS,
     // &super::UNRUN_FS_TASKS,
@@ -257,7 +257,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::UNRUN_LOCK_RCU_TASKS,
     // &super::UNRUN_FS_LINK_TASKS,
     // &super::UNRUN_FS_READONLY_TASKS,
-    
+
     // // 综合批次
     // &super::CORE100_TASKS,
 ];
@@ -280,21 +280,21 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     //
     // 进程生命周期 / exec / wait / 线程
     // &super::FORK_TASKS,
-    // &super::WAITPID_TASKS,
-    // &super::WAITID_TASKS,
-    // &super::CLONE_WAIT_EXIT_CORE_TASKS,
-    // &super::EXEC_FAMILY_CORE_TASKS,
-    // &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
-    // &super::THREADING_PTRACE_TASKS,
-    // &super::PIDFD_PRCTL_TASKS,
+    &super::WAITPID_TASKS,
+    &super::WAITID_TASKS,
+    &super::CLONE_WAIT_EXIT_CORE_TASKS,
+    &super::EXEC_FAMILY_CORE_TASKS,
+    &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
+    &super::THREADING_PTRACE_TASKS,
+    &super::PIDFD_PRCTL_TASKS,
     //
     // 进程身份 / 会话 / 调度
-    // &super::PROCINFO_TASKS,
-    // &super::PGRP_SESSION_TASKS,
-    // &super::SETPGRP_TASKS,
-    // &super::GETPRIORITY_TASKS,
-    // &super::SETPRIORITY_TASKS,
-    // &super::PROC_TID_TASKS,
+    &super::PROCINFO_TASKS,
+    &super::PGRP_SESSION_TASKS,
+    &super::SETPGRP_TASKS,
+    &super::GETPRIORITY_TASKS,
+    &super::SETPRIORITY_TASKS,
+    &super::PROC_TID_TASKS,
     // &super::SCHED_NICE_CORE_TASKS,
     // &super::SCHED_TC_TASKS,
     // &super::UNRUN_SCHED_TASKS,
@@ -317,25 +317,28 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::EPOLL_CORE_TASKS,
     //
     // 基础文件 I/O / fd / fcntl
-    // &super::CWD_DIR_TASKS,
-    // &super::ACCESS_TASKS,
-    // &super::FACCESSAT_TASKS,
-    // &super::CLOSE_TASKS,
-    // &super::OPEN_CORE_TASKS,
-    // &super::OPEN_EXT_TASKS,
-    // &super::OPENAT_CORE_TASKS,
-    // &super::CLOSE_RANGE_CORE_TASKS,
-    // &super::UMASK_TASKS,
-    // &super::DUP_CORE_TASKS,
-    // &super::DUP_FCNTL_TASKS,
-    // &super::READ_WRITE_LSEEK_TASKS,
-    // &super::PREAD_PWRITE_PREADV_TASKS,
-    // &super::PREADV2_PWRITEV2_TASKS,
-    // &super::FCNTL_BASIC_TASKS,
-    // &super::FCNTL_EXTENDED_TASKS,
-    // &super::FCNTL_MISC_TASKS,
-    // &super::FCNTL_LEASE_TASKS,
+    &super::CWD_DIR_TASKS,
+    &super::ACCESS_TASKS,
+    &super::FACCESSAT_TASKS,
+    &super::CLOSE_TASKS,
+    &super::OPEN_CORE_TASKS,
+    &super::OPEN_EXT_TASKS,
+    &super::OPENAT_CORE_TASKS,
+    &super::CLOSE_RANGE_CORE_TASKS,
+    &super::UMASK_TASKS,
+    &super::DUP_CORE_TASKS,
+    &super::DUP_FCNTL_TASKS,
+    &super::READ_WRITE_LSEEK_TASKS,
+    &super::PREAD_PWRITE_PREADV_TASKS,
+    &super::PREADV2_PWRITEV2_TASKS,
+    &super::FCNTL_BASIC_TASKS,
+    &super::FCNTL_EXTENDED_TASKS,
+    &super::FCNTL_MISC_TASKS,
+    &super::FCNTL_LEASE_TASKS,
     //
+
+    //把fork暂时放到最后面测试
+    &super::FORK_TASKS,
     // 文件元数据 / 目录树 / 链接 / xattr
     // &super::CHOWN_TASKS,
     // &super::CHMOD_TASKS,

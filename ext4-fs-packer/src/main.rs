@@ -103,6 +103,15 @@ fn main() -> anyhow::Result<()> {
         println!("Copying extra files from '{}'...", extra.display());
         copy_dir_contents(extra, &staging_extra)?;
 
+        let rootfs_overlay = extra.join("rootfs");
+        if rootfs_overlay.is_dir() {
+            println!(
+                "Overlaying rootfs files from '{}'...",
+                rootfs_overlay.display()
+            );
+            copy_dir_contents(&rootfs_overlay, &staging_dir)?;
+        }
+
         // UnixBench scripts create temp files in their working directory
         // (e.g., `sort.$$` in `tst.sh`). Ensure those dirs are writable.
         make_unixbench_dirs_writable(&staging_dir)?;

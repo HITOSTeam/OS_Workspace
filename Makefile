@@ -2,11 +2,15 @@ SUBMIT_FOLDER := submit_repo
 SUBMIT_MAKEFILE := submit_repo.Makefile
 SDCARD_RV_IMG := sdcard-rv.img
 SDCARD_LA_IMG := sdcard-la.img
+LOCAL_VENDOR_TMP := .local-vendor
 
 
 prepare_submit:
 	mkdir -p $(SUBMIT_FOLDER)
+	rm -rf $(SUBMIT_FOLDER)/.cargo
+	rm -rf $(SUBMIT_FOLDER)/cargo-vendor
 	rm -rf $(SUBMIT_FOLDER)/target
+	rm -rf $(LOCAL_VENDOR_TMP)
 	rm -f $(SUBMIT_FOLDER)/kernel-rv $(SUBMIT_FOLDER)/kernel-la $(SUBMIT_FOLDER)/disk.img $(SUBMIT_FOLDER)/disk-la.img
 
 # copy os to the submit folder
@@ -30,25 +34,32 @@ copy_ext4_fs: prepare_submit
 	mkdir -p $(SUBMIT_FOLDER)/ext4-fs
 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C ext4-fs . | tar -xf - -C $(SUBMIT_FOLDER)/ext4-fs
 
-copy_easy_fs: prepare_submit
-	rm -rf $(SUBMIT_FOLDER)/easy-fs
-	mkdir -p $(SUBMIT_FOLDER)/easy-fs
-	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs
+# copy_easy_fs: prepare_submit
+# 	rm -rf $(SUBMIT_FOLDER)/easy-fs
+# 	mkdir -p $(SUBMIT_FOLDER)/easy-fs
+# 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs
 
-copy_easy_fs_fuse: prepare_submit
-	rm -rf $(SUBMIT_FOLDER)/easy-fs-fuse
-	mkdir -p $(SUBMIT_FOLDER)/easy-fs-fuse
-	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs-fuse . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs-fuse
+# copy_easy_fs_fuse: prepare_submit
+# 	rm -rf $(SUBMIT_FOLDER)/easy-fs-fuse
+# 	mkdir -p $(SUBMIT_FOLDER)/easy-fs-fuse
+# 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs-fuse . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs-fuse
 
 copy_vendor: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/vendor
-	mkdir -p $(SUBMIT_FOLDER)/vendor
-	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C vendor . | tar -xf - -C $(SUBMIT_FOLDER)/vendor
+	rm -rf $(LOCAL_VENDOR_TMP)
+	mkdir -p $(LOCAL_VENDOR_TMP)
+	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C vendor . | tar -xf - -C $(LOCAL_VENDOR_TMP)
+	cargo vendor --offline $(LOCAL_VENDOR_TMP)/cargo-vendor >/dev/null
+	mv $(LOCAL_VENDOR_TMP) $(SUBMIT_FOLDER)/vendor
 
 copy_cargo_config: prepare_submit
-	rm -rf $(SUBMIT_FOLDER)/cargo-config
+	rm -rf $(SUBMIT_FOLDER)/cargo-config $(SUBMIT_FOLDER)/Cargo.toml
 	mkdir -p $(SUBMIT_FOLDER)/cargo-config
 	tar --exclude='.git' --exclude='*.log' -cf - -C cargo-config . | tar -xf - -C $(SUBMIT_FOLDER)/cargo-config
+
+
+copy_gitignore:
+	cp -f ./submit_repo.gitignore $(SUBMIT_FOLDER)/.gitignore
 
 copy_workspace: prepare_submit
 	cp -f Cargo.toml $(SUBMIT_FOLDER)/
@@ -58,23 +69,24 @@ copy_submit_makefile: prepare_submit
 	cp -f $(SUBMIT_MAKEFILE) $(SUBMIT_FOLDER)/Makefile
 copy_readme: prepare_submit
 	cp -f README_SUBMIT.md $(SUBMIT_FOLDER)/README.md
-copy_sdcard_rv: prepare_submit
-	@if [ -f "$(SDCARD_RV_IMG)" ]; then \
-		cp -Lf "$(SDCARD_RV_IMG)" "$(SUBMIT_FOLDER)/"; \
-	else \
-		echo "skip $(SDCARD_RV_IMG) (not found)"; \
-	fi
-copy_sdcard_la: prepare_submit
-	@if [ -f "$(SDCARD_LA_IMG)" ]; then \
-		cp -Lf "$(SDCARD_LA_IMG)" "$(SUBMIT_FOLDER)/"; \
-	else \
-		echo "skip $(SDCARD_LA_IMG) (not found)"; \
-	fi
+# copy_sdcard_rv: prepare_submit
+# 	@if [ -f "$(SDCARD_RV_IMG)" ]; then \
+# 		cp -Lf "$(SDCARD_RV_IMG)" "$(SUBMIT_FOLDER)/"; \
+# 	else \
+# 		echo "skip $(SDCARD_RV_IMG) (not found)"; \
+# 	fi
+# copy_sdcard_la: prepare_submit
+# 	@if [ -f "$(SDCARD_LA_IMG)" ]; then \
+# 		cp -Lf "$(SDCARD_LA_IMG)" "$(SUBMIT_FOLDER)/"; \
+# 	else \
+# 		echo "skip $(SDCARD_LA_IMG) (not found)"; \
+# 	fi
 copy_img: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/img
 	cp -r img/ $(SUBMIT_FOLDER)/img/
 
-all: copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_easy_fs copy_easy_fs_fuse copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_sdcard_rv copy_sdcard_la copy_img
+all: copy_os copy_user copy_ext4_fs_packer copy_ext4_fs  copy_vendor copy_cargo_config   copy_workspace copy_submit_makefile copy_readme copy_sdcard_rv copy_sdcard_la copy_img copy_gitignore
+	sudo chmod 757 -R ./submit_repo
 
 clean:
 	@if [ -d "$(SUBMIT_FOLDER)/.git" ]; then \
@@ -83,6 +95,7 @@ clean:
 	else \
 		rm -rf $(SUBMIT_FOLDER); \
 	fi
+	@rm -rf $(LOCAL_VENDOR_TMP)
 	@cargo clean
 
-.PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_easy_fs copy_easy_fs_fuse copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_sdcard_rv copy_sdcard_la copy_img
+.PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs  copy_vendor copy_cargo_config copy_root_cargo_config  copy_workspace copy_submit_makefile copy_readme copy_sdcard_rv copy_sdcard_la copy_img

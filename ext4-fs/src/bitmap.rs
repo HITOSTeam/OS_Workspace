@@ -1,6 +1,6 @@
 //! Bitmap operations for ext4 (read-only)
 
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice};
 use alloc::sync::Arc;
 
 /// Number of bits in a block
