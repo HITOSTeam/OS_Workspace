@@ -1,5 +1,0 @@
-root:x:0:
-daemon:x:1:
-users:x:100:
-nobody:x:65534:
-nogroup:x:65534:
