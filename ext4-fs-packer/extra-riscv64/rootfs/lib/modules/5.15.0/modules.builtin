@@ -1,0 +1,2 @@
+kernel/drivers/net/dummy.ko
+kernel/drivers/net/veth.ko
