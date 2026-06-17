@@ -18,10 +18,10 @@ copy_user: prepare_submit
 	rsync -av --exclude='.git' --exclude='.cargo' --exclude='target' user/ $(SUBMIT_FOLDER)/user/
 
 copy_ext4_fs_packer: prepare_submit
-	# dont copy the extra folder to reduce size and target
+	# dont copy the extra folders to reduce size and target
 	rm -rf $(SUBMIT_FOLDER)/ext4-fs-packer
 	mkdir -p $(SUBMIT_FOLDER)/ext4-fs-packer
-	rsync -av --exclude='.git' --exclude='*.log' --exclude="extra" --exclude="target" ext4-fs-packer/ $(SUBMIT_FOLDER)/ext4-fs-packer/
+	rsync -av --exclude='.git' --exclude='*.log' --exclude="extra" --exclude="extra-*" --exclude="target" ext4-fs-packer/ $(SUBMIT_FOLDER)/ext4-fs-packer/
 
 copy_ext4_fs: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/ext4-fs
