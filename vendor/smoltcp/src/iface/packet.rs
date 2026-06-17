@@ -1,4 +1,4 @@
-use crate::phy::DeviceCapabilities;
+use crate::phy::{Checksum, DeviceCapabilities};
 use crate::wire::*;
 
 #[allow(clippy::large_enum_variant)]
@@ -101,14 +101,34 @@ impl<'p> Packet<'p> {
             #[cfg(feature = "socket-raw")]
             IpPayload::Raw(raw_packet) => payload.copy_from_slice(raw_packet),
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpPayload::Udp(udp_repr, inner_payload) => udp_repr.emit(
-                &mut UdpPacket::new_unchecked(payload),
-                &_ip_repr.src_addr(),
-                &_ip_repr.dst_addr(),
-                inner_payload.len(),
-                |buf| buf.copy_from_slice(inner_payload),
-                &caps.checksum,
-            ),
+            IpPayload::Udp(udp_repr, inner_payload, no_checksum) => {
+                let mut checksum_caps;
+                let disable_udp_checksum = *no_checksum && {
+                    #[cfg(feature = "proto-ipv4")]
+                    {
+                        matches!(_ip_repr, IpRepr::Ipv4(_))
+                    }
+                    #[cfg(not(feature = "proto-ipv4"))]
+                    {
+                        false
+                    }
+                };
+                let udp_checksum_caps = if disable_udp_checksum {
+                    checksum_caps = caps.checksum.clone();
+                    checksum_caps.udp = Checksum::None;
+                    &checksum_caps
+                } else {
+                    &caps.checksum
+                };
+                udp_repr.emit(
+                    &mut UdpPacket::new_unchecked(payload),
+                    &_ip_repr.src_addr(),
+                    &_ip_repr.dst_addr(),
+                    inner_payload.len(),
+                    |buf| buf.copy_from_slice(inner_payload),
+                    udp_checksum_caps,
+                );
+            }
             #[cfg(feature = "socket-tcp")]
             IpPayload::Tcp(mut tcp_repr) => {
                 // This is a terrible hack to make TCP performance more acceptable on systems
@@ -183,7 +203,7 @@ pub(crate) enum IpPayload<'p> {
     #[cfg(feature = "socket-raw")]
     Raw(&'p [u8]),
     #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-    Udp(UdpRepr, &'p [u8]),
+    Udp(UdpRepr, &'p [u8], bool),
     #[cfg(feature = "socket-tcp")]
     Tcp(TcpRepr<'p>),
     #[cfg(feature = "socket-dhcpv4")]

@@ -9,6 +9,7 @@ use core::{cmp, fmt, mem};
 
 #[cfg(feature = "async")]
 use crate::socket::WakerRegistration;
+use crate::phy::PacketMeta;
 use crate::socket::{Context, PollAt};
 use crate::storage::{Assembler, RingBuffer};
 use crate::time::{Duration, Instant};
@@ -426,6 +427,8 @@ pub struct Socket<'a> {
     keep_alive: Option<Duration>,
     /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
     hop_limit: Option<u8>,
+    /// The IPv4 DSCP/ECN byte used in outgoing packets.
+    ipv4_tos: Option<u8>,
     /// Address passed to listen(). Listen address is set when listen() is called and
     /// used every time the socket is reset back to the LISTEN state.
     listen_endpoint: IpListenEndpoint,
@@ -522,6 +525,7 @@ impl<'a> Socket<'a> {
             timeout: None,
             keep_alive: None,
             hop_limit: None,
+            ipv4_tos: None,
             listen_endpoint: IpListenEndpoint::default(),
             bound_endpoint: IpListenEndpoint::default(),
             tuple: None,
@@ -759,6 +763,16 @@ impl<'a> Socket<'a> {
         }
 
         self.hop_limit = hop_limit
+    }
+
+    /// Return the IPv4 DSCP/ECN byte used in outgoing packets.
+    pub fn ipv4_tos(&self) -> Option<u8> {
+        self.ipv4_tos
+    }
+
+    /// Set the IPv4 DSCP/ECN byte used in outgoing packets.
+    pub fn set_ipv4_tos(&mut self, tos: Option<u8>) {
+        self.ipv4_tos = tos;
     }
 
     /// Return the local endpoint, or None if not connected.
@@ -2158,7 +2172,7 @@ impl<'a> Socket<'a> {
 
     pub(crate) fn dispatch<F, E>(&mut self, cx: &mut Context, emit: F) -> Result<(), E>
     where
-        F: FnOnce(&mut Context, (IpRepr, TcpRepr)) -> Result<(), E>,
+        F: FnOnce(&mut Context, PacketMeta, (IpRepr, TcpRepr)) -> Result<(), E>,
     {
         if self.tuple.is_none() {
             return Ok(());
@@ -2395,7 +2409,9 @@ impl<'a> Socket<'a> {
         // to not waste time waiting for the retransmit timer on packets that we know
         // for sure will not be successfully transmitted.
         ip_repr.set_payload_len(repr.buffer_len());
-        emit(cx, (ip_repr, repr))?;
+        let mut meta = PacketMeta::default();
+        meta.set_ipv4_tos(self.ipv4_tos);
+        emit(cx, meta, (ip_repr, repr))?;
 
         // We've sent something, whether useful data or a keep-alive packet, so rewind
         // the keep-alive timer.
@@ -2670,7 +2686,7 @@ mod test {
         let mut sent = 0;
         let result = socket
             .socket
-            .dispatch(&mut socket.cx, |_, (ip_repr, tcp_repr)| {
+            .dispatch(&mut socket.cx, |_, _, (ip_repr, tcp_repr)| {
                 assert_eq!(ip_repr.next_header(), IpProtocol::Tcp);
                 assert_eq!(ip_repr.src_addr(), LOCAL_ADDR.into());
                 assert_eq!(ip_repr.dst_addr(), REMOTE_ADDR.into());
@@ -2691,7 +2707,7 @@ mod test {
 
         let result: Result<(), ()> = socket
             .socket
-            .dispatch(&mut socket.cx, |_, (_ip_repr, _tcp_repr)| {
+            .dispatch(&mut socket.cx, |_, _, (_ip_repr, _tcp_repr)| {
                 panic!("Should not send a packet")
             });
 
@@ -6715,7 +6731,7 @@ mod test {
 
         s.set_hop_limit(Some(0x2a));
         assert_eq!(
-            s.socket.dispatch(&mut s.cx, |_, (ip_repr, _)| {
+            s.socket.dispatch(&mut s.cx, |_, _, (ip_repr, _)| {
                 assert_eq!(ip_repr.hop_limit(), 0x2a);
                 Ok::<_, ()>(())
             }),
@@ -6726,6 +6742,22 @@ mod test {
         // see https://github.com/smoltcp-rs/smoltcp/issues/601.
         s.reset();
         assert_eq!(s.hop_limit(), Some(0x2a));
+    }
+
+    #[test]
+    fn test_set_ipv4_tos() {
+        let mut s = socket_syn_received();
+
+        s.set_ipv4_tos(Some(0xb8));
+        assert_eq!(
+            s.socket.dispatch(&mut s.cx, |_, meta, _| {
+                assert_eq!(meta.ipv4_tos(), Some(0xb8));
+                Ok::<_, ()>(())
+            }),
+            Ok(())
+        );
+
+        assert_eq!(s.ipv4_tos(), Some(0xb8));
     }
 
     #[test]

@@ -162,6 +162,19 @@ pub use self::tuntap_interface::TunTapInterface;
 pub struct PacketMeta {
     #[cfg(feature = "packetmeta-id")]
     pub id: u32,
+    ipv4_tos: Option<u8>,
+}
+
+impl PacketMeta {
+    /// IPv4 DSCP/ECN byte requested by the upper socket layer.
+    pub fn ipv4_tos(&self) -> Option<u8> {
+        self.ipv4_tos
+    }
+
+    /// Set the IPv4 DSCP/ECN byte for this outgoing packet.
+    pub fn set_ipv4_tos(&mut self, tos: Option<u8>) {
+        self.ipv4_tos = tos;
+    }
 }
 
 /// A description of checksum behavior for a particular protocol.

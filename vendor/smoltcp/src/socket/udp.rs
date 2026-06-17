@@ -121,6 +121,7 @@ pub struct Socket<'a> {
     tx_buffer: PacketBuffer<'a>,
     /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
     hop_limit: Option<u8>,
+    no_checksum: bool,
     #[cfg(feature = "async")]
     rx_waker: WakerRegistration,
     #[cfg(feature = "async")]
@@ -135,6 +136,7 @@ impl<'a> Socket<'a> {
             rx_buffer,
             tx_buffer,
             hop_limit: None,
+            no_checksum: false,
             #[cfg(feature = "async")]
             rx_waker: WakerRegistration::new(),
             #[cfg(feature = "async")]
@@ -181,6 +183,16 @@ impl<'a> Socket<'a> {
     #[inline]
     pub fn endpoint(&self) -> IpListenEndpoint {
         self.endpoint
+    }
+
+    /// Enable or disable IPv4 UDP zero-checksum transmission.
+    pub fn set_no_checksum(&mut self, enabled: bool) {
+        self.no_checksum = enabled;
+    }
+
+    /// Return whether outgoing UDP checksums are disabled for this socket.
+    pub fn no_checksum(&self) -> bool {
+        self.no_checksum
     }
 
     /// Return the time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
@@ -519,10 +531,11 @@ impl<'a> Socket<'a> {
 
     pub(crate) fn dispatch<F, E>(&mut self, cx: &mut Context, emit: F) -> Result<(), E>
     where
-        F: FnOnce(&mut Context, PacketMeta, (IpRepr, UdpRepr, &[u8])) -> Result<(), E>,
+        F: FnOnce(&mut Context, PacketMeta, (IpRepr, UdpRepr, &[u8], bool)) -> Result<(), E>,
     {
         let endpoint = self.endpoint;
         let hop_limit = self.hop_limit.unwrap_or(64);
+        let no_checksum = self.no_checksum;
 
         let res = self.tx_buffer.dequeue_with(|packet_meta, payload_buf| {
             let src_addr = if let Some(s) = packet_meta.local_address {
@@ -563,7 +576,11 @@ impl<'a> Socket<'a> {
                 hop_limit,
             );
 
-            emit(cx, packet_meta.meta, (ip_repr, repr, payload_buf))
+            emit(
+                cx,
+                packet_meta.meta,
+                (ip_repr, repr, payload_buf, no_checksum),
+            )
         });
         match res {
             Err(Empty) => Ok(()),
@@ -782,7 +799,7 @@ mod test {
         assert!(!socket.can_send());
 
         assert_eq!(
-            socket.dispatch(cx, |_, _, (ip_repr, udp_repr, payload)| {
+            socket.dispatch(cx, |_, _, (ip_repr, udp_repr, payload, _)| {
                 assert_eq!(ip_repr, LOCAL_IP_REPR);
                 assert_eq!(udp_repr, LOCAL_UDP_REPR);
                 assert_eq!(payload, PAYLOAD);
@@ -793,7 +810,7 @@ mod test {
         assert!(!socket.can_send());
 
         assert_eq!(
-            socket.dispatch(cx, |_, _, (ip_repr, udp_repr, payload)| {
+            socket.dispatch(cx, |_, _, (ip_repr, udp_repr, payload, _)| {
                 assert_eq!(ip_repr, LOCAL_IP_REPR);
                 assert_eq!(udp_repr, LOCAL_UDP_REPR);
                 assert_eq!(payload, PAYLOAD);
@@ -958,7 +975,7 @@ mod test {
         s.set_hop_limit(Some(0x2a));
         assert_eq!(s.send_slice(b"abcdef", REMOTE_END), Ok(()));
         assert_eq!(
-            s.dispatch(cx, |_, _, (ip_repr, _, _)| {
+            s.dispatch(cx, |_, _, (ip_repr, _, _, _)| {
                 assert_eq!(
                     ip_repr,
                     IpReprIpvX(IpvXRepr {

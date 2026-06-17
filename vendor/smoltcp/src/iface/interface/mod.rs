@@ -647,18 +647,19 @@ impl Interface {
                     })
                 }
                 #[cfg(feature = "socket-udp")]
-                Socket::Udp(socket) => {
-                    socket.dispatch(&mut self.inner, |inner, meta, (ip, udp, payload)| {
-                        respond(inner, meta, Packet::new(ip, IpPayload::Udp(udp, payload)))
-                    })
-                }
+                Socket::Udp(socket) => socket.dispatch(
+                    &mut self.inner,
+                    |inner, meta, (ip, udp, payload, no_checksum)| {
+                        respond(
+                            inner,
+                            meta,
+                            Packet::new(ip, IpPayload::Udp(udp, payload, no_checksum)),
+                        )
+                    },
+                ),
                 #[cfg(feature = "socket-tcp")]
-                Socket::Tcp(socket) => socket.dispatch(&mut self.inner, |inner, (ip, tcp)| {
-                    respond(
-                        inner,
-                        PacketMeta::default(),
-                        Packet::new(ip, IpPayload::Tcp(tcp)),
-                    )
+                Socket::Tcp(socket) => socket.dispatch(&mut self.inner, |inner, meta, (ip, tcp)| {
+                    respond(inner, meta, Packet::new(ip, IpPayload::Tcp(tcp)))
                 }),
                 #[cfg(feature = "socket-dhcpv4")]
                 Socket::Dhcpv4(socket) => {
@@ -675,7 +676,7 @@ impl Interface {
                     respond(
                         inner,
                         PacketMeta::default(),
-                        Packet::new(ip, IpPayload::Udp(udp, dns)),
+                        Packet::new(ip, IpPayload::Udp(udp, dns, false)),
                     )
                 }),
             };
@@ -1139,6 +1140,15 @@ impl InterfaceInner {
         // Emit function for the IP header and payload.
         let emit_ip = |repr: &IpRepr, mut tx_buffer: &mut [u8]| {
             repr.emit(&mut tx_buffer, &self.caps.checksum);
+            #[cfg(feature = "proto-ipv4")]
+            if let (IpRepr::Ipv4(_), Some(tos)) = (repr, meta.ipv4_tos()) {
+                let mut packet = Ipv4Packet::new_unchecked(&mut tx_buffer[..repr.header_len()]);
+                packet.set_dscp(tos >> 2);
+                packet.set_ecn(tos & 0x03);
+                if self.caps.checksum.ipv4.tx() {
+                    packet.fill_checksum();
+                }
+            }
 
             let payload = &mut tx_buffer[repr.header_len()..];
             packet.emit_payload(repr, payload, &caps)
