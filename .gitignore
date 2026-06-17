@@ -39,3 +39,4 @@ loongarch_img_info/
 .codex
 .claude/
 .kiro/
+.tmp/
