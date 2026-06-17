@@ -1,12 +1,14 @@
+use anyhow::Context;
 use clap::Parser;
 use std::fs;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 /// Ext4 packer that creates an ext4 image with:
 ///   /user - user binaries
 ///   /extra - additional files (optional)
+/// Arch-specific extra overlays can be layered after the common extra tree.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -17,6 +19,10 @@ struct Args {
     /// Optional extra directory to pack (will be placed in /extra)
     #[arg(short = 'e', long = "extra")]
     extra_dir: Option<PathBuf>,
+
+    /// Optional architecture-specific extra directory overlaid after --extra
+    #[arg(long = "arch-extra")]
+    arch_extra_dir: Option<PathBuf>,
 
     /// Optional base ext4 image to seed filesystem contents
     #[arg(short = 'b', long = "base-image")]
@@ -46,11 +52,18 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Check extra_dir if provided
+    let mut extra_dirs: Vec<(&str, &PathBuf)> = Vec::new();
     if let Some(ref extra) = args.extra_dir {
+        extra_dirs.push(("extra", extra));
+    }
+    if let Some(ref arch_extra) = args.arch_extra_dir {
+        extra_dirs.push(("arch extra", arch_extra));
+    }
+    for (label, extra) in &extra_dirs {
         if !extra.exists() || !extra.is_dir() {
             anyhow::bail!(
-                "extra dir '{}' does not exist or is not a directory",
+                "{} dir '{}' does not exist or is not a directory",
+                label,
                 extra.display()
             );
         }
@@ -96,16 +109,13 @@ fn main() -> anyhow::Result<()> {
     );
     copy_dir_contents(&args.user_dir, &staging_user)?;
 
-    // If extra_dir provided, create /extra and copy contents
-    if let Some(ref extra) = args.extra_dir {
-        let staging_extra = staging_dir.join("extra");
-        fs::create_dir_all(&staging_extra)?;
-        println!("Copying extra files from '{}'...", extra.display());
-        copy_dir_contents(extra, &staging_extra)?;
-
-        // UnixBench scripts create temp files in their working directory
-        // (e.g., `sort.$$` in `tst.sh`). Ensure those dirs are writable.
-        make_unixbench_dirs_writable(&staging_dir)?;
+    // If extra overlays are provided, create /extra and copy them in order.
+    // The common tree is copied first, then the arch-specific tree can replace
+    // binaries and rootfs files with target-architecture versions.
+    if !extra_dirs.is_empty() {
+        for (label, extra) in &extra_dirs {
+            copy_extra_overlay(label, extra, &staging_dir)?;
+        }
     }
 
     // Ensure OSComp shell scripts are executable inside the ext4 image.
@@ -121,7 +131,9 @@ fn main() -> anyhow::Result<()> {
 
     // Check mke2fs availability
     if Command::new("mke2fs").arg("-V").output().is_err() {
-        eprintln!("`mke2fs` not found. Please install e2fsprogs (provides mke2fs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs");
+        eprintln!(
+            "`mke2fs` not found. Please install e2fsprogs (provides mke2fs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs"
+        );
         std::process::exit(1);
     }
 
@@ -160,7 +172,7 @@ fn main() -> anyhow::Result<()> {
     println!("Image created: {}", image_path.display());
     println!("Contents:");
     println!("  /user  - user binaries");
-    if args.extra_dir.is_some() {
+    if !extra_dirs.is_empty() {
         println!("  /extra - additional files");
     }
     if let Some(ref base_image) = args.base_image {
@@ -170,10 +182,34 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn copy_extra_overlay(label: &str, extra: &PathBuf, staging_dir: &PathBuf) -> anyhow::Result<()> {
+    let staging_extra = staging_dir.join("extra");
+    fs::create_dir_all(&staging_extra)?;
+    println!("Copying {} files from '{}'...", label, extra.display());
+    copy_dir_contents(extra, &staging_extra)?;
+
+    let rootfs_overlay = extra.join("rootfs");
+    if rootfs_overlay.is_dir() {
+        println!(
+            "Overlaying {} rootfs files from '{}'...",
+            label,
+            rootfs_overlay.display()
+        );
+        copy_dir_contents(&rootfs_overlay, staging_dir)?;
+    }
+
+    // UnixBench scripts create temp files in their working directory
+    // (e.g., `sort.$$` in `tst.sh`). Ensure those dirs are writable.
+    make_unixbench_dirs_writable(staging_dir)?;
+    Ok(())
+}
+
 fn seed_from_base_image(staging_root: &PathBuf, base_image: &PathBuf) -> anyhow::Result<()> {
     // `debugfs` is provided by e2fsprogs (same as mke2fs).
     if Command::new("debugfs").arg("-V").output().is_err() {
-        eprintln!("`debugfs` not found. Please install e2fsprogs (provides debugfs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs");
+        eprintln!(
+            "`debugfs` not found. Please install e2fsprogs (provides debugfs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs"
+        );
         std::process::exit(1);
     }
     let rdump_cmd = format!("rdump / {}", staging_root.display());
@@ -183,8 +219,15 @@ fn seed_from_base_image(staging_root: &PathBuf, base_image: &PathBuf) -> anyhow:
         .arg(base_image.as_os_str())
         .status()?;
     if !status.success() {
-        anyhow::bail!(
-            "debugfs rdump failed with exit code: {}",
+        let has_seeded_files = fs::read_dir(staging_root)?.next().is_some();
+        if !has_seeded_files {
+            anyhow::bail!(
+                "debugfs rdump failed with exit code: {}",
+                status.code().unwrap_or(-1)
+            );
+        }
+        eprintln!(
+            "warning: debugfs rdump exited with code {}, continuing with copied contents",
             status.code().unwrap_or(-1)
         );
     }
@@ -198,6 +241,9 @@ fn create_standard_dirs(staging_root: &PathBuf) -> anyhow::Result<()> {
     fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777))?;
     fs::create_dir_all(staging_root.join("bin"))?;
     fs::create_dir_all(staging_root.join("usr/bin"))?;
+    // iproute2 persists named network namespaces under /var/run/netns.
+    fs::create_dir_all(staging_root.join("var/run/netns"))?;
+    fs::create_dir_all(staging_root.join("run/netns"))?;
     // LTP controller scripts store intermediate logs under `$LTPROOT/output`.
     // Keep these runtime output directories available in the base image so
     // shell redirections do not fail before the actual test logic runs.
@@ -250,18 +296,56 @@ fn fix_shell_script_modes(root: &PathBuf) -> anyhow::Result<()> {
 
 /// Copy all files and subdirectories from src to dst
 fn copy_dir_contents(src: &PathBuf, dst: &PathBuf) -> anyhow::Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
+    for entry in fs::read_dir(src).with_context(|| format!("read '{}'", src.display()))? {
+        let entry = entry.with_context(|| format!("read entry in '{}'", src.display()))?;
         let file_type = entry.file_type()?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
         if file_type.is_dir() {
-            fs::create_dir_all(&dst_path)?;
+            if let Ok(metadata) = fs::symlink_metadata(&dst_path) {
+                if !metadata.file_type().is_dir() {
+                    fs::remove_file(&dst_path)
+                        .with_context(|| format!("remove existing '{}'", dst_path.display()))?;
+                }
+            }
+            fs::create_dir_all(&dst_path)
+                .with_context(|| format!("create directory '{}'", dst_path.display()))?;
             copy_dir_contents(&src_path, &dst_path)?;
         } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path)?;
+            if let Ok(metadata) = fs::symlink_metadata(&dst_path) {
+                if metadata.file_type().is_dir() {
+                    fs::remove_dir_all(&dst_path)
+                        .with_context(|| format!("remove existing '{}'", dst_path.display()))?;
+                } else {
+                    fs::remove_file(&dst_path)
+                        .with_context(|| format!("remove existing '{}'", dst_path.display()))?;
+                }
+            }
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!("copy '{}' to '{}'", src_path.display(), dst_path.display())
+            })?;
             println!("  -> {}", entry.file_name().to_string_lossy());
+        } else if file_type.is_symlink() {
+            if let Ok(metadata) = fs::symlink_metadata(&dst_path) {
+                if metadata.file_type().is_dir() {
+                    fs::remove_dir_all(&dst_path)
+                        .with_context(|| format!("remove existing '{}'", dst_path.display()))?;
+                } else {
+                    fs::remove_file(&dst_path)
+                        .with_context(|| format!("remove existing '{}'", dst_path.display()))?;
+                }
+            }
+            let target = fs::read_link(&src_path)
+                .with_context(|| format!("read link '{}'", src_path.display()))?;
+            symlink(&target, &dst_path).with_context(|| {
+                format!("symlink '{}' to '{}'", dst_path.display(), target.display())
+            })?;
+            println!(
+                "  -> {} -> {}",
+                entry.file_name().to_string_lossy(),
+                target.display()
+            );
         }
     }
     Ok(())
