@@ -8,6 +8,9 @@
 mod submit_plan;
 mod tasks;
 
-pub use submit_plan::{run_non_riscv_ltp_groups, run_riscv_ltp_groups};
+pub use submit_plan::{
+    run_non_riscv_ltp_groups, run_non_riscv_ltp_groups_in_dir, run_riscv_ltp_groups,
+    run_riscv_ltp_groups_in_dir,
+};
 #[allow(unused_imports)]
 pub use tasks::*;

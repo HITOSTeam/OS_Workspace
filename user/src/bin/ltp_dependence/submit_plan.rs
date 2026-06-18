@@ -1,3 +1,4 @@
+
 type LtpGroup = &'static [&'static str];
 
 // Enable a group by uncommenting its line under the target architecture.
@@ -505,6 +506,7 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CORE100_TASKS,
 ];
 
+#[allow(unused)]
 const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
@@ -515,6 +517,7 @@ const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 /// 对所有groups 里的组逐个运行测试
 /// groups是一个二维数组
 /// 使用 run_group 对其 运行测试
+#[allow(unused)]
 fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     for &tasks in groups {
         run_group("/musl", tasks);
@@ -522,18 +525,39 @@ fn run_ltp_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     }
 }
 
+fn run_ltp_groups_in_dir(dir: &str, run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
+    for &tasks in groups {
+        run_group(dir, tasks);
+    }
+}
+#[allow(unused)]
 fn run_ltp_glibc_only_groups(run_group: fn(&str, &[&str]), groups: &[LtpGroup]) {
     for &tasks in groups {
         run_group("/glibc", tasks);
     }
 }
-
+///老的评测脚本,这个官网的评测机器不解析,因为他输出太多的#### OS COMP TEST GROUP START ltp-musl ####
+#[allow(unused)]
 pub fn run_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, RISCV_LTP_GROUPS);
     run_ltp_glibc_only_groups(run_group, RISCV_LTP_GLIBC_ONLY_GROUPS);
 }
 
+pub fn run_riscv_ltp_groups_in_dir(dir: &str, run_group: fn(&str, &[&str])) {
+    run_ltp_groups_in_dir(dir, run_group, RISCV_LTP_GROUPS);
+    if dir == "/glibc" {
+        run_ltp_groups_in_dir(dir, run_group, RISCV_LTP_GLIBC_ONLY_GROUPS);
+    }
+}
+#[allow(unused)]
 pub fn run_non_riscv_ltp_groups(run_group: fn(&str, &[&str])) {
     run_ltp_groups(run_group, LOONGARCH_LTP_GROUPS);
     run_ltp_glibc_only_groups(run_group, LOONGARCH_LTP_GLIBC_ONLY_GROUPS);
+}
+#[allow(unused)]
+pub fn run_non_riscv_ltp_groups_in_dir(dir: &str, run_group: fn(&str, &[&str])) {
+    run_ltp_groups_in_dir(dir, run_group, LOONGARCH_LTP_GROUPS);
+    if dir == "/glibc" {
+        run_ltp_groups_in_dir(dir, run_group, LOONGARCH_LTP_GLIBC_ONLY_GROUPS);
+    }
 }

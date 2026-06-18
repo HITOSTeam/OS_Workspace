@@ -48,15 +48,6 @@ const PROCFS_SMOKES: [&str; 2] = [
 ];
 
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
-    let group = if dir.contains("musl") {
-        "ltp-musl"
-    } else if dir.contains("glibc") {
-        "ltp-glibc"
-    } else {
-        "ltp"
-    };
-    println!("#### OS COMP TEST GROUP START {} ####", group);
-
     let _ = chdir(dir);
     for &entry in script_names {
         let mut parts = entry.split_whitespace();
@@ -76,7 +67,11 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
             println!("FAIL LTP CASE {} : {}", script, ret);
         }
     }
+}
 
+fn run_ltp_lane(group: &str, dir: &str, run_groups: fn(&str, fn(&str, &[&str]))) {
+    println!("#### OS COMP TEST GROUP START {} ####", group);
+    run_groups(dir, run_part_of_ltp_script_in_dir);
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
 
@@ -313,6 +308,8 @@ fn try_poweroff() -> ! {
     syscall::poweroff();
 }
 
+
+
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
     // only run for riscv arch
@@ -323,8 +320,13 @@ pub fn main() -> i32 {
         if FOCUS_PROCFS_SMOKES {
             run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
         }
-        // basic_test
-
+        // //lmbench
+        // chdir("/musl");
+        // run_script("/musl/lmbench_testcode.sh",&[]);
+        // chdir("/glibc");
+        // run_script("/glibc/lmbench_testcode.sh",&[]);
+        
+        // // basic_test
         // chdir("/musl");
         // run_script("/musl/basic_testcode.sh",&[]);
 
@@ -346,26 +348,24 @@ pub fn main() -> i32 {
         // chdir("/glibc");
         // run_script("/glibc/netperf_testcode.sh",&[]);
 
-        // libctest
+        // // libctest 不需要跑glibc的libc test,跑了也没有分数
         // chdir("/musl");
         // run_script("/musl/libctest_testcode.sh", &[]);
-        // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh", &[]);
 
-        // below tests  take too long time
+        // // below tests  take too long time
         //cyclic
-        // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh", &[]);
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh", &[]);
+        chdir("/musl");
+        run_script("/musl/cyclictest_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/cyclictest_testcode.sh", &[]);
 
-        // // iozone
+        // // // iozone
         // chdir("/musl");
         // run_script("/musl/iozone_testcode.sh",&[]);
         // chdir("/glibc");
         // run_script("/glibc/iozone_testcode.sh",&[]);
 
-        // // libcbench
+        // // // libcbench
         // chdir("/musl");
         // run_script("/musl/libcbench_testcode.sh",&[]);
         // chdir("/glibc");
@@ -377,7 +377,8 @@ pub fn main() -> i32 {
         // chdir("/glibc");
         // run_script("/glibc/unixbench_testcode.sh",&[]);
 
-        run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        run_ltp_lane("ltp-musl", "/musl", run_riscv_ltp_groups_in_dir);
+        run_ltp_lane("ltp-glibc", "/glibc", run_riscv_ltp_groups_in_dir);
 
         // // iperf (run last, to prevent the possible dead lock (dont know why todo))
         // chdir("/musl");
@@ -409,20 +410,21 @@ pub fn main() -> i32 {
         // chdir("/glibc");
         // run_script("/glibc/netperf_testcode.sh",&[]);
 
-        // libctest
-        chdir("/musl");
-        run_script("/musl/libctest_testcode.sh", &[]);
-        chdir("/glibc");
-        run_script("/glibc/libctest_testcode.sh", &[]);
-
-        // // below tests  take too long time
-        //cyclic loongarch的部分有点问题
+        // // libctest
+        // // //不需要跑glibc的libc test,跑了也没有分数
         // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh", &[]);
+        // run_script("/musl/libctest_testcode.sh", &[]);
+
+
+
+        // // // below tests  take too long time
+        // //cyclic loongarch的部分有点问题 只有musl有问题
+        // // chdir("/musl");
+        // // run_script("/musl/cyclictest_testcode.sh", &[]);
         // chdir("/glibc");
         // run_script("/glibc/cyclictest_testcode.sh", &[]);
 
-        // iozone
+        // // iozone
         // chdir("/musl");
         // run_script("/musl/iozone_testcode.sh",&[]);
         // chdir("/glibc");
@@ -434,13 +436,14 @@ pub fn main() -> i32 {
         // chdir("/glibc");
         // run_script("/glibc/libcbench_testcode.sh",&[]);
 
-        // // unixbench_testcode.sh
+        // // // unixbench_testcode.sh
         // chdir("/musl");
         // run_script("/musl/unixbench_testcode.sh",&[]);
         // chdir("/glibc");
         // run_script("/glibc/unixbench_testcode.sh",&[]);
 
-        // run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        run_ltp_lane("ltp-musl", "/musl", run_non_riscv_ltp_groups_in_dir);
+        run_ltp_lane("ltp-glibc", "/glibc", run_non_riscv_ltp_groups_in_dir);
 
         // // // iperf (run last, to prevent the possible dead lock (dont know why todo))
         // chdir("/musl");
