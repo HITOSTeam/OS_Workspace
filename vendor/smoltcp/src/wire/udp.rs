@@ -55,15 +55,34 @@ impl<T: AsRef<[u8]>> Packet<T> {
     ///
     /// [set_len]: #method.set_len
     pub fn check_len(&self) -> Result<()> {
+        self.check_len_for_protocol(IpProtocol::Udp)
+    }
+
+    /// Validate UDP or UDP-Lite framing.
+    ///
+    /// For UDP the third 16-bit field is the datagram length. For UDP-Lite it
+    /// is the checksum coverage and the actual payload length comes from IP.
+    pub fn check_len_for_protocol(&self, protocol: IpProtocol) -> Result<()> {
         let buffer_len = self.buffer.as_ref().len();
         if buffer_len < HEADER_LEN {
             Err(Error)
         } else {
             let field_len = self.len() as usize;
-            if buffer_len < field_len || field_len < HEADER_LEN {
-                Err(Error)
-            } else {
-                Ok(())
+            match protocol {
+                IpProtocol::UdpLite => {
+                    if field_len != 0 && !(HEADER_LEN..=buffer_len).contains(&field_len) {
+                        Err(Error)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => {
+                    if buffer_len < field_len || field_len < HEADER_LEN {
+                        Err(Error)
+                    } else {
+                        Ok(())
+                    }
+                }
             }
         }
     }
@@ -110,22 +129,57 @@ impl<T: AsRef<[u8]>> Packet<T> {
     /// # Fuzzing
     /// This function always returns `true` when fuzzing.
     pub fn verify_checksum(&self, src_addr: &IpAddress, dst_addr: &IpAddress) -> bool {
+        self.verify_checksum_for_protocol(src_addr, dst_addr, IpProtocol::Udp, 0)
+    }
+
+    /// Validate the UDP/UDP-Lite checksum.
+    ///
+    /// `recv_coverage` is only meaningful for UDP-Lite. A value of zero follows
+    /// Linux's default UDP-emulation behavior and requires full packet coverage.
+    pub fn verify_checksum_for_protocol(
+        &self,
+        src_addr: &IpAddress,
+        dst_addr: &IpAddress,
+        protocol: IpProtocol,
+        recv_coverage: usize,
+    ) -> bool {
         if cfg!(fuzzing) {
             return true;
         }
 
-        // From the RFC:
-        // > An all zero transmitted checksum value means that the transmitter
-        // > generated no checksum (for debugging or for higher level protocols
-        // > that don't care).
-        if self.checksum() == 0 {
-            return true;
-        }
-
         let data = self.buffer.as_ref();
+        let (pseudo_len, checksum_len) = match protocol {
+            IpProtocol::UdpLite => {
+                let coverage = self.len() as usize;
+                if self.checksum() == 0 || (coverage != 0 && coverage < HEADER_LEN) {
+                    return false;
+                }
+                if coverage > data.len() {
+                    return false;
+                }
+                let checksum_len = if coverage == 0 { data.len() } else { coverage };
+                if recv_coverage == 0 {
+                    if checksum_len != data.len() {
+                        return false;
+                    }
+                } else if checksum_len < recv_coverage {
+                    return false;
+                }
+                (data.len(), checksum_len)
+            }
+            _ => {
+                // From RFC 768: an all-zero transmitted checksum means that
+                // the transmitter generated no checksum.
+                if self.checksum() == 0 {
+                    return true;
+                }
+                (self.len() as usize, self.len() as usize)
+            }
+        };
+
         checksum::combine(&[
-            checksum::pseudo_header(src_addr, dst_addr, IpProtocol::Udp, self.len() as u32),
-            checksum::data(&data[..self.len() as usize]),
+            checksum::pseudo_header(src_addr, dst_addr, protocol, pseudo_len as u32),
+            checksum::data(&data[..checksum_len]),
         ]) == !0
     }
 }
@@ -137,6 +191,17 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Packet<&'a T> {
         let length = self.len();
         let data = self.buffer.as_ref();
         &data[field::PAYLOAD(length)]
+    }
+
+    /// Return the payload according to UDP or UDP-Lite length semantics.
+    pub fn payload_for_protocol(&self, protocol: IpProtocol) -> &'a [u8] {
+        match protocol {
+            IpProtocol::UdpLite => {
+                let data = self.buffer.as_ref();
+                &data[field::CHECKSUM.end..]
+            }
+            _ => self.payload(),
+        }
     }
 }
 
@@ -175,15 +240,42 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Packet<T> {
     /// This function panics unless `src_addr` and `dst_addr` belong to the same family,
     /// and that family is IPv4 or IPv6.
     pub fn fill_checksum(&mut self, src_addr: &IpAddress, dst_addr: &IpAddress) {
+        self.fill_checksum_for_protocol(src_addr, dst_addr, IpProtocol::Udp, 0);
+    }
+
+    /// Compute and fill the UDP/UDP-Lite checksum.
+    ///
+    /// For UDP-Lite, `checksum_coverage` follows RFC 3828: 0 or values greater
+    /// than the packet length mean full coverage; non-zero values are clamped to
+    /// at least the 8-byte transport header.
+    pub fn fill_checksum_for_protocol(
+        &mut self,
+        src_addr: &IpAddress,
+        dst_addr: &IpAddress,
+        protocol: IpProtocol,
+        checksum_coverage: usize,
+    ) {
         self.set_checksum(0);
         let checksum = {
             let data = self.buffer.as_ref();
+            let (pseudo_len, checksum_len) = match protocol {
+                IpProtocol::UdpLite => {
+                    let total_len = data.len();
+                    let checksum_len = if checksum_coverage == 0 || checksum_coverage >= total_len {
+                        total_len
+                    } else {
+                        checksum_coverage.max(HEADER_LEN)
+                    };
+                    (total_len, checksum_len)
+                }
+                _ => (self.len() as usize, self.len() as usize),
+            };
             !checksum::combine(&[
-                checksum::pseudo_header(src_addr, dst_addr, IpProtocol::Udp, self.len() as u32),
-                checksum::data(&data[..self.len() as usize]),
+                checksum::pseudo_header(src_addr, dst_addr, protocol, pseudo_len as u32),
+                checksum::data(&data[..checksum_len]),
             ])
         };
-        // UDP checksum value of 0 means no checksum; if the checksum really is zero,
+        // A checksum value of 0 means no checksum; if the checksum really is zero,
         // use all-ones, which indicates that the remote end must verify the checksum.
         // Arithmetically, RFC 1071 checksums of all-zeroes and all-ones behave identically,
         // so no action is necessary on the remote end.
@@ -196,6 +288,12 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Packet<T> {
         let length = self.len();
         let data = self.buffer.as_mut();
         &mut data[field::PAYLOAD(length)]
+    }
+
+    /// Return the whole transport payload, ignoring the length/coverage field.
+    pub fn payload_mut_full(&mut self) -> &mut [u8] {
+        let data = self.buffer.as_mut();
+        &mut data[field::CHECKSUM.end..]
     }
 }
 
@@ -223,18 +321,36 @@ impl Repr {
     where
         T: AsRef<[u8]> + ?Sized,
     {
-        packet.check_len()?;
+        Self::parse_with_protocol(packet, src_addr, dst_addr, checksum_caps, IpProtocol::Udp, 0)
+    }
+
+    /// Parse a UDP or UDP-Lite packet.
+    pub fn parse_with_protocol<T>(
+        packet: &Packet<&T>,
+        src_addr: &IpAddress,
+        dst_addr: &IpAddress,
+        checksum_caps: &ChecksumCapabilities,
+        protocol: IpProtocol,
+        recv_coverage: usize,
+    ) -> Result<Repr>
+    where
+        T: AsRef<[u8]> + ?Sized,
+    {
+        packet.check_len_for_protocol(protocol)?;
 
         // Destination port cannot be omitted (but source port can be).
         if packet.dst_port() == 0 {
             return Err(Error);
         }
         // Valid checksum is expected...
-        if checksum_caps.udp.rx() && !packet.verify_checksum(src_addr, dst_addr) {
+        if checksum_caps.udp.rx()
+            && !packet.verify_checksum_for_protocol(src_addr, dst_addr, protocol, recv_coverage)
+        {
             match (src_addr, dst_addr) {
                 // ... except on UDP-over-IPv4, where it can be omitted.
                 #[cfg(feature = "proto-ipv4")]
-                (&IpAddress::Ipv4(_), &IpAddress::Ipv4(_)) if packet.checksum() == 0 => (),
+                (&IpAddress::Ipv4(_), &IpAddress::Ipv4(_))
+                    if protocol == IpProtocol::Udp && packet.checksum() == 0 => {}
                 _ => return Err(Error),
             }
         }
@@ -277,13 +393,50 @@ impl Repr {
     ) where
         T: AsRef<[u8]> + AsMut<[u8]>,
     {
+        self.emit_with_protocol(
+            packet,
+            src_addr,
+            dst_addr,
+            payload_len,
+            emit_payload,
+            checksum_caps,
+            IpProtocol::Udp,
+            0,
+        )
+    }
+
+    /// Emit a UDP or UDP-Lite packet.
+    pub fn emit_with_protocol<T: ?Sized>(
+        &self,
+        packet: &mut Packet<&mut T>,
+        src_addr: &IpAddress,
+        dst_addr: &IpAddress,
+        payload_len: usize,
+        emit_payload: impl FnOnce(&mut [u8]),
+        checksum_caps: &ChecksumCapabilities,
+        protocol: IpProtocol,
+        checksum_coverage: usize,
+    ) where
+        T: AsRef<[u8]> + AsMut<[u8]>,
+    {
+        let total_len = HEADER_LEN + payload_len;
         packet.set_src_port(self.src_port);
         packet.set_dst_port(self.dst_port);
-        packet.set_len((HEADER_LEN + payload_len) as u16);
-        emit_payload(packet.payload_mut());
+        let coverage_field = match protocol {
+            IpProtocol::UdpLite => {
+                if checksum_coverage == 0 || checksum_coverage >= total_len {
+                    0
+                } else {
+                    checksum_coverage.max(HEADER_LEN) as u16
+                }
+            }
+            _ => total_len as u16,
+        };
+        packet.set_len(coverage_field);
+        emit_payload(packet.payload_mut_full());
 
-        if checksum_caps.udp.tx() {
-            packet.fill_checksum(src_addr, dst_addr)
+        if protocol == IpProtocol::UdpLite || checksum_caps.udp.tx() {
+            packet.fill_checksum_for_protocol(src_addr, dst_addr, protocol, checksum_coverage)
         } else {
             // make sure we get a consistently zeroed checksum,
             // since implementations might rely on it
@@ -295,12 +448,19 @@ impl Repr {
 impl<'a, T: AsRef<[u8]> + ?Sized> fmt::Display for Packet<&'a T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Cannot use Repr::parse because we don't have the IP addresses.
+        let data_len = self.buffer.as_ref().len();
+        let field_len = self.len() as usize;
+        let payload_len = if (HEADER_LEN..=data_len).contains(&field_len) {
+            field_len - HEADER_LEN
+        } else {
+            data_len.saturating_sub(HEADER_LEN)
+        };
         write!(
             f,
             "UDP src={} dst={} len={}",
             self.src_port(),
             self.dst_port(),
-            self.payload().len()
+            payload_len
         )
     }
 }

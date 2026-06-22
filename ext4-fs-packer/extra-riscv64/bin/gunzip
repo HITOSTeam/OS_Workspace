@@ -1,0 +1,3 @@
+#!/bin/sh
+# Decompress files using the real gzip binary.
+exec gzip -d "$@"

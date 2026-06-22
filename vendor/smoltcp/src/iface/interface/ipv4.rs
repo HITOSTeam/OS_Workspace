@@ -203,7 +203,7 @@ impl InterfaceInner {
             IpProtocol::Igmp => self.process_igmp(ipv4_repr, ip_payload),
 
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpProtocol::Udp => {
+            IpProtocol::Udp | IpProtocol::UdpLite => {
                 self.process_udp(sockets, meta, handled_by_raw_socket, ip_repr, ip_payload)
             }
 
