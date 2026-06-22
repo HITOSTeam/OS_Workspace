@@ -1,2 +1,3 @@
 kernel/drivers/net/dummy.ko:
 kernel/drivers/net/veth.ko:
+kernel/drivers/net/wireguard/wireguard.ko:
