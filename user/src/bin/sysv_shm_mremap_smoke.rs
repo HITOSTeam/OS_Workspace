@@ -4,7 +4,7 @@
 #[macro_use]
 extern crate user;
 
-use user::syscall::{exit, fork, syscall, waitpid};
+use user::syscall::{SIGBUS, SIGSEGV, exit, fork, syscall, waitpid};
 
 const PAGE_SIZE: usize = 4096;
 
@@ -105,6 +105,10 @@ fn munmap(addr: usize, len: usize) -> isize {
     syscall(SYSCALL_MUNMAP, [addr, len, 0, 0, 0, 0])
 }
 
+fn wait_termsig(status: i32) -> i32 {
+    status & 0x7f
+}
+
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
     let shmid = shmget(PAGE_SIZE, IPC_CREAT | 0o600);
@@ -139,7 +143,8 @@ pub fn main() -> i32 {
 
     let mut status = 0i32;
     assert_eq!(waitpid(child, &mut status), child);
-    assert_ne!(status & 0x7f, 0);
+    let sig = wait_termsig(status);
+    assert!(sig == SIGBUS || sig == SIGSEGV);
 
     assert_eq!(shmdt(grown), 0);
 

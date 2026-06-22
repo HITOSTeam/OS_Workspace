@@ -1,5 +1,6 @@
 # build
 target/
+target-la/
 **/target/
 **/__pycache__/
 *.pyc
@@ -8,6 +9,7 @@ target/
 *.bin
 
 # logs / runtime output
+.tmp
 output*.md
 output*.log
 build_check*.log

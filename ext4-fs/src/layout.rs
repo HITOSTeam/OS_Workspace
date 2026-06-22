@@ -2,7 +2,7 @@
 //!
 //! Reference: https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout
 
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter, Result};

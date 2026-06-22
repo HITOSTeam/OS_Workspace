@@ -270,6 +270,7 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
     // Network libc-wrapper-sensitive error paths.
     // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    // &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[

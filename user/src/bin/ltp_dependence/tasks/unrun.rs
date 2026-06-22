@@ -333,14 +333,12 @@ pub const UNRUN_WATCHQUEUE_TASKS: [&str; 9] = [
 
 // IPv6 protocol library tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.ipv6_lib
-pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 6] = [
-    "asapi_01",
-    "asapi_02",
-    "asapi_03",
-    "getaddrinfo_01",
-    "in6_01",
-    "in6_02",
-];
+pub const UNRUN_NET_IPV6_LIB_TASKS: [&str; 5] =
+    ["asapi_02", "asapi_03", "getaddrinfo_01", "in6_01", "in6_02"];
+
+// The bundled musl getprotobyname() table does not resolve "hopopt", while
+// glibc reads the rootfs protocols database and reaches the kernel checks.
+pub const UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS: [&str; 1] = ["asapi_01"];
 
 // Input subsystem / evdev tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/input

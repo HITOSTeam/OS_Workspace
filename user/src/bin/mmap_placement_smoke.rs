@@ -23,19 +23,25 @@ const IPC_RMID: usize = 0;
 const PROT_READ: usize = 1;
 const PROT_WRITE: usize = 2;
 const MAP_PRIVATE: usize = 0x02;
+const MAP_FIXED: usize = 0x10;
 const MAP_FIXED_NOREPLACE: usize = 0x100000;
 const MAP_ANONYMOUS: usize = 0x20;
 const MREMAP_MAYMOVE: usize = 0x01;
+const EINVAL: isize = -22;
+
+fn mmap_anon_flags(addr: usize, len: usize, flags: usize) -> isize {
+    syscall(
+        SYSCALL_MMAP,
+        [addr, len, PROT_READ | PROT_WRITE, flags, usize::MAX, 0],
+    )
+}
 
 fn mmap_anon(addr: usize, len: usize, fixed_noreplace: bool) -> isize {
     let mut flags = MAP_PRIVATE | MAP_ANONYMOUS;
     if fixed_noreplace {
         flags |= MAP_FIXED_NOREPLACE;
     }
-    syscall(
-        SYSCALL_MMAP,
-        [addr, len, PROT_READ | PROT_WRITE, flags, usize::MAX, 0],
-    )
+    mmap_anon_flags(addr, len, flags)
 }
 
 fn munmap(addr: usize, len: usize) -> isize {
@@ -85,6 +91,23 @@ pub fn main() -> i32 {
     assert_ne!(hinted as usize, first);
     assert!((hinted as usize) < first);
     assert_eq!(munmap(hinted as usize, PAGE_SIZE), 0);
+
+    assert_eq!(
+        mmap_anon_flags(
+            first + 1,
+            PAGE_SIZE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
+        ),
+        EINVAL
+    );
+    assert_eq!(
+        mmap_anon_flags(
+            first + 1,
+            PAGE_SIZE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
+        ),
+        EINVAL
+    );
 
     let shmid = shmget(PAGE_SIZE);
     assert!(shmid > 0);
