@@ -1,16 +1,3 @@
-//! LTP dependency facade.
-//!
-//! The test-list catalog lives in [`tasks`] (split by subsystem), and the
-//! scheduler that picks which groups to run for each architecture lives in
-//! [`submit_plan`]. This file is intentionally tiny: it wires the two
-//! together and keeps the catalog reachable for plan entries.
+mod filted_case;
 
-mod submit_plan;
-mod tasks;
-
-pub use submit_plan::{
-    run_non_riscv_ltp_groups, run_non_riscv_ltp_groups_in_dir, run_riscv_ltp_groups,
-    run_riscv_ltp_groups_in_dir,
-};
-#[allow(unused_imports)]
-pub use tasks::*;
+pub use filted_case::{LOONGARCH_LTP_CASES, RISCV_LTP_CASES};

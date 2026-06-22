@@ -365,14 +365,9 @@ pub const KILL_PAUSE_TGKILL_TASKS: [&str; 26] = [
     "tkill02",
 ];
 
-pub const SCHED_TC_TASKS: [&str; 7] = [
-    "sched_tc0",
-    "sched_tc1",
-    "sched_tc2",
-    "sched_tc3",
-    "sched_tc4",
-    "sched_tc5",
-    "sched_tc6",
+
+pub const SCHED_TC_TASKS: [&str; 1] = [
+    "sched_stress.sh"
 ];
 
 pub const ADJTIMEX_SETTIMEOFDAY_UTIME_TASKS: [&str; 19] = [

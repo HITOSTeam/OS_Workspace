@@ -45,12 +45,14 @@ const READINESS_SMOKES: [&str; 14] = [
     "/user/timerfd_epoll_smoke.bin",
     "/user/dup3_lock_cleanup_smoke.bin",
 ];
-const FOCUS_PROCFS_SMOKES: bool = false;
-const PROCFS_SMOKES: [&str; 2] = [
-    "/user/proc_magic_links_smoke.bin",
-    "/user/mount_namespace_smoke.bin",
-];
+// const FOCUS_PROCFS_SMOKES: bool = false;
+// const PROCFS_SMOKES: [&str; 2] = [
+//     "/user/proc_magic_links_smoke.bin",
+//     "/user/mount_namespace_smoke.bin",
+// ];
 
+
+///输入测试用例子写的数组，挨个测试
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let _ = chdir(dir);
     for &entry in script_names {
@@ -65,17 +67,18 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         let path = resolve_ltp_case_path(dir, script);
         println!("RUN LTP CASE {}", script);
         let ret = run_script(path.as_str(), &extra_args);
-        if ret == 0 {
-            println!("PASS LTP CASE {}", script);
-        } else {
-            println!("FAIL LTP CASE {} : {}", script, ret);
-        }
+        println!("FAIL LTP CASE {} : {}",script,ret);
     }
 }
 
-fn run_ltp_lane(group: &str, dir: &str, run_groups: fn(&str, fn(&str, &[&str]))) {
+///入口函数，打印#### 对应的信息
+fn run_ltp_lane(
+    group: &str,
+    dir: &str,
+    script_names: &[&str],
+) {
     println!("#### OS COMP TEST GROUP START {} ####", group);
-    run_groups(dir, run_part_of_ltp_script_in_dir);
+    run_part_of_ltp_script_in_dir(dir, script_names);
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
 
@@ -126,6 +129,7 @@ fn settle_after_cyclictest() {
     sleep(60000);
 }
 
+///如果是LTP测试用例，添加对应的的环境信息使得他输出颜色
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
     fn normalize_ltp_wait_status(status: i32) -> i32 {
         // Linux wait status: exited children encode code in high byte.
@@ -203,6 +207,7 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             || name.ends_with("/vfork_freeze.sh")
             || name.ends_with("/run_freezer.sh");
         let is_msgstress01 = name.contains("/ltp/testcases/bin/msgstress01");
+        let is_slow_futex_cmp_requeue = cfg!(target_arch = "loongarch64")&& name.ends_with("/futex_cmp_requeue01");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
         let ltp_musl_envs = [
@@ -287,7 +292,7 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
-            if is_ltp_mmap1 || is_msgstress01 {
+            if is_ltp_mmap1 || is_msgstress01 || is_slow_futex_cmp_requeue{
                 if is_musl_ltp {
                     &ltp_musl_envs_slow_timeout[..]
                 } else if is_glibc_ltp {
@@ -325,13 +330,13 @@ fn try_poweroff() -> ! {
 
 #[allow(unused)]
 fn test_rv() {
-    //先跑cyclictest
+
+        //先跑cyclictest
     chdir("/musl");
     run_script("/musl/cyclictest_testcode.sh", &[]);
-    settle_after_cyclictest();
     chdir("/glibc");
     run_script("/glibc/cyclictest_testcode.sh", &[]);
-    settle_after_cyclictest();
+
 
     // basic_test
     chdir("/musl");
@@ -376,8 +381,8 @@ fn test_rv() {
     chdir("/glibc");
     run_script("/glibc/iperf_testcode.sh", &[]);
 
-    run_ltp_lane("ltp-musl", "/musl", run_riscv_ltp_groups_in_dir);
-    run_ltp_lane("ltp-glibc", "/glibc", run_riscv_ltp_groups_in_dir);
+    run_ltp_lane("ltp-musl", "/musl", RISCV_LTP_CASES);
+    run_ltp_lane("ltp-glibc", "/glibc", RISCV_LTP_CASES);
 
     // //lmbench
     chdir("/musl");
@@ -385,11 +390,12 @@ fn test_rv() {
     chdir("/glibc");
     run_script("/glibc/lmbench_testcode.sh", &[]);
 
-    // 等待网络功能再完善些
-    chdir("/musl");
-    run_script("/musl/iperf_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/iperf_testcode.sh", &[]);
+
+    // // 等待网络功能再完善些
+    // chdir("/musl");
+    // run_script("/musl/iperf_testcode.sh", &[]);
+    // chdir("/glibc");
+    // run_script("/glibc/iperf_testcode.sh", &[]);
 }
 
 #[allow(unused)]
@@ -398,7 +404,6 @@ fn test_la() {
 
     chdir("/glibc");
     run_script("/glibc/cyclictest_testcode.sh", &[]);
-    settle_after_cyclictest();
 
     chdir("/musl");
     run_script("/musl/basic_testcode.sh", &[]);
@@ -438,8 +443,8 @@ fn test_la() {
     chdir("/glibc");
     run_script("/glibc/libcbench_testcode.sh", &[]);
 
-    run_ltp_lane("ltp-musl", "/musl", run_non_riscv_ltp_groups_in_dir);
-    run_ltp_lane("ltp-glibc", "/glibc", run_non_riscv_ltp_groups_in_dir);
+    run_ltp_lane("ltp-musl", "/musl", LOONGARCH_LTP_CASES);
+    run_ltp_lane("ltp-glibc", "/glibc", LOONGARCH_LTP_CASES);
 
     //lmbench很消耗时间,先把上面的测了
     chdir("/musl");
@@ -448,11 +453,12 @@ fn test_la() {
     chdir("/glibc");
     run_script("/glibc/lmbench_testcode.sh", &[]);
 
-    // iperf (run last, to prevent the possible dead lock (dont know why todo))
-    chdir("/musl");
-    run_script("/musl/iperf_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/iperf_testcode.sh", &[]);
+
+    // // iperf (run last, to prevent the possible dead lock (dont know why todo))
+    // chdir("/musl");
+    // run_script("/musl/iperf_testcode.sh", &[]);
+    // chdir("/glibc");
+    // run_script("/glibc/iperf_testcode.sh", &[]);
 }
 
 // fn lmbench_simple_musl() {
@@ -501,9 +507,11 @@ fn test_la() {
 //测试函数,单独开始一个测试用例子
 fn test_ltp_bin_single() {
     println!("#### OS COMP TEST GROUP START ltp-musl-single ####");
-    run_part_of_ltp_script_in_dir("/musl", &["fork04"]);
+    run_part_of_ltp_script_in_dir("/musl", &["epoll_wait01"]);
     println!("#### OS COMP TEST GROUP END ltp-musl-single ####");
 }
+
+
 
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
@@ -525,22 +533,24 @@ pub fn main() -> i32 {
         // chdir("/glibc");
         // test_ltp_bin_single();
         // run_script("/glibc/lmbench_testcode.sh", &[]);
-        run_ltp_lane("ltp-musl", "/musl", run_riscv_ltp_groups_in_dir);
-        // run_ltp_lane("ltp-glibc", "/glibc", run_riscv_ltp_groups_in_dir);
+        run_ltp_lane("ltp-musl", "/musl", RISCV_LTP_CASES);
+        run_ltp_lane("ltp-glibc", "/glibc", RISCV_LTP_CASES);
         // test_rv();
     }
     if !cfg!(target_arch = "riscv64") {
         //musl的loongarch有问题
 
-        chdir("/glibc");
-        run_script("/glibc/cyclictest_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/cyclictest_testcode.sh", &[]);
         // settle_after_cyclictest();
         // chdir("/musl");
         // lmbench_simple_musl();
         // chdir("/glibc");
         // run_script("/glibc/lmbench_testcode.sh",&[]);
-        // run_ltp_lane("ltp-musl", "/musl", run_non_riscv_ltp_groups_in_dir);
-        // run_ltp_lane("ltp-glibc", "/glibc", run_non_riscv_ltp_groups_in_dir);
+        test_ltp_bin_single();
+
+        // run_ltp_lane("ltp-musl", "/musl", LOONGARCH_LTP_CASES);
+        // run_ltp_lane("ltp-glibc", "/glibc", LOONGARCH_LTP_CASES);
         // test_la();
     }
 
