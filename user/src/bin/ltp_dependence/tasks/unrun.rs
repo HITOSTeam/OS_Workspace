@@ -410,9 +410,11 @@ pub const UNRUN_VSOCK_TASKS: [&str; 1] = ["vsock01"];
 
 // Network traffic control / routing binary tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.ipv6 and net.tcp_cmds
-pub const UNRUN_NET_TC_ROUTE_TASKS: [&str; 6] = [
+pub const UNRUN_NET_TC_ROUTE_TASKS: [&str; 8] = [
     "nft02",
-    "route-change-netlink",
+    "route-change-netlink-dst.sh",
+    "route-change-netlink-gw.sh",
+    "route-change-netlink-if.sh",
     "route4-rmmod",
     "route6-rmmod",
     "tcindex01",
@@ -698,10 +700,78 @@ pub const UNRUN_MISC_KERNEL_SHELL_TASKS: [&str; 3] =
 
 // Network command-line tool tests (ping, ifconfig, routing, iptables, tc, etc.).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net.tcp_cmds and net.ipv6
-pub const UNRUN_NET_CMDS_TASKS: [&str; 29] = [
+pub const UNRUN_NET_CMDS_BASIC_TASKS: [&str; 8] = [
+    "netstat01.sh",
+    "ip_tests.sh",
+    "ping01.sh",
+    "ping02.sh",
+    "if-updown.sh",
+    "if-mtu-change.sh",
+    "if-addr-adddel.sh",
+    "if-route-adddel.sh",
+];
+
+// IPv4 interface stress tests with explicit iproute2/net-tools command variants.
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.interface
+pub const UNRUN_NET_STRESS_INTERFACE_V4_TASKS: [&str; 8] = [
+    "if-updown.sh -c ip",
+    "if-updown.sh -c ifconfig",
+    "if-addr-adddel.sh -c ip",
+    "if-addr-adddel.sh -c ifconfig",
+    "if-route-adddel.sh -c ip",
+    "if-route-adddel.sh -c route",
+    "if-mtu-change.sh -c ip",
+    "if-mtu-change.sh -c ifconfig",
+];
+
+// IPv4/IPv6 route table stress tests.
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.route
+pub const UNRUN_NET_STRESS_ROUTE_TASKS: [&str; 14] = [
+    "route-change-dst.sh",
+    "route-change-gw.sh",
+    "route-change-if.sh",
+    "route-change-netlink-dst.sh",
+    "route-change-netlink-gw.sh",
+    "route-change-netlink-if.sh",
+    "route-redirect.sh",
+    "route-change-dst.sh -6",
+    "route-change-gw.sh -6",
+    "route-change-if.sh -6",
+    "route-change-netlink-dst.sh -6",
+    "route-change-netlink-gw.sh -6",
+    "route-change-netlink-if.sh -6",
+    "route-redirect.sh -6",
+];
+
+// Representative TCP/IPsec stress probes: one plain TCP netstress baseline and
+// a small set of xfrm/VTI-gated cases.
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.ipsec_tcp
+pub const UNRUN_NET_IPSEC_TCP_SMOKE_TASKS: [&str; 4] = [
+    "tcp_ipsec.sh -s 100:1000:65535:R65535",
+    "tcp_ipsec.sh -p ah -m transport -s 100:1000:65535:R65535",
+    "tcp_ipsec.sh -p esp -m tunnel -s 100:1000:65535:R65535",
+    "tcp_ipsec_vti.sh -p esp -m tunnel -s 100:1000:65535:R65535",
+];
+
+// Representative UDP/ICMP IPsec stress probes: plain baselines plus a small
+// set of xfrm/VTI-gated cases.
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.ipsec_udp
+// and testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.ipsec_icmp
+pub const UNRUN_NET_IPSEC_UDP_ICMP_SMOKE_TASKS: [&str; 8] = [
+    "udp_ipsec.sh -s 100:1000:65507:R65507",
+    "udp_ipsec.sh -p ah -m transport -s 100:1000:65483:R65483",
+    "udp_ipsec.sh -p esp -m tunnel -s 100:1000:65450:R65450",
+    "udp_ipsec_vti.sh -p esp -m tunnel -s 100:1000:65450:R65450",
+    "icmp-uni-basic.sh -s 10:100:1000:10000:65507",
+    "icmp-uni-basic.sh -p ah -m transport -s 10:100:1000:10000:65483",
+    "icmp-uni-basic.sh -p esp -m tunnel -s 10:100:1000:10000:65450",
+    "icmp-uni-vti.sh -p esp -a sha512 -e des -m tunnel -S fffffffe -k 2 -s 10:100:1000:10000:65450",
+];
+
+pub const UNRUN_NET_CMDS_TASKS: [&str; 30] = [
     "arping01.sh",
-    "icmp-uni-basic.sh",
-    "icmp-uni-vti.sh",
+    "icmp-uni-basic.sh -s 10:100:1000:10000:65507",
+    "icmp-uni-vti.sh -s 10:100:1000:10000:65507",
     "if-addr-adddel.sh",
     "if-addr-addlarge.sh",
     "if-mtu-change.sh",
@@ -710,7 +780,8 @@ pub const UNRUN_NET_CMDS_TASKS: [&str; 29] = [
     "if-updown.sh",
     "if4-addr-change.sh",
     "ip_tests.sh",
-    "ipneigh01.sh",
+    "ipneigh01.sh -c arp",
+    "ipneigh01.sh -c ip",
     "iptables01.sh",
     "netns_breakns.sh",
     "netns_comm.sh",
@@ -745,6 +816,35 @@ pub const UNRUN_NET_MULTICAST_TASKS: [&str; 12] = [
     "mcast-queryfld04.sh",
     "mcast-queryfld05.sh",
     "mcast-queryfld06.sh",
+];
+
+// IPv4/IPv6 multicast stress tests.
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/net_stress.multicast
+pub const UNRUN_NET_STRESS_MULTICAST_TASKS: [&str; 24] = [
+    "mcast-group-single-socket.sh",
+    "mcast-group-multiple-socket.sh",
+    "mcast-group-same-group.sh",
+    "mcast-group-source-filter.sh",
+    "mcast-pktfld01.sh",
+    "mcast-pktfld02.sh",
+    "mcast-queryfld01.sh",
+    "mcast-queryfld02.sh",
+    "mcast-queryfld03.sh",
+    "mcast-queryfld04.sh",
+    "mcast-queryfld05.sh",
+    "mcast-queryfld06.sh",
+    "mcast-group-single-socket.sh -6",
+    "mcast-group-multiple-socket.sh -6",
+    "mcast-group-same-group.sh -6",
+    "mcast-group-source-filter.sh -6",
+    "mcast-pktfld01.sh -6",
+    "mcast-pktfld02.sh -6",
+    "mcast-queryfld01.sh -6",
+    "mcast-queryfld02.sh -6",
+    "mcast-queryfld03.sh -6",
+    "mcast-queryfld04.sh -6",
+    "mcast-queryfld05.sh -6",
+    "mcast-queryfld06.sh -6",
 ];
 
 // NFS tests.

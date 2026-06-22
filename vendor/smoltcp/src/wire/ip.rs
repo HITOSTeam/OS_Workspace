@@ -53,6 +53,7 @@ enum_with_unknown! {
         Igmp      = 0x02,
         Tcp       = 0x06,
         Udp       = 0x11,
+        UdpLite   = 0x88,
         Ipv6Route = 0x2b,
         Ipv6Frag  = 0x2c,
         IpSecEsp  = 0x32,
@@ -71,6 +72,7 @@ impl fmt::Display for Protocol {
             Protocol::Igmp => write!(f, "IGMP"),
             Protocol::Tcp => write!(f, "TCP"),
             Protocol::Udp => write!(f, "UDP"),
+            Protocol::UdpLite => write!(f, "UDP-Lite"),
             Protocol::Ipv6Route => write!(f, "IPv6-Route"),
             Protocol::Ipv6Frag => write!(f, "IPv6-Frag"),
             Protocol::IpSecEsp => write!(f, "IPsec-ESP"),
@@ -842,30 +844,35 @@ pub fn pretty_print_ip_payload<T: Into<Repr>>(
             indent.increase(f)?;
             Icmpv4Packet::<&[u8]>::pretty_print(&payload, f, indent)
         }
-        Protocol::Udp => {
+        Protocol::Udp | Protocol::UdpLite => {
             indent.increase(f)?;
-            match UdpPacket::<&[u8]>::new_checked(payload) {
+            let udp_packet = UdpPacket::<&[u8]>::new_unchecked(payload);
+            match udp_packet.check_len_for_protocol(repr.next_header()) {
                 Err(err) => write!(f, "{indent}({err})"),
-                Ok(udp_packet) => {
-                    match UdpRepr::parse(
-                        &udp_packet,
-                        &repr.src_addr(),
-                        &repr.dst_addr(),
-                        &checksum_caps,
-                    ) {
-                        Err(err) => write!(f, "{indent}{udp_packet} ({err})"),
-                        Ok(udp_repr) => {
-                            write!(
-                                f,
-                                "{}{} len={}",
-                                indent,
-                                udp_repr,
-                                udp_packet.payload().len()
-                            )?;
-                            let valid =
-                                udp_packet.verify_checksum(&repr.src_addr(), &repr.dst_addr());
-                            format_checksum(f, valid)
-                        }
+                Ok(()) => match UdpRepr::parse_with_protocol(
+                    &udp_packet,
+                    &repr.src_addr(),
+                    &repr.dst_addr(),
+                    &checksum_caps,
+                    repr.next_header(),
+                    0,
+                ) {
+                    Err(err) => write!(f, "{indent}{udp_packet} ({err})"),
+                    Ok(udp_repr) => {
+                        write!(
+                            f,
+                            "{}{} len={}",
+                            indent,
+                            udp_repr,
+                            udp_packet.payload_for_protocol(repr.next_header()).len()
+                        )?;
+                        let valid = udp_packet.verify_checksum_for_protocol(
+                            &repr.src_addr(),
+                            &repr.dst_addr(),
+                            repr.next_header(),
+                            0,
+                        );
+                        format_checksum(f, valid)
                     }
                 }
             }

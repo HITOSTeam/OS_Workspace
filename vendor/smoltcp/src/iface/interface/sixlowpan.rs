@@ -515,7 +515,7 @@ impl InterfaceInner {
                 );
             }
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpPayload::Udp(udp_repr, payload, _no_checksum) => {
+            IpPayload::Udp(udp_repr, payload, _no_checksum, _checksum_coverage) => {
                 let udp_repr = SixlowpanUdpNhcRepr(*udp_repr);
                 udp_repr.emit(
                     &mut SixlowpanUdpNhcPacket::new_unchecked(
@@ -628,7 +628,7 @@ impl InterfaceInner {
 
         match packet.payload {
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpPayload::Udp(udp_hdr, payload, _no_checksum) => {
+            IpPayload::Udp(udp_hdr, payload, _no_checksum, _checksum_coverage) => {
                 uncompressed_hdr_size += udp_hdr.header_len();
 
                 let udp_hdr = SixlowpanUdpNhcRepr(udp_hdr);

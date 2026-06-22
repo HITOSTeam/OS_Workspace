@@ -101,12 +101,13 @@ impl<'p> Packet<'p> {
             #[cfg(feature = "socket-raw")]
             IpPayload::Raw(raw_packet) => payload.copy_from_slice(raw_packet),
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpPayload::Udp(udp_repr, inner_payload, no_checksum) => {
+            IpPayload::Udp(udp_repr, inner_payload, no_checksum, checksum_coverage) => {
                 let mut checksum_caps;
                 let disable_udp_checksum = *no_checksum && {
                     #[cfg(feature = "proto-ipv4")]
                     {
                         matches!(_ip_repr, IpRepr::Ipv4(_))
+                            && _ip_repr.next_header() == IpProtocol::Udp
                     }
                     #[cfg(not(feature = "proto-ipv4"))]
                     {
@@ -120,13 +121,15 @@ impl<'p> Packet<'p> {
                 } else {
                     &caps.checksum
                 };
-                udp_repr.emit(
+                udp_repr.emit_with_protocol(
                     &mut UdpPacket::new_unchecked(payload),
                     &_ip_repr.src_addr(),
                     &_ip_repr.dst_addr(),
                     inner_payload.len(),
                     |buf| buf.copy_from_slice(inner_payload),
                     udp_checksum_caps,
+                    _ip_repr.next_header(),
+                    *checksum_coverage,
                 );
             }
             #[cfg(feature = "socket-tcp")]
@@ -203,7 +206,7 @@ pub(crate) enum IpPayload<'p> {
     #[cfg(feature = "socket-raw")]
     Raw(&'p [u8]),
     #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-    Udp(UdpRepr, &'p [u8], bool),
+    Udp(UdpRepr, &'p [u8], bool, usize),
     #[cfg(feature = "socket-tcp")]
     Tcp(TcpRepr<'p>),
     #[cfg(feature = "socket-dhcpv4")]

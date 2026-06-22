@@ -16,13 +16,9 @@ impl InterfaceInner {
         ip_payload: &'frame [u8],
     ) -> Option<Packet<'frame>> {
         let (src_addr, dst_addr) = (ip_repr.src_addr(), ip_repr.dst_addr());
-        let udp_packet = check!(UdpPacket::new_checked(ip_payload));
-        let udp_repr = check!(UdpRepr::parse(
-            &udp_packet,
-            &src_addr,
-            &dst_addr,
-            &self.caps.checksum
-        ));
+        let transport_protocol = ip_repr.next_header();
+        let udp_packet = UdpPacket::new_unchecked(ip_payload);
+        check!(udp_packet.check_len_for_protocol(transport_protocol));
 
         #[cfg(feature = "socket-udp")]
         {
@@ -31,8 +27,27 @@ impl InterfaceInner {
                 .items_mut()
                 .filter_map(|i| UdpSocket::downcast_mut(&mut i.socket))
             {
+                if udp_socket.transport_protocol() != transport_protocol {
+                    continue;
+                }
+                let Ok(udp_repr) = UdpRepr::parse_with_protocol(
+                    &udp_packet,
+                    &src_addr,
+                    &dst_addr,
+                    &self.caps.checksum,
+                    transport_protocol,
+                    udp_socket.udplite_recv_checksum_coverage(),
+                ) else {
+                    continue;
+                };
                 if udp_socket.accepts(self, &ip_repr, &udp_repr) {
-                    udp_socket.process(self, meta, &ip_repr, &udp_repr, udp_packet.payload());
+                    udp_socket.process(
+                        self,
+                        meta,
+                        &ip_repr,
+                        &udp_repr,
+                        udp_packet.payload_for_protocol(transport_protocol),
+                    );
                     is_received = true;
                 }
             }
@@ -46,6 +61,15 @@ impl InterfaceInner {
             .items_mut()
             .filter_map(|i| DnsSocket::downcast_mut(&mut i.socket))
         {
+            if transport_protocol != IpProtocol::Udp {
+                continue;
+            }
+            let udp_repr = check!(UdpRepr::parse(
+                &udp_packet,
+                &src_addr,
+                &dst_addr,
+                &self.caps.checksum
+            ));
             if dns_socket.accepts(&ip_repr, &udp_repr) {
                 dns_socket.process(self, &ip_repr, &udp_repr, udp_packet.payload());
                 return None;

@@ -283,7 +283,7 @@ impl InterfaceInner {
             IpProtocol::Icmpv6 => self.process_icmpv6(sockets, ipv6_repr, ip_payload),
 
             #[cfg(any(feature = "socket-udp", feature = "socket-dns"))]
-            IpProtocol::Udp => self.process_udp(
+            IpProtocol::Udp | IpProtocol::UdpLite => self.process_udp(
                 sockets,
                 meta,
                 handled_by_raw_socket,

@@ -649,11 +649,14 @@ impl Interface {
                 #[cfg(feature = "socket-udp")]
                 Socket::Udp(socket) => socket.dispatch(
                     &mut self.inner,
-                    |inner, meta, (ip, udp, payload, no_checksum)| {
+                    |inner, meta, (ip, udp, payload, no_checksum, checksum_coverage)| {
                         respond(
                             inner,
                             meta,
-                            Packet::new(ip, IpPayload::Udp(udp, payload, no_checksum)),
+                            Packet::new(
+                                ip,
+                                IpPayload::Udp(udp, payload, no_checksum, checksum_coverage),
+                            ),
                         )
                     },
                 ),
@@ -676,7 +679,7 @@ impl Interface {
                     respond(
                         inner,
                         PacketMeta::default(),
-                        Packet::new(ip, IpPayload::Udp(udp, dns, false)),
+                        Packet::new(ip, IpPayload::Udp(udp, dns, false, 0)),
                     )
                 }),
             };

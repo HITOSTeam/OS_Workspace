@@ -14,8 +14,11 @@ const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
 const LTP_ENV_DEV_FS_TYPE: &[u8] = b"LTP_DEV_FS_TYPE=tmpfs\0";
 const LTP_ENV_SINGLE_FS_TYPE: &[u8] = b"LTP_SINGLE_FS_TYPE=tmpfs\0";
 const LTP_ENV_KERNEL: &[u8] = b"KERNEL=/config.gz\0";
-const LTP_ENV_PATH: &[u8] =
-    b"PATH=/extra/bin:/user:/:/bin:/usr/bin:/musl:/glibc:/musl/ltp/testcases/bin:/glibc/ltp/testcases/bin\0";
+const LTP_ENV_LDD: &[u8] = b"LDD=/extra/bin/ldd\0";
+const LTP_ENV_PATH_MUSL: &[u8] =
+    b"PATH=/extra/bin:/user:/:/bin:/usr/bin:/musl/ltp/testcases/bin:/musl:/glibc:/glibc/ltp/testcases/bin\0";
+const LTP_ENV_PATH_GLIBC: &[u8] =
+    b"PATH=/extra/bin:/user:/:/bin:/usr/bin:/glibc/ltp/testcases/bin:/glibc:/musl:/musl/ltp/testcases/bin\0";
 const LTP_ENV_ROOT_MUSL: &[u8] = b"LTPROOT=/musl/ltp\0";
 const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // Case-specific LTP env knobs are intentionally disabled for now. Re-enable
@@ -24,7 +27,7 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // const LTP_ENV_CGROUPS_ROOT_GLIBC: &[u8] = b"CGROUPS_TESTROOT=/glibc/ltp/testcases/bin\0";
 // Optional adapter for the bundled musl sched_* libc wrappers:
 // const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
-// const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
+const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
@@ -188,6 +191,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         let is_ltp_case = name.contains("/ltp/testcases/");
         let is_musl_ltp = name.contains("/musl/ltp/testcases/");
         let is_glibc_ltp = name.contains("/glibc/ltp/testcases/");
+        let is_slow_net_virt_case =
+            name.ends_with("/wireguard01.sh") || name.ends_with("/wireguard02.sh");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
         let ltp_musl_envs = [
@@ -195,7 +200,19 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_DEV_FS_TYPE.as_ptr(),
             LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
             LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_PATH_MUSL.as_ptr(),
+            LTP_ENV_ROOT_MUSL.as_ptr(),
+            core::ptr::null(),
+        ];
+        let ltp_musl_slow_envs = [
+            LTP_ENV_DEV.as_ptr(),
+            LTP_ENV_DEV_FS_TYPE.as_ptr(),
+            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
+            LTP_ENV_KERNEL.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_TIMEOUT_MUL_SLOW.as_ptr(),
+            LTP_ENV_PATH_MUSL.as_ptr(),
             LTP_ENV_ROOT_MUSL.as_ptr(),
             core::ptr::null(),
         ];
@@ -204,20 +221,39 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_DEV_FS_TYPE.as_ptr(),
             LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
             LTP_ENV_KERNEL.as_ptr(),
-            LTP_ENV_PATH.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_PATH_GLIBC.as_ptr(),
+            LTP_ENV_ROOT_GLIBC.as_ptr(),
+            core::ptr::null(),
+        ];
+        let ltp_glibc_slow_envs = [
+            LTP_ENV_DEV.as_ptr(),
+            LTP_ENV_DEV_FS_TYPE.as_ptr(),
+            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
+            LTP_ENV_KERNEL.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_TIMEOUT_MUL_SLOW.as_ptr(),
+            LTP_ENV_PATH_GLIBC.as_ptr(),
             LTP_ENV_ROOT_GLIBC.as_ptr(),
             core::ptr::null(),
         ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
-            // Disabled case-specific env selection:
-            // - mmap1/msgstress01 used LTP_TIMEOUT_MUL=4
-            // - freezer controller scripts used CGROUPS_TESTROOT
-            // Restore these only when enabling the matching focused batches.
+            // Keep case-specific knobs narrow. WireGuard's netstress matrix is
+            // CPU-heavy under single-core QEMU, so use LTP's timeout multiplier
+            // only for that virtual-network batch.
             if is_musl_ltp {
-                &ltp_musl_envs[..]
+                if is_slow_net_virt_case {
+                    &ltp_musl_slow_envs[..]
+                } else {
+                    &ltp_musl_envs[..]
+                }
             } else if is_glibc_ltp {
-                &ltp_glibc_envs[..]
+                if is_slow_net_virt_case {
+                    &ltp_glibc_slow_envs[..]
+                } else {
+                    &ltp_glibc_envs[..]
+                }
             } else {
                 &empty_envs[..]
             }
