@@ -1,5 +1,15 @@
 # ext4-fs-packer
 
+## 新增的文件说明
+
+### 1. extra/libcyclictest_sched_loongarch_fix.c
+
+- musl 的loongarch库里面对schedule相关的几个函数都不是走系统调用的，而是直接返回的`ENOSYS`
+
+- 查看对应的系统调用
+
+
+
 This tool creates an ext4 filesystem image with a structured layout:
 
 **ATTENTION**:This lib is just a tool for the RUSTOS competion. I dont maintain the git healthily.

@@ -12,7 +12,8 @@ mod lmbench_dependence;
 #[allow(unused_imports)]
 use lmbench_dependence::*;
 use user::syscall::{
-    self, chdir, close, execve, exit, fork, open, read, sleep, sync, waitpid, RDONLY,
+    self, chdir, close, execve, exit, fork, kill, open, read, sleep, sync, waitpid, RDONLY,
+    SIGINT,
 };
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
@@ -30,6 +31,15 @@ const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const GLIBC_ENV_LANG: &[u8] = b"LANG=C.UTF-8\0";
 const GLIBC_ENV_LC_ALL: &[u8] = b"LC_ALL=C.UTF-8\0";
 const GLIBC_ENV_LOCPATH: &[u8] = b"LOCPATH=/usr/lib/locale\0";
+
+//给loongarch musl 版本的库里面的四个和调度系统调用有关的函数补充正确的实现，利用execv调用的时候preload的库里面的符号优先级高于程序自己的库的特性
+//源码在 ext4-fs-packer/extra/libcyclictest_sched_loongarch_fix.c
+// sched_getparam
+// sched_getscheduler
+// sched_setparam
+// sched_setscheduler
+const LOONGARCH_MUSL_CYCLICTEST_PRELOAD: &[u8] =
+    b"LD_PRELOAD=/extra/libcyclictest_sched_loongarch_fix.so\0";
 const FOCUS_READINESS_SMOKES: bool = false;
 
 const READINESS_SMOKES: [&str; 14] = [
@@ -266,10 +276,6 @@ fn run_named_cases(group: &str, cases: &[&str]) {
     println!("#### OS COMP TEST GROUP END {} ####", group);
 }
 
-fn settle_after_cyclictest() {
-    sleep(60000);
-}
-
 ///如果是LTP测试用例，添加对应的的环境信息使得他输出颜色
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
     fn normalize_ltp_wait_status(status: i32) -> i32 {
@@ -431,6 +437,12 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             GLIBC_ENV_LOCPATH.as_ptr(),
             core::ptr::null(),
         ];
+
+        //在跑loongarch musl 部分的cyclist test的时候修复根镜像里面musl 和调度有关的系统调用不完善的问题
+        let loongarch_musl_cyclictest_envs = [
+            LOONGARCH_MUSL_CYCLICTEST_PRELOAD.as_ptr(),
+            core::ptr::null(),
+        ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
             if is_ltp_mmap1 || is_msgstress01 || is_slow_futex_cmp_requeue{
@@ -454,6 +466,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             }
         } else if is_glibc_case {
             &glibc_envs[..]
+        } else if cfg!(target_arch = "loongarch64") && name == "/musl/cyclictest" {
+            &loongarch_musl_cyclictest_envs[..]
         } else {
             &empty_envs[..]
         };
@@ -472,12 +486,7 @@ fn try_poweroff() -> ! {
 #[allow(unused)]
 fn test_rv() {
 
-        //先跑cyclictest
-    chdir("/musl");
-    run_script("/musl/cyclictest_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/cyclictest_testcode.sh", &[]);
-
+    //先跑cyclictest
 
     // basic_test
     chdir("/musl");
@@ -542,10 +551,6 @@ fn test_rv() {
 #[allow(unused)]
 fn test_la() {
     // basic_test
-
-    chdir("/glibc");
-    run_script("/glibc/cyclictest_testcode.sh", &[]);
-
     chdir("/musl");
     run_script("/musl/basic_testcode.sh", &[]);
 
@@ -602,9 +607,105 @@ fn test_la() {
     // run_script("/glibc/iperf_testcode.sh", &[]);
 }
 
+fn spawn_program(name: &str, extra_args: &[&str]) -> isize {
+    let pid = fork();
+    if pid != 0 {
+        return pid;
+    }
+
+    let mut path = String::from(name);
+    path.push('\0');
+    let mut owned_args = Vec::with_capacity(extra_args.len());
+    for arg in extra_args {
+        let mut owned = String::from(*arg);
+        owned.push('\0');
+        owned_args.push(owned);
+    }
+    let mut args = Vec::with_capacity(owned_args.len() + 2);
+    args.push(path.as_ptr());
+    for arg in &owned_args {
+        args.push(arg.as_ptr());
+    }
+    args.push(core::ptr::null());
+
+    let glibc_envs = [
+        LTP_ENV_PATH.as_ptr(),
+        GLIBC_ENV_LANG.as_ptr(),
+        GLIBC_ENV_LC_ALL.as_ptr(),
+        GLIBC_ENV_LOCPATH.as_ptr(),
+        core::ptr::null(),
+    ];
+    let empty_envs = [core::ptr::null()];
+    let envs: &[*const u8] = if name.starts_with("/glibc/") {
+        &glibc_envs
+    } else {
+        &empty_envs
+    };
+    execve(path.as_str(), &args, envs);
+    exit(-1);
+}
+
+///手搓的模仿终端里面的函数
+fn run_cyclictest_case(binary: &str, name: &str, args: &[&str]) {
+    println!("====== cyclictest {} begin ======", name);
+    let status = run_script(binary, args);
+    let result = if status == 0 { "success" } else { "fail" };
+    println!("====== cyclictest {} end: {} ======", name, result);
+}
+
+fn run_cyclist_suite(dir: &str, libc: &str) {
+    println!("#### OS COMP TEST GROUP START cyclictest-{} ####", libc);
+    let _ = chdir(dir);
+
+    let mut cyclictest = String::from(dir);
+    cyclictest.push_str("/cyclictest");
+    let mut hackbench = String::from(dir);
+    hackbench.push_str("/hackbench");
+
+    run_cyclictest_case(
+        cyclictest.as_str(),
+        "NO_STRESS_P1",
+        &["-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q"],
+    );
+    run_cyclictest_case(
+        cyclictest.as_str(),
+        "NO_STRESS_P8",
+        &["-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q"],
+    );
+
+    println!("====== start hackbench ======");
+    let hackbench_pid = spawn_program(hackbench.as_str(), &["-l", "100000000"]);
+    if hackbench_pid < 0 {
+        println!("====== start hackbench failed: {} ======", hackbench_pid);
+        println!("#### OS COMP TEST GROUP END cyclictest-{} ####", libc);
+        return;
+    }
+    //睡眠的时间修正到10s,使得hackbench可以正常创建400个stress task
+    //这样可以正确的测试stress 在进行IO的时候会不会影响RT的抢断
+    sleep(10_000);
+
+    run_cyclictest_case(
+        cyclictest.as_str(),
+        "STRESS_P1",
+        &["-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q"],
+    );
+    run_cyclictest_case(
+        cyclictest.as_str(),
+        "STRESS_P8",
+        &["-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q"],
+    );
+
+    let kill_status = kill(hackbench_pid as usize, SIGINT);
+    let mut wait_status = 0;
+    let _ = waitpid(hackbench_pid, &mut wait_status);
+    let result = if kill_status == 0 { "success" } else { "fail" };
+    println!("====== kill hackbench: {} ======", result);
+    println!("#### OS COMP TEST GROUP END cyclictest-{} ####", libc);
+}
 
 
-//测试函数,单独开始一个测试用例子
+//测试函数,单独开始一个LTP测试用例，查看是什么问题
+#[allow(unused)]
 fn test_ltp_bin_single() {
     println!("#### OS COMP TEST GROUP START ltp-musl-single ####");
     run_part_of_ltp_script_in_dir("/musl", &["epoll_wait01"]);
@@ -623,29 +724,40 @@ pub fn main() -> i32 {
         // if FOCUS_PROCFS_SMOKES {
         //     run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
         // }
+        // run_cyclist_suite("/musl", "musl");
+        // run_cyclist_suite("/glibc", "glibc");
+        chdir("/musl");
+        run_script("/musl/iperf_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/iperf_testcode.sh", &[]);
+        // // iozone
         // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh", &[]);
-        // settle_after_cyclictest();
+        // run_script("/musl/iozone_testcode.sh", &[]);
         // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh", &[]);
-        // settle_after_cyclictest();
-        // lmbench_simple_musl();
-        // test_ltp_bin_single();
-        lmbench_simple_glibc();
-        run_ltp_lane("ltp-musl", "/musl", RISCV_LTP_CASES);
-        run_ltp_lane("ltp-glibc", "/glibc", RISCV_LTP_CASES);
+        // run_script("/glibc/iozone_testcode.sh", &[]);
+
+        // lmbench_simple_glibc();
+        // run_ltp_lane("ltp-musl", "/musl", RISCV_LTP_CASES);
+        // run_ltp_lane("ltp-glibc", "/glibc", RISCV_LTP_CASES);
         // test_rv();
     }
     if !cfg!(target_arch = "riscv64") {
         //musl的loongarch有问题
 
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh", &[]);
-        // settle_after_cyclictest();
+        // run_cyclist_suite("/glibc", "glibc");
+        // run_cyclist_suite("/musl", "musl");
+        chdir("/musl");
+        run_script("/musl/iperf_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/iperf_testcode.sh", &[]);
+
+
+        // // iozone
         // chdir("/musl");
-        // lmbench_simple_musl();
-        // lmbench_simple_glibc();
-        test_ltp_bin_single();
+        // run_script("/musl/iozone_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/iozone_testcode.sh", &[]);
+        // test_ltp_bin_single();
 
         // run_ltp_lane("ltp-musl", "/musl", LOONGARCH_LTP_CASES);
         // run_ltp_lane("ltp-glibc", "/glibc", LOONGARCH_LTP_CASES);

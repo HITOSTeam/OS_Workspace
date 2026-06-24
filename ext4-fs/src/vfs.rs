@@ -552,6 +552,66 @@ impl Inode {
         }
     }
 
+    /// Read page-aligned regular-file data without populating the ext4
+    /// metadata block cache. Physically contiguous extent runs are submitted
+    /// as one multi-block device request.
+    pub fn read_data_pages(&self, offset: usize, dst: &mut [u8]) -> usize {
+        if offset % BLOCK_SZ != 0
+            || dst.len() % BLOCK_SZ != 0
+            || self.block_size != BLOCK_SZ
+            || !self.is_file()
+        {
+            return self.read_at(offset, dst);
+        }
+        let file_size = self.size() as usize;
+        if offset >= file_size || dst.is_empty() {
+            return 0;
+        }
+        let valid = dst.len().min(file_size - offset);
+        dst.fill(0);
+        let uses_extents = self.read_disk_inode(|inode| inode.uses_extents());
+        if !uses_extents {
+            return self.read_at(offset, &mut dst[..valid]);
+        }
+        let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
+            cached
+        } else {
+            let inode_data = self.read_disk_inode(|inode| {
+                let mut data = [0u32; 15];
+                data.copy_from_slice(&inode.i_block);
+                data
+            });
+            let parsed = self.parse_extent_tree(&inode_data, BLOCK_SZ);
+            extents_cache_put(self.inode_num, &self.block_device, parsed)
+        };
+        let first_lblock = offset / BLOCK_SZ;
+        let block_count = valid.saturating_add(BLOCK_SZ - 1) / BLOCK_SZ;
+        let mut relative = 0usize;
+        while relative < block_count {
+            let lblock = (first_lblock + relative) as u32;
+            let Some(first_pblock) = Self::map_logical_block(&extents, lblock) else {
+                relative += 1;
+                continue;
+            };
+            let mut run = 1usize;
+            while relative + run < block_count {
+                let next_lblock = (first_lblock + relative + run) as u32;
+                if Self::map_logical_block(&extents, next_lblock)
+                    != Some(first_pblock + run as u64)
+                {
+                    break;
+                }
+                run += 1;
+            }
+            let start = relative * BLOCK_SZ;
+            let end = start + run * BLOCK_SZ;
+            self.block_device
+                .read_blocks(first_pblock as usize, &mut dst[start..end]);
+            relative += run;
+        }
+        valid
+    }
+
     /// Read data using extent tree
     fn read_extents(&self, offset: usize, buf: &mut [u8], block_size: usize) -> usize {
         let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
@@ -1487,6 +1547,60 @@ impl Inode {
         }
 
         Ok(written)
+    }
+
+    /// Write full data pages directly by contiguous extent run. Allocation and
+    /// inode metadata remain in the ext4 metadata cache; regular-file payload
+    /// pages are owned by the kernel page cache.
+    pub fn write_data_pages(&self, offset: usize, src: &[u8]) -> Result<usize> {
+        if offset % BLOCK_SZ != 0
+            || src.len() % BLOCK_SZ != 0
+            || self.block_size != BLOCK_SZ
+            || !self.is_file()
+        {
+            return self.write_at(offset, src);
+        }
+        if src.is_empty() {
+            return Ok(0);
+        }
+        let old_size = self.size() as usize;
+        let end = offset.saturating_add(src.len());
+        let first_lblock = (offset / BLOCK_SZ) as u32;
+        let end_lblock = (end / BLOCK_SZ) as u32;
+        let extents = self.ensure_write_blocks(first_lblock, end_lblock)?;
+        let mut relative = 0usize;
+        let block_count = src.len() / BLOCK_SZ;
+        while relative < block_count {
+            let lblock = first_lblock + relative as u32;
+            let first_pblock =
+                Self::map_logical_block(&extents, lblock).ok_or(Ext4Error::Unsupported)?;
+            let mut run = 1usize;
+            while relative + run < block_count {
+                if Self::map_logical_block(&extents, lblock + run as u32)
+                    != Some(first_pblock + run as u64)
+                {
+                    break;
+                }
+                run += 1;
+            }
+            let start = relative * BLOCK_SZ;
+            let finish = start + run * BLOCK_SZ;
+            self.block_device
+                .write_blocks(first_pblock as usize, &src[start..finish]);
+            relative += run;
+        }
+        if end > old_size {
+            self.modify_disk_inode(|inode| {
+                inode.i_size_lo = (end as u64 & 0xFFFF_FFFF) as u32;
+                inode.i_size_high = ((end as u64 >> 32) & 0xFFFF_FFFF) as u32;
+            });
+        }
+        Ok(src.len())
+    }
+
+    /// Persist cached inode metadata and any legacy cached payload blocks.
+    pub fn sync_inode_data(&self) {
+        super::block_cache::block_cache_sync_all();
     }
 
     /// Truncate a regular file to size 0 (frees all data blocks).
