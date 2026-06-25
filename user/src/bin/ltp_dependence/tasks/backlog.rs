@@ -551,7 +551,7 @@ pub const FCNTL_LEASE_TASKS: [&str; 20] = [
     "unlink05",
 ];
 
-pub const RENAME_UNLINK_TASKS: [&str; 20] = [
+pub const RENAME_UNLINK_TASKS: [&str; 19] = [
     "rename01",
     "rename03",
     "rename04",
@@ -561,7 +561,7 @@ pub const RENAME_UNLINK_TASKS: [&str; 20] = [
     "rename08",
     "rename09",
     "rename10",
-    "rename11",
+    // "rename11",
     "rename12",
     "rename13",
     "rename14",

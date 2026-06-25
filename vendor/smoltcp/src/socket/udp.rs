@@ -426,6 +426,22 @@ impl<'a> Socket<'a> {
         Ok(())
     }
 
+    /// Enqueue a datagram that was delivered by an in-kernel loopback fast
+    /// path. This preserves the ordinary receive ring capacity/drop behavior
+    /// while avoiding serialization into an IP packet that the same stack
+    /// would immediately parse again.
+    pub fn enqueue_loopback(&mut self, data: &[u8], metadata: UdpMetadata) -> bool {
+        match self.rx_buffer.enqueue(data.len(), metadata) {
+            Ok(buf) => {
+                buf.copy_from_slice(data);
+                #[cfg(feature = "async")]
+                self.rx_waker.wake();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Dequeue a packet received from a remote endpoint, and return the endpoint as well
     /// as a pointer to the payload.
     ///

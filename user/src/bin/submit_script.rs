@@ -5,15 +5,18 @@ extern crate alloc;
 #[macro_use]
 extern crate user;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 mod ltp_dependence;
 use ltp_dependence::*;
 mod lmbench_dependence;
 #[allow(unused_imports)]
 use lmbench_dependence::*;
 use user::syscall::{
-    self, chdir, close, execve, exit, fork, kill, open, read, sleep, sync, waitpid, RDONLY,
-    SIGINT,
+    self, chdir, close, execve, exit, fork, getdents64, getpid, kill, open, read, sleep, sync,
+    waitpid, RDONLY, SIGINT, SIGKILL, SIGTERM,
 };
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
@@ -98,14 +101,107 @@ fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
 }
 
-fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
-    if needle.is_empty() {
-        return 0;
+const SUMMARY_TAIL_CAP: usize = b"Summary:".len() - 1;
+
+struct OutputSummary {
+    has_summary: bool,
+    passed: usize,
+    failed: usize,
+    broken: usize,
+    skipped: usize,
+    warnings: usize,
+    tail: [u8; SUMMARY_TAIL_CAP],
+    tail_len: usize,
+}
+
+impl OutputSummary {
+    fn new() -> Self {
+        Self {
+            has_summary: false,
+            passed: 0,
+            failed: 0,
+            broken: 0,
+            skipped: 0,
+            warnings: 0,
+            tail: [0; SUMMARY_TAIL_CAP],
+            tail_len: 0,
+        }
     }
-    haystack
-        .windows(needle.len())
-        .filter(|window| *window == needle)
-        .count()
+
+    fn observe(&mut self, data: &[u8]) {
+        self.has_summary |= self.contains_stream(data, b"Summary:");
+        self.passed += self.count_stream(data, b"TPASS");
+        self.failed += self.count_stream(data, b"TFAIL");
+        self.broken += self.count_stream(data, b"TBROK");
+        self.skipped += self.count_stream(data, b"TCONF");
+        self.warnings += self.count_stream(data, b"TWARN");
+        self.update_tail(data);
+    }
+
+    fn contains_stream(&self, data: &[u8], needle: &[u8]) -> bool {
+        self.count_in_tail_and_data(data, needle, true) != 0
+    }
+
+    fn count_stream(&self, data: &[u8], needle: &[u8]) -> usize {
+        self.count_in_tail_and_data(data, needle, false)
+    }
+
+    fn count_in_tail_and_data(&self, data: &[u8], needle: &[u8], stop_after_first: bool) -> usize {
+        if needle.is_empty() || data.is_empty() {
+            return 0;
+        }
+        let total_len = self.tail_len + data.len();
+        if total_len < needle.len() {
+            return 0;
+        }
+        let mut count = 0usize;
+        for start in 0..=total_len - needle.len() {
+            if start + needle.len() <= self.tail_len {
+                continue;
+            }
+            let mut matched = true;
+            for (offset, &expected) in needle.iter().enumerate() {
+                let idx = start + offset;
+                let byte = if idx < self.tail_len {
+                    self.tail[idx]
+                } else {
+                    data[idx - self.tail_len]
+                };
+                if byte != expected {
+                    matched = false;
+                    break;
+                }
+            }
+            if matched {
+                count += 1;
+                if stop_after_first {
+                    break;
+                }
+            }
+        }
+        count
+    }
+
+    fn update_tail(&mut self, data: &[u8]) {
+        let keep = SUMMARY_TAIL_CAP.min(self.tail_len + data.len());
+        if keep == 0 {
+            self.tail_len = 0;
+            return;
+        }
+        let mut next = [0u8; SUMMARY_TAIL_CAP];
+        let old_keep = self.tail_len.min(keep.saturating_sub(data.len().min(keep)));
+        let data_keep = keep - old_keep;
+        if old_keep > 0 {
+            let old_start = self.tail_len - old_keep;
+            next[..old_keep].copy_from_slice(&self.tail[old_start..self.tail_len]);
+        }
+        if data_keep > 0 {
+            let data_start = data.len() - data_keep;
+            next[old_keep..keep].copy_from_slice(&data[data_start..]);
+        }
+        self.tail = next;
+        self.tail_len = keep;
+    }
 }
 
 fn write_all(fd: usize, mut data: &[u8]) {
@@ -118,18 +214,41 @@ fn write_all(fd: usize, mut data: &[u8]) {
     }
 }
 
+fn read_file(path: &str) -> Option<Vec<u8>> {
+    let fd = open(path, RDONLY);
+    if fd < 0 {
+        return None;
+    }
+    let fd = fd as usize;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        let n = read(fd, &mut buf);
+        if n < 0 {
+            let _ = close(fd);
+            return None;
+        }
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n as usize]);
+    }
+    let _ = close(fd);
+    Some(out)
+}
+
 /// 打包测试LTP,使得LTP无论使用什么测试框架都会输出summary
-fn run_script_with_captured_output(name: &str, extra_args: &[&str]) -> (i32, Vec<u8>, bool) {
+fn run_script_with_captured_output(name: &str, extra_args: &[&str]) -> (i32, OutputSummary, bool) {
     let mut pipe_fds = [0usize; 2];
     if syscall::pipe(&mut pipe_fds) < 0 {
-        return (run_script(name, extra_args), Vec::new(), false);
+        return (run_script(name, extra_args), OutputSummary::new(), false);
     }
 
     let capture_pid = fork();
     if capture_pid < 0 {
         let _ = close(pipe_fds[0]);
         let _ = close(pipe_fds[1]);
-        return (run_script(name, extra_args), Vec::new(), false);
+        return (run_script(name, extra_args), OutputSummary::new(), false);
     }
     if capture_pid == 0 {
         let _ = close(pipe_fds[0]);
@@ -141,14 +260,16 @@ fn run_script_with_captured_output(name: &str, extra_args: &[&str]) -> (i32, Vec
     }
 
     let _ = close(pipe_fds[1]);
-    let mut output = Vec::new();
+    let mut summary = OutputSummary::new();
     let mut chunk = [0u8; 4096];
     loop {
         let size = read(pipe_fds[0], &mut chunk);
         if size <= 0 {
             break;
         }
-        output.extend_from_slice(&chunk[..size as usize]);
+        let data = &chunk[..size as usize];
+        write_all(1, data);
+        summary.observe(data);
     }
     let _ = close(pipe_fds[0]);
 
@@ -159,21 +280,21 @@ fn run_script_with_captured_output(name: &str, extra_args: &[&str]) -> (i32, Vec
     } else {
         wait_status
     };
-    (ret, output, true)
+    (ret, summary, true)
 }
 
 ///输出summary的函数，有些LTP测试用例子输出TPASS,但是不输出summary,导致评测机不识别
-fn print_summary_if_missing(output: &[u8]) {
-    if bytes_contain(output, b"Summary:") {
+fn print_summary_if_missing(summary: &OutputSummary) {
+    if summary.has_summary {
         return;
     }
     println!("");
     println!("Summary:");
-    println!("passed   {}", count_bytes(output, b"TPASS"));
-    println!("failed   {}", count_bytes(output, b"TFAIL"));
-    println!("broken   {}", count_bytes(output, b"TBROK"));
-    println!("skipped  {}", count_bytes(output, b"TCONF"));
-    println!("warnings {}", count_bytes(output, b"TWARN"));
+    println!("passed   {}", summary.passed);
+    println!("failed   {}", summary.failed);
+    println!("broken   {}", summary.broken);
+    println!("skipped  {}", summary.skipped);
+    println!("warnings {}", summary.warnings);
 }
 
 
@@ -181,7 +302,9 @@ fn print_summary_if_missing(output: &[u8]) {
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let _ = chdir(dir);
     for &entry in script_names {
+        //按照空格分开
         let mut parts = entry.split_whitespace();
+        //第一个参数是脚本的路径
         let Some(script) = parts.next() else {
             continue;
         };
@@ -193,10 +316,9 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         let start_ms = monotonic_time_ms();
         println!("RUN LTP CASE {}", script);
         println!("LTP CASE START {} TIME_MS {}", script, start_ms);
-        let (ret, output, captured) = run_script_with_captured_output(path.as_str(), &extra_args);
+        let (ret, summary, captured) = run_script_with_captured_output(path.as_str(), &extra_args);
         if captured {
-            write_all(1, output.as_slice());
-            print_summary_if_missing(output.as_slice());
+            print_summary_if_missing(&summary);
         }
         let end_ms = monotonic_time_ms();
         println!(
@@ -205,7 +327,11 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
             end_ms,
             end_ms.saturating_sub(start_ms)
         );
-        println!("FAIL LTP CASE {} : {}",script,ret);
+        if ret == 0 {
+            println!("PASS LTP CASE {}", script);
+        } else {
+            println!("FAIL LTP CASE {} : {}", script, ret);
+        }
     }
 }
 
@@ -703,6 +829,274 @@ fn run_cyclist_suite(dir: &str, libc: &str) {
     println!("#### OS COMP TEST GROUP END cyclictest-{} ####", libc);
 }
 
+/// 模仿脚本里面的函数启动iperf测试
+fn run_iperf_case(binary: &str, name: &str, args: &[&str]) {
+    println!("====== iperf {} begin ======", name);
+    let status = run_script(binary, args);
+    let result = if status == 0 { "success" } else { "fail" };
+    println!("====== iperf {} end: {} ======", name, result);
+    println!("");
+}
+///这个参数的含义是不要等待,如果没有就返回当前用户程序
+const WAITPID_WNOHANG: usize = 0x00000001;
+
+fn waitpid_nohang(pid: isize, exit_code: &mut i32) -> isize {
+    const SYSCALL_WAITPID: usize = 260;
+    syscall::syscall(
+        SYSCALL_WAITPID,
+        [
+            pid as usize,
+            exit_code as *mut i32 as usize,
+            WAITPID_WNOHANG,
+            0,
+            0,
+            0,
+        ],
+    )
+}
+
+// 回收当前的所有子task
+fn reap_any_children_nohang() -> usize {
+    let mut reaped = 0usize;
+    let mut wait_status = 0;
+    loop {
+        let result = waitpid_nohang(-1, &mut wait_status);
+        if result <= 0 {
+            break;
+        }
+        reaped += 1;
+    }
+    reaped
+}
+
+fn parse_numeric_pid_name(text: &str) -> Option<u32> {
+    let mut cur: u32 = 0;
+    if text.is_empty() {
+        return None;
+    }
+    for b in text.bytes() {
+        if b.is_ascii_digit() {
+            cur = cur.saturating_mul(10).saturating_add((b - b'0') as u32);
+        } else {
+            return None;
+        }
+    }
+    Some(cur)
+}
+
+///使用proc,返回当前所有进程pid
+fn list_proc_pids() -> Vec<u32> {
+    let fd = open("/proc", RDONLY);
+    if fd < 0 {
+        return Vec::new();
+    }
+    let fd = fd as usize;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        // proc是一个目录,这个循环是读取这个目录里面所有纯数组的文件
+        let n = getdents64(fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        let mut pos = 0usize;
+        let n = n as usize;
+        while pos + 19 <= n {
+            let reclen = u16::from_le_bytes([buf[pos + 16], buf[pos + 17]]) as usize;
+            if reclen == 0 || pos + reclen > n {
+                break;
+            }
+            let name_start = pos + 19;
+            let name_end = pos + reclen;
+            //返回第一个0的下标,这里是想要构造出程序名字的有效长度
+            let nul = buf[name_start..name_end]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(name_end - name_start);
+            let name_bytes = &buf[name_start..name_start + nul];
+            if let Ok(name) = core::str::from_utf8(name_bytes) {
+                if let Some(pid) = parse_numeric_pid_name(name) {
+                    out.push(pid);
+                }
+            }
+            pos += reclen;
+        }
+    }
+    let _ = close(fd);
+    out.sort_unstable();
+    out
+}
+
+///eg: 访问 /proc/123/status
+fn proc_text(pid: u32, name: &str) -> Option<Vec<u8>> {
+    let mut path = String::from("/proc/");
+    path.push_str(pid.to_string().as_str());
+    path.push('/');
+    path.push_str(name);
+    read_file(path.as_str())
+}
+
+fn proc_is_zombie(pid: u32) -> bool {
+    let Some(status) = proc_text(pid, "status") else {
+        return false;
+    };
+    status
+        .windows(b"State:\tZ".len())
+        .any(|window| window == b"State:\tZ")
+}
+
+///comm 是进程名字,然后cmdline是启动的时候使用的命令
+fn proc_name_is_iperf(pid: u32) -> bool {
+    if let Some(comm) = proc_text(pid, "comm") {
+        if bytes_contain(comm.as_slice(), b"iperf3") {
+            return true;
+        }
+    }
+    if let Some(cmdline) = proc_text(pid, "cmdline") {
+        if bytes_contain(cmdline.as_slice(), b"iperf3") {
+            return true;
+        }
+    }
+    false
+}
+
+///从proc查找iperf,然后杀死他
+fn iperf_server_pids() -> Vec<u32> {
+    let self_pid = getpid();
+    let mut out = Vec::new();
+    for pid in list_proc_pids() {
+        if self_pid >= 0 && pid as isize == self_pid {
+            continue;
+        }
+        if proc_is_zombie(pid) || !proc_name_is_iperf(pid) {
+            continue;
+        }
+        out.push(pid);
+    }
+    out
+}
+
+///超级清理大师,评测脚本里面的程序不会自己退出,我们主动扫描并杀死他
+fn cleanup_iperf_servers(label: &str) {
+    let before = iperf_server_pids();
+    let mut term_sent = 0usize;
+    for pid in before.iter().copied() {
+        if kill(pid as usize, SIGTERM) == 0 {
+            term_sent += 1;
+        }
+    }
+    for _ in 0..20 {
+        let _ = reap_any_children_nohang();
+        if iperf_server_pids().is_empty() {
+            break;
+        }
+        sleep(100);
+    }
+
+    let remaining = iperf_server_pids();
+    let mut kill_sent = 0usize;
+    for pid in remaining.iter().copied() {
+        if kill(pid as usize, SIGKILL) == 0 {
+            kill_sent += 1;
+        }
+    }
+    for _ in 0..50 {
+        let _ = reap_any_children_nohang();
+        if iperf_server_pids().is_empty() {
+            break;
+        }
+        sleep(100);
+    }
+
+    let after = iperf_server_pids();
+    let reaped = reap_any_children_nohang();
+    println!(
+        "====== iperf server cleanup {}: before={} term={} kill={} after={} reaped={} ======",
+        label,
+        before.len(),
+        term_sent,
+        kill_sent,
+        after.len(),
+        reaped
+    );
+}
+
+
+
+fn start_iperf_server(iperf: &str) -> bool {
+    let launcher_pid = spawn_program(iperf, &["-s", "-p", "5001", "-D"]);
+    if launcher_pid < 0 {
+        println!("====== iperf server launcher spawn failed: {} ======", launcher_pid);
+        return false;
+    }
+    let mut wait_status = 0;
+    let wait_result = waitpid(launcher_pid, &mut wait_status);
+    println!(
+        "====== iperf server launcher end: pid={} wait={} status={} ======",
+        launcher_pid, wait_result, wait_status
+    );
+
+    true
+}
+
+
+fn run_iperf_suite(dir: &str, libc: &str) {
+    println!("#### OS COMP TEST GROUP START iperf-{} ####", libc);
+    let _ = chdir(dir);
+
+    let mut iperf = String::from(dir);
+    iperf.push_str("/iperf3");
+
+    cleanup_iperf_servers("pre");
+    if !start_iperf_server(iperf.as_str()) {
+        cleanup_iperf_servers("start-failed");
+        println!("#### OS COMP TEST GROUP END iperf-{} ####", libc);
+        return;
+    }
+
+    run_iperf_case(
+        iperf.as_str(),
+        "BASIC_UDP",
+        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-b", "1000G"],
+    );
+    run_iperf_case(
+        iperf.as_str(),
+        "BASIC_TCP",
+        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0"],
+    );
+    run_iperf_case(
+        iperf.as_str(),
+        "PARALLEL_UDP",
+        &[
+            "-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-P", "5",
+            "-b", "1000G",
+        ],
+    );
+    run_iperf_case(
+        iperf.as_str(),
+        "PARALLEL_TCP",
+        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-P", "5"],
+    );
+    run_iperf_case(
+        iperf.as_str(),
+        "REVERSE_UDP",
+        &[
+            "-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-R", "-b",
+            "1000G",
+        ],
+    );
+    run_iperf_case(
+        iperf.as_str(),
+        "REVERSE_TCP",
+        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-R"],
+    );
+
+    cleanup_iperf_servers("post");
+    println!("#### OS COMP TEST GROUP END iperf-{} ####", libc);
+}
+
+
+
 
 //测试函数,单独开始一个LTP测试用例，查看是什么问题
 #[allow(unused)]
@@ -718,19 +1112,40 @@ fn test_ltp_bin_single() {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
+        let mut musl_cases: Vec<&str> = Vec::new();
+
+        for case in RISCV_LTP_CASES
+            .iter()
+            .copied()
+            .chain(run_riscv_ltp_groups_in_dir("/musl").iter().copied())
+        {
+            if !musl_cases.iter().any(|&x| x == case) {
+                musl_cases.push(case);
+            }
+        }
+
+        run_ltp_lane("ltp-musl","/musl", musl_cases.as_slice());
+        
+        // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES + run_riscv_ltp_groups_in_dir("/glibc"));
+        // run_riscv_ltp_groups_in_dir("/musl");
+        // run_riscv_ltp_groups_in_dir("/glibc");
+
         // if FOCUS_READINESS_SMOKES {
         //     run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
         // }
         // if FOCUS_PROCFS_SMOKES {
         //     run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
         // }
+
         // run_cyclist_suite("/musl", "musl");
         // run_cyclist_suite("/glibc", "glibc");
-        chdir("/musl");
-        run_script("/musl/iperf_testcode.sh", &[]);
-        chdir("/glibc");
-        run_script("/glibc/iperf_testcode.sh", &[]);
-        // // iozone
+        
+        // run_iperf_suite("/musl", "musl");
+        // run_iperf_suite("/glibc", "glibc");
+        // run_cyclist_suite("/musl", "musl");
+        // run_cyclist_suite("/glibc", "glibc");
+
+        // // // iozone
         // chdir("/musl");
         // run_script("/musl/iozone_testcode.sh", &[]);
         // chdir("/glibc");
@@ -742,21 +1157,22 @@ pub fn main() -> i32 {
         // test_rv();
     }
     if !cfg!(target_arch = "riscv64") {
-        //musl的loongarch有问题
+        // run_ltp_lane("ltp-musl","/musl",run_non_riscv_ltp_groups_in_dir("/musl"));
+        
+        // run_ltp_lane("ltp-glibc","/glibc",run_non_riscv_ltp_groups_in_dir("/glibc"));
 
-        // run_cyclist_suite("/glibc", "glibc");
-        // run_cyclist_suite("/musl", "musl");
-        chdir("/musl");
-        run_script("/musl/iperf_testcode.sh", &[]);
-        chdir("/glibc");
-        run_script("/glibc/iperf_testcode.sh", &[]);
+        // run_ipv6_dualstack_smoke();
+        run_iperf_suite("/musl", "musl");
+        run_iperf_suite("/glibc", "glibc");
 
+        run_cyclist_suite("/glibc", "glibc");
+        run_cyclist_suite("/musl", "musl");
 
         // // iozone
-        // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh", &[]);
-        // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh", &[]);
+        chdir("/musl");
+        run_script("/musl/iozone_testcode.sh", &[]);
+        chdir("/glibc");
+        run_script("/glibc/iozone_testcode.sh", &[]);
         // test_ltp_bin_single();
 
         // run_ltp_lane("ltp-musl", "/musl", LOONGARCH_LTP_CASES);

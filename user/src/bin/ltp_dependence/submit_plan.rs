@@ -1,118 +1,177 @@
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 type LtpGroup = &'static [&'static str];
 
 // Enable a group by uncommenting its line under the target architecture.
 // Test names live in tasks/*.rs; this file only selects already packaged groups.
 const RISCV_LTP_GROUPS: &[LtpGroup] = &[
-    // // 基础烟测
-    &super::LTP_TEST_POINTS,
 
-    // //
-    // // 进程生命周期 / exec / wait / 线程
-    &super::WAITPID_TASKS,
-    &super::WAITID_TASKS,
-    &super::CLONE_WAIT_EXIT_CORE_TASKS,
-    &super::EXEC_FAMILY_CORE_TASKS,
+    //测试新的一批
+    &super::SCHED_TC_TASKS,
 
-    // // // 进程身份 / 会话 / 调度
-    &super::PROCINFO_TASKS,
-    &super::PGRP_SESSION_TASKS,
-    &super::SETPGRP_TASKS,
-    &super::GETPRIORITY_TASKS,
-    &super::SETPRIORITY_TASKS,
-    &super::PROC_TID_TASKS,
+    &super::GETITIMER_TASKS,
+    &super::SETITIMER_TASKS,
+    &super::GETRUSAGE_TASKS,
+    &super::CLOCK_GETTIME_TASKS,
+    &super::CLOCK_SETTIME_TASKS,
+    &super::CLOCK_RES_TASKS,
+    &super::CLOCK_NANOSLEEP_TASKS,
+    &super::TIME_MISC_TASKS,
+    &super::ALARM_TASKS,
+    &super::POSIX_TIMER_TASKS,
+    &super::ADJTIMEX_SETTIMEOFDAY_UTIME_TASKS,
+    &super::UTIME_UNAME_ARCH_PRCTL_TASKS,
+    &super::SETRLIMIT_TASKS,
+    &super::GETRLIMIT_TASKS,
+    &super::ROBUST_TID_TASKS,
 
+    &super::FS_META_INOTIFY_XATTR_TASKS,
+    &super::AIO_DIO_CORE_TASKS,
+    &super::IOCTL_IOURING_OPEN_TASKS,
+    &super::UNRUN_FS_TASKS,
 
-    // // // 基础文件 I/O / fd / fcntl
-    &super::CWD_DIR_TASKS,
-    &super::ACCESS_TASKS,
-    &super::FACCESSAT_TASKS,
-    &super::CLOSE_TASKS,
-    &super::OPEN_CORE_TASKS,
-    &super::OPEN_EXT_TASKS,
-    &super::OPENAT_CORE_TASKS,
-    &super::CLOSE_RANGE_CORE_TASKS,
-    &super::UMASK_TASKS,
-    &super::DUP_CORE_TASKS,
-    &super::DUP_FCNTL_TASKS,
-    &super::READ_WRITE_LSEEK_TASKS,
-    &super::PREAD_PWRITE_PREADV_TASKS,
-    &super::PREADV2_PWRITEV2_TASKS,
-    &super::FCNTL_BASIC_TASKS,
-    &super::FCNTL_EXTENDED_TASKS,
-    &super::FCNTL_MISC_TASKS,
-    &super::FCNTL_LEASE_TASKS,
-
-    // //6_21到这里
-    &super::SCHED_NICE_CORE_TASKS,
-
-    &super::UNRUN_SCHED_TASKS,
-
-    &super::THREADING_PTRACE_TASKS,
-    &super::PIDFD_PRCTL_TASKS,
+    &super::UNAME_SYSFS_ASLR_TASKS,
+    &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
+    &super::KCMP_TASKS,
+    &super::UTS_NAME_TASKS,
+    &super::UTS_QUERY_TASKS,
+    &super::GETRANDOM_TASKS,
 
 
-    // // // 凭证 / capability / key
-    &super::GETRES_TASKS,
-    &super::CRED_SET_CORE_TASKS,
-    &super::CRED_SET_RES_TASKS,
-    &super::CRED_FS_TASKS,
-    &super::CRED_EGID_TASKS,
-    &super::CRED_KEY_CAP_CORE_TASKS,
-    &super::CAP_CRED16_QUERY_TASKS,
-    &super::CRED16_MUTATION_TASKS,
+    //第二批
 
+    &super::SYSV_IPC_CORE_TASKS,
+    &super::SYSV_IPC_EXT_TASKS,
+    &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
+    &super::SYSV_SHM_CORE_TASKS,
+    &super::IPC_NAMESPACE_TASKS,
 
+    &super::NS_MOUNT_CORE_TASKS,
+    &super::NS_MOUNT_FOLLOWUP_TASKS,
+    &super::PIDNS_MODULE_TASKS,
+    &super::FANOTIFY_CORE_TASKS,
 
-    // // 信号 / futex / eventfd / timerfd / epoll
-    &super::SIGACTION_SIGNAL_CORE_TASKS,
-    &super::KILL_PAUSE_TGKILL_TASKS,
+    &super::NET_SOCKET_CONN_TASKS,
+    &super::NET_SEND_RECV_TASKS,
+    &super::NET_SOCKOPT_POLL_TASKS,
+    &super::UNRUN_NET_IPV6_LIB_TASKS,
 
-
-    &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
-    &super::EVENTFD_FUTEX_TIMERFD_TASKS,
-    &super::EPOLL_CORE_TASKS,
+    &super::MLOCK_MADVISE_CORE_TASKS,
+    &super::MPROTECT_MREMAP_MSYNC_TASKS,
+    &super::UNRUN_MALLOC_TASKS,
+    &super::MM_OOM_TASKS,
+    &super::UNRUN_MM_TASKS,
 
 
 
-    // // 文件元数据 / 目录树 / 链接 / xattr
-    &super::CHOWN_TASKS,
-    &super::CHMOD_TASKS,
-    &super::FCHMOD_TASKS,
-    &super::FCHOWN_TASKS,
-    &super::FCHDIR_TASKS,
-    &super::CREAT_CORE_TASKS,
-    &super::FSTAT_TASKS,
-    &super::FSTATFS_TASKS,
-    &super::STATFS_TASKS,
-    &super::STATX_BASIC_TASKS,
-    &super::STAT_TASKS,
-    &super::MKNODAT_TASKS,
-    &super::MKNOD_CORE_TASKS,
-    &super::MKDIR_CORE_TASKS,
-    &super::RMDIR_TASKS,
-    &super::LINK_CORE_TASKS,
-    &super::SYMLINK_CORE_TASKS,
-    &super::READLINK_CORE_TASKS,
-    &super::COPY_TRUNCATE_CORE_TASKS,
-    &super::CREAT_USERFAULTFD_TASKS,
-    &super::RENAME_UNLINK_TASKS,
-    &super::XATTR_CORE_TASKS,
-    &super::FS_META_CHOWN_XATTR_TASKS,
-    &super::STAT_LFS_EXT_TASKS,
-    &super::STATX_EXT_TASKS,
+    // // // 基础烟测
+    // &super::LTP_TEST_POINTS,
+
+    // // //
+    // // // 进程生命周期 / exec / wait / 线程
+    // &super::WAITPID_TASKS,
+    // &super::WAITID_TASKS,
+    // &super::CLONE_WAIT_EXIT_CORE_TASKS,
+    // &super::EXEC_FAMILY_CORE_TASKS,
+
+    // // // // 进程身份 / 会话 / 调度
+    // &super::PROCINFO_TASKS,
+    // &super::PGRP_SESSION_TASKS,
+    // &super::SETPGRP_TASKS,
+    // &super::GETPRIORITY_TASKS,
+    // &super::SETPRIORITY_TASKS,
+    // &super::PROC_TID_TASKS,
+
+
+    // // // // 基础文件 I/O / fd / fcntl
+    // &super::CWD_DIR_TASKS,
+    // &super::ACCESS_TASKS,
+    // &super::FACCESSAT_TASKS,
+    // &super::CLOSE_TASKS,
+    // &super::OPEN_CORE_TASKS,
+    // &super::OPEN_EXT_TASKS,
+    // &super::OPENAT_CORE_TASKS,
+    // &super::CLOSE_RANGE_CORE_TASKS,
+    // &super::UMASK_TASKS,
+    // &super::DUP_CORE_TASKS,
+    // &super::DUP_FCNTL_TASKS,
+    // &super::READ_WRITE_LSEEK_TASKS,
+    // &super::PREAD_PWRITE_PREADV_TASKS,
+    // &super::PREADV2_PWRITEV2_TASKS,
+    // &super::FCNTL_BASIC_TASKS,
+    // &super::FCNTL_EXTENDED_TASKS,
+    // &super::FCNTL_MISC_TASKS,
+    // &super::FCNTL_LEASE_TASKS,
+
+    // // //6_21到这里
+    // &super::SCHED_NICE_CORE_TASKS,
+
+    // &super::UNRUN_SCHED_TASKS,
+
+    // &super::THREADING_PTRACE_TASKS,
+    // &super::PIDFD_PRCTL_TASKS,
+
+
+    // // // // 凭证 / capability / key
+    // &super::GETRES_TASKS,
+    // &super::CRED_SET_CORE_TASKS,
+    // &super::CRED_SET_RES_TASKS,
+    // &super::CRED_FS_TASKS,
+    // &super::CRED_EGID_TASKS,
+    // &super::CRED_KEY_CAP_CORE_TASKS,
+    // &super::CAP_CRED16_QUERY_TASKS,
+    // &super::CRED16_MUTATION_TASKS,
 
 
 
-    // // 高级文件 I/O / pipe / splice / AIO / io_uring
-    &super::FALLOCATE_FSYNC_SYNC_TASKS,
-    &super::PIPE_CORE_TASKS,
-    &super::PIPE_SENDFILE_SPLICE_TASKS,
-    &super::TEE_VMSPLICE_FADVISE_TASKS,
+    // // // 信号 / futex / eventfd / timerfd / epoll
+    // &super::SIGACTION_SIGNAL_CORE_TASKS,
+    // &super::KILL_PAUSE_TGKILL_TASKS,
 
-    &super::FORK_TASKS,
+
+    // &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
+    // &super::EVENTFD_FUTEX_TIMERFD_TASKS,
+    // &super::EPOLL_CORE_TASKS,
+
+
+
+    // // // 文件元数据 / 目录树 / 链接 / xattr
+    // &super::CHOWN_TASKS,
+    // &super::CHMOD_TASKS,
+    // &super::FCHMOD_TASKS,
+    // &super::FCHOWN_TASKS,
+    // &super::FCHDIR_TASKS,
+    // &super::CREAT_CORE_TASKS,
+    // &super::FSTAT_TASKS,
+    // &super::FSTATFS_TASKS,
+    // &super::STATFS_TASKS,
+    // &super::STATX_BASIC_TASKS,
+    // &super::STAT_TASKS,
+    // &super::MKNODAT_TASKS,
+    // &super::MKNOD_CORE_TASKS,
+    // &super::MKDIR_CORE_TASKS,
+    // &super::RMDIR_TASKS,
+    // &super::LINK_CORE_TASKS,
+    // &super::SYMLINK_CORE_TASKS,
+    // &super::READLINK_CORE_TASKS,
+    // &super::COPY_TRUNCATE_CORE_TASKS,
+    // &super::CREAT_USERFAULTFD_TASKS,
+    // &super::RENAME_UNLINK_TASKS,
+    // &super::XATTR_CORE_TASKS,
+    // &super::FS_META_CHOWN_XATTR_TASKS,
+    // &super::STAT_LFS_EXT_TASKS,
+    // &super::STATX_EXT_TASKS,
+
+
+
+    // // // 高级文件 I/O / pipe / splice / AIO / io_uring
+    // &super::FALLOCATE_FSYNC_SYNC_TASKS,
+    // &super::PIPE_CORE_TASKS,
+    // &super::PIPE_SENDFILE_SPLICE_TASKS,
+    // &super::TEE_VMSPLICE_FADVISE_TASKS,
+
+    // &super::FORK_TASKS,
 
     //6_21到这里_2
 
@@ -274,6 +333,17 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
 ];
 
 const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+
+    // RISCV_LTP_GLIBC_ONLY_GROUPS
+    &super::SIGNAL_GLIBC_ONLY_TASKS,
+    &super::EPOLL_GLIBC_ONLY_TASKS,
+    &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
+    &super::MOUNT_API_TASKS,
+    &super::SYSV_SHM_FOLLOWUP_TASKS,
+    &super::MMAP_MPROTECT_CORE_TASKS,
+    &super::MM_MMAP_MADVISE_TASKS,
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
     // Default musl exposes NGROUPS=32 in setgroups03, but Linux kernel
@@ -286,104 +356,160 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
-    // // 基础烟测
-    &super::LTP_TEST_POINTS,
-    // //
-    // // 进程生命周期 / exec / wait / 线程
-    &super::WAITPID_TASKS,
-    &super::WAITID_TASKS,
-    &super::CLONE_WAIT_EXIT_CORE_TASKS,
-    &super::EXEC_FAMILY_CORE_TASKS,
-    &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
-    &super::THREADING_PTRACE_TASKS,
-    &super::PIDFD_PRCTL_TASKS,
-    // //
-    // // 进程身份 / 会话 / 调度
-    &super::PROCINFO_TASKS,
-    &super::PGRP_SESSION_TASKS,
-    &super::SETPGRP_TASKS,
-    &super::GETPRIORITY_TASKS,
-    &super::SETPRIORITY_TASKS,
-    &super::PROC_TID_TASKS,
 
-
-
-    // // 基础文件 I/O / fd / fcntl
-    &super::CWD_DIR_TASKS,
-    &super::ACCESS_TASKS,
-    &super::FACCESSAT_TASKS,
-    &super::CLOSE_TASKS,
-    &super::OPEN_CORE_TASKS,
-    &super::OPEN_EXT_TASKS,
-    &super::OPENAT_CORE_TASKS,
-    &super::CLOSE_RANGE_CORE_TASKS,
-    &super::UMASK_TASKS,
-    &super::DUP_CORE_TASKS,
-    &super::DUP_FCNTL_TASKS,
-    &super::READ_WRITE_LSEEK_TASKS,
-    &super::PREAD_PWRITE_PREADV_TASKS,
-    &super::PREADV2_PWRITEV2_TASKS,
-    &super::FCNTL_BASIC_TASKS,
-    &super::FCNTL_EXTENDED_TASKS,
-    &super::FCNTL_MISC_TASKS,
-    &super::FCNTL_LEASE_TASKS,
-    //
-        //6_21到这里
-    &super::SCHED_NICE_CORE_TASKS,
+    //测试新的一批
     &super::SCHED_TC_TASKS,
-    &super::UNRUN_SCHED_TASKS,
+
+    &super::GETITIMER_TASKS,
+    &super::SETITIMER_TASKS,
+    &super::GETRUSAGE_TASKS,
+    &super::CLOCK_GETTIME_TASKS,
+    &super::CLOCK_SETTIME_TASKS,
+    &super::CLOCK_RES_TASKS,
+    &super::CLOCK_NANOSLEEP_TASKS,
+    &super::TIME_MISC_TASKS,
+    &super::ALARM_TASKS,
+    &super::POSIX_TIMER_TASKS,
+    &super::ADJTIMEX_SETTIMEOFDAY_UTIME_TASKS,
+    &super::UTIME_UNAME_ARCH_PRCTL_TASKS,
+    &super::SETRLIMIT_TASKS,
+    &super::GETRLIMIT_TASKS,
+    &super::ROBUST_TID_TASKS,
+
+    &super::FS_META_INOTIFY_XATTR_TASKS,
+    &super::AIO_DIO_CORE_TASKS,
+    &super::IOCTL_IOURING_OPEN_TASKS,
+    &super::UNRUN_FS_TASKS,
+
+    &super::UNAME_SYSFS_ASLR_TASKS,
+    &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
+    &super::KCMP_TASKS,
+    &super::UTS_NAME_TASKS,
+    &super::UTS_QUERY_TASKS,
+    &super::GETRANDOM_TASKS,
 
 
-    //
-    // 凭证 / capability / key
-    &super::GETRES_TASKS,
-    &super::CRED_SET_CORE_TASKS,
-    &super::CRED_SET_RES_TASKS,
-    &super::CRED_FS_TASKS,
-    &super::CRED_EGID_TASKS,
-    &super::CRED_KEY_CAP_CORE_TASKS,
-    &super::CAP_CRED16_QUERY_TASKS,
-    &super::CRED16_MUTATION_TASKS,
+    //第二批
+
+    &super::SYSV_IPC_CORE_TASKS,
+    &super::SYSV_IPC_EXT_TASKS,
+    &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
+    &super::SYSV_SHM_CORE_TASKS,
+    &super::IPC_NAMESPACE_TASKS,
+
+    &super::NS_MOUNT_CORE_TASKS,
+    &super::NS_MOUNT_FOLLOWUP_TASKS,
+    &super::PIDNS_MODULE_TASKS,
+    &super::FANOTIFY_CORE_TASKS,
+
+    &super::NET_SOCKET_CONN_TASKS,
+    &super::NET_SEND_RECV_TASKS,
+    &super::NET_SOCKOPT_POLL_TASKS,
+    &super::UNRUN_NET_IPV6_LIB_TASKS,
+
+    &super::MLOCK_MADVISE_CORE_TASKS,
+    &super::MPROTECT_MREMAP_MSYNC_TASKS,
+    &super::UNRUN_MALLOC_TASKS,
+    &super::MM_OOM_TASKS,
+    &super::UNRUN_MM_TASKS,
+    // // // 基础烟测
+    // &super::LTP_TEST_POINTS,
+    // // //
+    // // // 进程生命周期 / exec / wait / 线程
+    // &super::WAITPID_TASKS,
+    // &super::WAITID_TASKS,
+    // &super::CLONE_WAIT_EXIT_CORE_TASKS,
+    // &super::EXEC_FAMILY_CORE_TASKS,
+    // &super::CLONE_EXEC_CHROOT_GROUPS_TASKS,
+    // &super::THREADING_PTRACE_TASKS,
+    // &super::PIDFD_PRCTL_TASKS,
+    // // //
+    // // // 进程身份 / 会话 / 调度
+    // &super::PROCINFO_TASKS,
+    // &super::PGRP_SESSION_TASKS,
+    // &super::SETPGRP_TASKS,
+    // &super::GETPRIORITY_TASKS,
+    // &super::SETPRIORITY_TASKS,
+    // &super::PROC_TID_TASKS,
 
 
 
-    //
-    // // 信号 / futex / eventfd / timerfd / epoll
-    &super::SIGACTION_SIGNAL_CORE_TASKS,
-    &super::KILL_PAUSE_TGKILL_TASKS,
-    &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
-    &super::EVENTFD_FUTEX_TIMERFD_TASKS,
-
-
-    &super::EPOLL_CORE_TASKS,
+    // // // 基础文件 I/O / fd / fcntl
+    // &super::CWD_DIR_TASKS,
+    // &super::ACCESS_TASKS,
+    // &super::FACCESSAT_TASKS,
+    // &super::CLOSE_TASKS,
+    // &super::OPEN_CORE_TASKS,
+    // &super::OPEN_EXT_TASKS,
+    // &super::OPENAT_CORE_TASKS,
+    // &super::CLOSE_RANGE_CORE_TASKS,
+    // &super::UMASK_TASKS,
+    // &super::DUP_CORE_TASKS,
+    // &super::DUP_FCNTL_TASKS,
+    // &super::READ_WRITE_LSEEK_TASKS,
+    // &super::PREAD_PWRITE_PREADV_TASKS,
+    // &super::PREADV2_PWRITEV2_TASKS,
+    // &super::FCNTL_BASIC_TASKS,
+    // &super::FCNTL_EXTENDED_TASKS,
+    // &super::FCNTL_MISC_TASKS,
+    // &super::FCNTL_LEASE_TASKS,
     // //
-
-    // // 文件元数据 / 目录树 / 链接 / xattr
-    &super::CHOWN_TASKS,
-    &super::CHMOD_TASKS,
-    &super::FCHMOD_TASKS,
-    &super::FCHOWN_TASKS,
-    &super::FCHDIR_TASKS,
-    &super::CREAT_CORE_TASKS,
-    &super::FSTAT_TASKS,
-    &super::FSTATFS_TASKS,
-    &super::STATFS_TASKS,
-    &super::STATX_BASIC_TASKS,
-    &super::STAT_TASKS,
-    &super::MKNODAT_TASKS,
-    &super::MKNOD_CORE_TASKS,
-    &super::MKDIR_CORE_TASKS,
-    &super::RMDIR_TASKS,
-    &super::LINK_CORE_TASKS,
-    &super::SYMLINK_CORE_TASKS,
-    &super::READLINK_CORE_TASKS,
-    &super::COPY_TRUNCATE_CORE_TASKS,
+    //     //6_21到这里
+    // &super::SCHED_NICE_CORE_TASKS,
+    // &super::SCHED_TC_TASKS,
+    // &super::UNRUN_SCHED_TASKS,
 
 
-    &super::CREAT_USERFAULTFD_TASKS,
-    &super::RENAME_UNLINK_TASKS,
+    // //
+    // // 凭证 / capability / key
+    // &super::GETRES_TASKS,
+    // &super::CRED_SET_CORE_TASKS,
+    // &super::CRED_SET_RES_TASKS,
+    // &super::CRED_FS_TASKS,
+    // &super::CRED_EGID_TASKS,
+    // &super::CRED_KEY_CAP_CORE_TASKS,
+    // &super::CAP_CRED16_QUERY_TASKS,
+    // &super::CRED16_MUTATION_TASKS,
 
-    &super::FORK_TASKS,
+
+
+    // //
+    // // // 信号 / futex / eventfd / timerfd / epoll
+    // &super::SIGACTION_SIGNAL_CORE_TASKS,
+    // &super::KILL_PAUSE_TGKILL_TASKS,
+    // &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
+    // &super::EVENTFD_FUTEX_TIMERFD_TASKS,
+
+
+    // &super::EPOLL_CORE_TASKS,
+    // // //
+
+    // // // 文件元数据 / 目录树 / 链接 / xattr
+    // &super::CHOWN_TASKS,
+    // &super::CHMOD_TASKS,
+    // &super::FCHMOD_TASKS,
+    // &super::FCHOWN_TASKS,
+    // &super::FCHDIR_TASKS,
+    // &super::CREAT_CORE_TASKS,
+    // &super::FSTAT_TASKS,
+    // &super::FSTATFS_TASKS,
+    // &super::STATFS_TASKS,
+    // &super::STATX_BASIC_TASKS,
+    // &super::STAT_TASKS,
+    // &super::MKNODAT_TASKS,
+    // &super::MKNOD_CORE_TASKS,
+    // &super::MKDIR_CORE_TASKS,
+    // &super::RMDIR_TASKS,
+    // &super::LINK_CORE_TASKS,
+    // &super::SYMLINK_CORE_TASKS,
+    // &super::READLINK_CORE_TASKS,
+    // &super::COPY_TRUNCATE_CORE_TASKS,
+
+
+    // &super::CREAT_USERFAULTFD_TASKS,
+    // &super::RENAME_UNLINK_TASKS,
+
+    // &super::FORK_TASKS,
 
     //6_21到这里_2
 
@@ -537,6 +663,18 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
 
 #[allow(unused)]
 const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
+
+    &super::SIGNAL_GLIBC_ONLY_TASKS,
+    &super::EPOLL_GLIBC_ONLY_TASKS,
+    &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
+    &super::MOUNT_API_TASKS,
+    &super::SYSV_SHM_FOLLOWUP_TASKS,
+    &super::MMAP_MPROTECT_CORE_TASKS,
+    &super::MM_MMAP_MADVISE_TASKS,
+
+
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
     // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
@@ -544,18 +682,21 @@ const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 ];
 
 
-pub fn run_riscv_ltp_groups_in_dir(dir: &str) -> Vec<&'static str> {
-    assert!(dir == "/musl" || dir == "/glibc");
+fn collect_ltp_groups(
+    groups: &[LtpGroup],
+    glibc_only_groups: &[LtpGroup],
+    include_glibc_only: bool,
+) -> &'static [&'static str] {
     let mut cases = Vec::new();
-    for &tasks in RISCV_LTP_GROUPS {
+    for &tasks in groups {
         for &case in tasks {
             if !cases.contains(&case) {
                 cases.push(case);
             }
         }
     }
-    if dir == "/glibc" {
-        for &tasks in RISCV_LTP_GLIBC_ONLY_GROUPS {
+    if include_glibc_only {
+        for &tasks in glibc_only_groups {
             for &case in tasks {
                 if !cases.contains(&case) {
                     cases.push(case);
@@ -563,27 +704,23 @@ pub fn run_riscv_ltp_groups_in_dir(dir: &str) -> Vec<&'static str> {
             }
         }
     }
-    cases
+    Box::leak(cases.into_boxed_slice())
 }
 
-pub fn run_non_riscv_ltp_groups_in_dir(dir: &str) -> Vec<&'static str> {
+pub fn run_riscv_ltp_groups_in_dir(dir: &str) -> &'static [&'static str] {
     assert!(dir == "/musl" || dir == "/glibc");
-    let mut cases = Vec::new();
-    for &tasks in LOONGARCH_LTP_GROUPS {
-        for &case in tasks {
-            if !cases.contains(&case) {
-                cases.push(case);
-            }
-        }
-    }
-    if dir == "/glibc" {
-        for &tasks in LOONGARCH_LTP_GLIBC_ONLY_GROUPS {
-            for &case in tasks {
-                if !cases.contains(&case) {
-                    cases.push(case);
-                }
-            }
-        }
-    }
-    cases
+    collect_ltp_groups(
+        RISCV_LTP_GROUPS,
+        RISCV_LTP_GLIBC_ONLY_GROUPS,
+        dir == "/glibc",
+    )
+}
+
+pub fn run_non_riscv_ltp_groups_in_dir(dir: &str) -> &'static [&'static str] {
+    assert!(dir == "/musl" || dir == "/glibc");
+    collect_ltp_groups(
+        LOONGARCH_LTP_GROUPS,
+        LOONGARCH_LTP_GLIBC_ONLY_GROUPS,
+        dir == "/glibc",
+    )
 }

@@ -20,6 +20,23 @@ static mut HEAP_SPACE: [u8; USER_HEAP_SIZE] = [0; USER_HEAP_SIZE];
 #[global_allocator]
 static HEAP: LockedHeap = LockedHeap::empty();
 
+#[cfg(target_arch = "loongarch64")]
+fn early_user_write(msg: &'static [u8]) {
+    let _ret: isize;
+    unsafe {
+        core::arch::asm!(
+            "syscall 0",
+            inlateout("$r4") 1usize => _ret,
+            in("$r5") msg.as_ptr() as usize,
+            in("$r6") msg.len(),
+            in("$r7") 0usize,
+            in("$r8") 0usize,
+            in("$r9") 0usize,
+            in("$r11") 64usize,
+        );
+    }
+}
+
 #[alloc_error_handler]
 pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
     panic!("Heap allocation error, layout = {:?}", layout);
@@ -38,6 +55,8 @@ fn clear_bss() {
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
 pub extern "C" fn _start(argc: usize, argv: usize) {
+    #[cfg(target_arch = "loongarch64")]
+    early_user_write(b"[user _start] enter\n");
     clear_bss();
     unsafe {
         HEAP.lock()
