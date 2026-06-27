@@ -312,6 +312,18 @@
     // FANOTIFY_CORE_TASKS 已在 riscv64 运行且无 FAIL/TBROK；fanotify01-20
     // 均因当前内核未配置 fanotify 报预期 TCONF，其中 fanotify13 还会跳过
     // overlayfs-on-tmpfs 子项。
+    // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
+    // fs_bind_rbind01-08.sh 与 fs_bind_rbind07-2.sh 通过。该批覆盖
+    // shared/slave/unbindable 递归 bind 传播、堆叠 bind mount 逐层卸载、
+    // slave 不向 master 反向传播卸载，以及 /proc/mounts 供 umount 工具
+    // 消费时只暴露可见顶层挂载。
+    // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
+    // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
+    // p-node 传播、shared+slave master 继承、bind+propagation 组合标志、
+    // same-tree bind/rbind 子树克隆、MS_MOVE 子树重挂载，以及被覆盖 peer
+    // 挂载层的逐层卸载清理。
     // &super::UNAME_SYSFS_ASLR_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：newuname01、
     // utsname01-04、sysconf01、getpagesize01、syscall01 通过。预期 TCONF：

@@ -116,6 +116,8 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
     // &super::UNAME_SYSFS_ASLR_TASKS,
+    // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
+    // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
@@ -383,6 +385,8 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
     // &super::UNAME_SYSFS_ASLR_TASKS,
+    // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
+    // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,

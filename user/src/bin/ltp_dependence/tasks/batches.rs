@@ -581,6 +581,38 @@ pub const NS_MOUNT_FOLLOWUP_TASKS: [&str; 20] = [
     "pidns04",
 ];
 
+pub const FS_BIND_MAIN_FOLLOWUP_TASKS: [&str; 17] = [
+    "fs_bind07-2.sh",
+    "fs_bind09.sh",
+    "fs_bind10.sh",
+    "fs_bind11.sh",
+    "fs_bind12.sh",
+    "fs_bind13.sh",
+    "fs_bind14.sh",
+    "fs_bind15.sh",
+    "fs_bind16.sh",
+    "fs_bind17.sh",
+    "fs_bind18.sh",
+    "fs_bind19.sh",
+    "fs_bind20.sh",
+    "fs_bind21.sh",
+    "fs_bind22.sh",
+    "fs_bind23.sh",
+    "fs_bind24.sh",
+];
+
+pub const FS_BIND_RBIND_PROPAGATION_TASKS: [&str; 9] = [
+    "fs_bind_rbind01.sh",
+    "fs_bind_rbind02.sh",
+    "fs_bind_rbind03.sh",
+    "fs_bind_rbind04.sh",
+    "fs_bind_rbind05.sh",
+    "fs_bind_rbind06.sh",
+    "fs_bind_rbind07-2.sh",
+    "fs_bind_rbind07.sh",
+    "fs_bind_rbind08.sh",
+];
+
 pub const PIDNS_MODULE_TASKS: [&str; 20] = [
     "pidns05",
     "pidns06",
