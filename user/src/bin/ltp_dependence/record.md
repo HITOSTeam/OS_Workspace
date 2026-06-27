@@ -324,6 +324,13 @@
     // p-node 传播、shared+slave master 继承、bind+propagation 组合标志、
     // same-tree bind/rbind 子树克隆、MS_MOVE 子树重挂载，以及被覆盖 peer
     // 挂载层的逐层卸载清理。
+    // &super::FS_BIND_MOVE_CORE_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP：
+    // fs_bind_move01-12.sh 通过。该批覆盖 shared/private/slave/
+    // unbindable subtree 移动到 shared/private/slave/unbindable parent 时的
+    // 传播语义。修复点：shared subtree move 保留原 peer group identity，
+    // 同时在目标 parent peer 下生成 move 副本；private source root 的普通
+    // bind 不再误克隆 moved child mount，避免把非递归 bind 当成 rbind。
     // &super::UNAME_SYSFS_ASLR_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：newuname01、
     // utsname01-04、sysconf01、getpagesize01、syscall01 通过。预期 TCONF：
