@@ -613,6 +613,17 @@ pub const FS_BIND_RBIND_PROPAGATION_TASKS: [&str; 9] = [
     "fs_bind_rbind08.sh",
 ];
 
+pub const FS_BIND_RBIND_CHILD_TASKS: [&str; 8] = [
+    "fs_bind_rbind09.sh",
+    "fs_bind_rbind10.sh",
+    "fs_bind_rbind11.sh",
+    "fs_bind_rbind12.sh",
+    "fs_bind_rbind13.sh",
+    "fs_bind_rbind14.sh",
+    "fs_bind_rbind15.sh",
+    "fs_bind_rbind16.sh",
+];
+
 pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
     "fs_bind_move01.sh",
     "fs_bind_move02.sh",
