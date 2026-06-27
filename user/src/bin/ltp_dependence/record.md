@@ -312,6 +312,12 @@
     // FANOTIFY_CORE_TASKS 已在 riscv64 运行且无 FAIL/TBROK；fanotify01-20
     // 均因当前内核未配置 fanotify 报预期 TCONF，其中 fanotify13 还会跳过
     // overlayfs-on-tmpfs 子项。
+    // &super::FS_BIND_BASE_REGRESSION_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind01-08.sh、fs_bind07-2.sh 与 fs_bind_regression.sh 通过。
+    // 该批覆盖 base bind shared-subtree 传播、private/slave/unbindable
+    // parent/child 组合，以及 unshared mountpoint 上 bind/rbind/MS_MOVE
+    // regression。fs_bind_regression.sh 三个子项均为 TPASS。
     // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
     // fs_bind_rbind01-08.sh 与 fs_bind_rbind07-2.sh 通过。该批覆盖
