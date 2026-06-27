@@ -601,6 +601,16 @@ pub const FS_BIND_MAIN_FOLLOWUP_TASKS: [&str; 17] = [
     "fs_bind24.sh",
 ];
 
+pub const FS_BIND_CLONENS_TASKS: [&str; 7] = [
+    "fs_bind_cloneNS01.sh",
+    "fs_bind_cloneNS02.sh",
+    "fs_bind_cloneNS03.sh",
+    "fs_bind_cloneNS04.sh",
+    "fs_bind_cloneNS05.sh",
+    "fs_bind_cloneNS06.sh",
+    "fs_bind_cloneNS07.sh",
+];
+
 pub const FS_BIND_RBIND_PROPAGATION_TASKS: [&str; 9] = [
     "fs_bind_rbind01.sh",
     "fs_bind_rbind02.sh",

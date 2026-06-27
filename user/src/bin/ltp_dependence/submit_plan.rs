@@ -122,6 +122,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::FS_BIND_RBIND_SPECIAL_CHILD_TASKS,
     // &super::FS_BIND_RBIND_TOPOLOGY_TASKS,
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
+    // &super::FS_BIND_CLONENS_TASKS,
     // &super::FS_BIND_MOVE_CORE_TASKS,
     // &super::FS_BIND_MOVE_NESTED_TASKS,
     //
@@ -397,6 +398,7 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::FS_BIND_RBIND_SPECIAL_CHILD_TASKS,
     // &super::FS_BIND_RBIND_TOPOLOGY_TASKS,
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
+    // &super::FS_BIND_CLONENS_TASKS,
     // &super::FS_BIND_MOVE_CORE_TASKS,
     // &super::FS_BIND_MOVE_NESTED_TASKS,
     //
