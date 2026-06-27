@@ -613,6 +613,21 @@ pub const FS_BIND_RBIND_PROPAGATION_TASKS: [&str; 9] = [
     "fs_bind_rbind08.sh",
 ];
 
+pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
+    "fs_bind_move01.sh",
+    "fs_bind_move02.sh",
+    "fs_bind_move03.sh",
+    "fs_bind_move04.sh",
+    "fs_bind_move05.sh",
+    "fs_bind_move06.sh",
+    "fs_bind_move07.sh",
+    "fs_bind_move08.sh",
+    "fs_bind_move09.sh",
+    "fs_bind_move10.sh",
+    "fs_bind_move11.sh",
+    "fs_bind_move12.sh",
+];
+
 pub const PIDNS_MODULE_TASKS: [&str; 20] = [
     "pidns05",
     "pidns06",
