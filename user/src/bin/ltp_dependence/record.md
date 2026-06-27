@@ -331,6 +331,16 @@
     // 传播语义。修复点：shared subtree move 保留原 peer group identity，
     // 同时在目标 parent peer 下生成 move 副本；private source root 的普通
     // bind 不再误克隆 moved child mount，避免把非递归 bind 当成 rbind。
+    // &super::FS_BIND_MOVE_NESTED_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP：
+    // fs_bind_move13-22.sh 通过；组合回归 fs_bind_move01-22.sh 也通过。
+    // 该批覆盖 unbindable subtree 的 move 拒绝、shared parent 下移动子树
+    // 的拒绝、移动 private parent 及其 shared/slave/unbindable child 到
+    // 既有 private mountpoint 时的 stack 语义，以及 shared tree 在自身
+    // bind tree 内的嵌套 move。修复点：MS_MOVE 允许在目标 mountpoint 上
+    // 形成新的顶层 stack，保留子挂载传播身份；同时按 Linux 语义拒绝
+    // shared parent 下的 subtree move 和需要向 shared target fanout 的
+    // unbindable subtree move。
     // &super::UNAME_SYSFS_ASLR_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：newuname01、
     // utsname01-04、sysconf01、getpagesize01、syscall01 通过。预期 TCONF：
