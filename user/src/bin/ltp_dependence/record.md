@@ -345,6 +345,16 @@
     // 原始 mount event 与本次 clone event，保留 Linux 式覆盖层卸载顺序；
     // covered-peer unmount 清理仅在 clone source_display 被改写为目标路径时
     // 使用真实 source 兜底匹配，避免误删仍需显式卸载的同源层。
+    // &super::FS_BIND_CLONENS_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_cloneNS01-07.sh 通过；组合回归 fs_bind_rbind01-39.sh、
+    // fs_bind_rbind07-2.sh 与 fs_bind_cloneNS01-07.sh 也通过。该批覆盖
+    // clone 后父/子 mount namespace 之间的 shared/slave/private/
+    // unbindable propagation、跨 namespace mount/umount fanout，以及
+    // shared/slave 链上的卸载传播方向。修复点：shared peer unmount 只在
+    // 起点 peer group 及其下游 slave/shared-slave peer group 内清理；没有
+    // shared peer group 的 mount namespace clone 记录按当前 namespace 栈项卸载，
+    // 避免反向删除 upstream master 层。
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
     // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
