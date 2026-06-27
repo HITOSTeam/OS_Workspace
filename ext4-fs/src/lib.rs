@@ -36,7 +36,7 @@ pub use error::{Ext4Error, Result};
 pub use ext4::Ext4FileSystem;
 pub use vfs::Inode;
 
-pub use block_cache::cache_stats;
+pub use block_cache::{block_cache_reclaim_unused as reclaim_block_cache, cache_stats};
 use block_cache::{block_cache_sync_all, get_block_cache};
 
 /// Flush all cached blocks to the underlying block device.

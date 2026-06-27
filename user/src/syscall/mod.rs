@@ -122,17 +122,17 @@ pub fn get_time() -> isize {
 }
 pub fn sleep(period_ms: usize) {
     #[repr(C)]
-    struct TimeVal {
+    struct TimeSpec {
         sec: u64,
-        usec: u64,
+        nsec: u64,
     }
     const SYSCALL_NANOSLEEP: usize = 101;
-    let tv = TimeVal {
+    let ts = TimeSpec {
         sec: (period_ms / 1000) as u64,
-        usec: ((period_ms % 1000) * 1000) as u64,
+        nsec: ((period_ms % 1000) * 1_000_000) as u64,
     };
     let _ = syscall(SYSCALL_NANOSLEEP, [
-        &tv as *const TimeVal as usize,
+        &ts as *const TimeSpec as usize,
         0,
         0,
         0,

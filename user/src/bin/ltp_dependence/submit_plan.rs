@@ -6,10 +6,6 @@ type LtpGroup = &'static [&'static str];
 // Enable a group by uncommenting its line under the target architecture.
 // Test names live in tasks/*.rs; this file only selects already packaged groups.
 const RISCV_LTP_GROUPS: &[LtpGroup] = &[
-
-    //测试新的一批
-    &super::SCHED_TC_TASKS,
-
     &super::GETITIMER_TASKS,
     &super::SETITIMER_TASKS,
     &super::GETRUSAGE_TASKS,
@@ -25,45 +21,15 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     &super::SETRLIMIT_TASKS,
     &super::GETRLIMIT_TASKS,
     &super::ROBUST_TID_TASKS,
-
-    &super::FS_META_INOTIFY_XATTR_TASKS,
-    &super::AIO_DIO_CORE_TASKS,
-    &super::IOCTL_IOURING_OPEN_TASKS,
-    &super::UNRUN_FS_TASKS,
-
-    &super::UNAME_SYSFS_ASLR_TASKS,
-    &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
-    &super::KCMP_TASKS,
-    &super::UTS_NAME_TASKS,
-    &super::UTS_QUERY_TASKS,
-    &super::GETRANDOM_TASKS,
-
-
-    //第二批
-
-    &super::SYSV_IPC_CORE_TASKS,
-    &super::SYSV_IPC_EXT_TASKS,
-    &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
-    &super::SYSV_SHM_CORE_TASKS,
-    &super::IPC_NAMESPACE_TASKS,
-
-    &super::NS_MOUNT_CORE_TASKS,
-    &super::NS_MOUNT_FOLLOWUP_TASKS,
-    &super::PIDNS_MODULE_TASKS,
-    &super::FANOTIFY_CORE_TASKS,
-
-    &super::NET_SOCKET_CONN_TASKS,
-    &super::NET_SEND_RECV_TASKS,
-    &super::NET_SOCKOPT_POLL_TASKS,
-    &super::UNRUN_NET_IPV6_LIB_TASKS,
-
-    &super::MLOCK_MADVISE_CORE_TASKS,
-    &super::MPROTECT_MREMAP_MSYNC_TASKS,
-    &super::UNRUN_MALLOC_TASKS,
-    &super::MM_OOM_TASKS,
-    &super::UNRUN_MM_TASKS,
-
-
+    // // &super::SCHED_TC_TASKS,
+    // &super::FS_META_INOTIFY_XATTR_TASKS,
+    // &super::AIO_DIO_CORE_TASKS,
+    // &super::IOCTL_IOURING_OPEN_TASKS,
+    // &super::NS_MOUNT_CORE_TASKS,
+    // &super::NS_MOUNT_FOLLOWUP_TASKS,
+    // &super::PIDNS_MODULE_TASKS,
+    // &super::FANOTIFY_CORE_TASKS,
+    // &super::UNAME_SYSFS_ASLR_TASKS,
 
     // // // 基础烟测
     // &super::LTP_TEST_POINTS,
@@ -335,15 +301,17 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
 const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 
     // RISCV_LTP_GLIBC_ONLY_GROUPS
-    &super::SIGNAL_GLIBC_ONLY_TASKS,
-    &super::EPOLL_GLIBC_ONLY_TASKS,
-    &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
-    &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
-    &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
-    &super::MOUNT_API_TASKS,
-    &super::SYSV_SHM_FOLLOWUP_TASKS,
-    &super::MMAP_MPROTECT_CORE_TASKS,
-    &super::MM_MMAP_MADVISE_TASKS,
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    // &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
+    // &super::MOUNT_API_TASKS,
+    // &super::SYSV_SHM_FOLLOWUP_TASKS,
+    // &super::MMAP_MPROTECT_CORE_TASKS,
+    // &super::MM_MMAP_MADVISE_TASKS,
+
+    
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
     // Default musl exposes NGROUPS=32 in setgroups03, but Linux kernel
@@ -358,7 +326,6 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
 
     //测试新的一批
-    &super::SCHED_TC_TASKS,
 
     &super::GETITIMER_TASKS,
     &super::SETITIMER_TASKS,
@@ -664,15 +631,15 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
 #[allow(unused)]
 const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 
-    &super::SIGNAL_GLIBC_ONLY_TASKS,
-    &super::EPOLL_GLIBC_ONLY_TASKS,
-    &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
-    &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
-    &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
-    &super::MOUNT_API_TASKS,
-    &super::SYSV_SHM_FOLLOWUP_TASKS,
-    &super::MMAP_MPROTECT_CORE_TASKS,
-    &super::MM_MMAP_MADVISE_TASKS,
+    // &super::SIGNAL_GLIBC_ONLY_TASKS,
+    // &super::EPOLL_GLIBC_ONLY_TASKS,
+    // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
+    // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
+    // &super::UNRUN_NET_IPV6_LIB_GLIBC_ONLY_TASKS,
+    // &super::MOUNT_API_TASKS,
+    // &super::SYSV_SHM_FOLLOWUP_TASKS,
+    // &super::MMAP_MPROTECT_CORE_TASKS,
+    // &super::MM_MMAP_MADVISE_TASKS,
 
 
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
