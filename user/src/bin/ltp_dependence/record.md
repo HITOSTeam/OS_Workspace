@@ -336,6 +336,15 @@
     // 该批覆盖 shared subtree 携带 slave/unbindable child 递归 bind 到
     // shared/private/slave/unbindable subtree 时的传播边界，尤其是
     // rbind 父树时按 Linux 语义跳过 unbindable child subtree。
+    // &super::FS_BIND_RBIND_TOPOLOGY_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind33-39.sh 通过；组合回归 fs_bind_rbind01-39.sh 也通过。
+    // 该批覆盖 same-tree root-to-child rbind、shared child clone、slave/
+    // unbindable propagation 边界，以及 private parent 下 shared child 的
+    // 逐层卸载。修复点：same-tree rbind 克隆 shared peer child 时区分
+    // 原始 mount event 与本次 clone event，保留 Linux 式覆盖层卸载顺序；
+    // covered-peer unmount 清理仅在 clone source_display 被改写为目标路径时
+    // 使用真实 source 兜底匹配，避免误删仍需显式卸载的同源层。
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
     // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
