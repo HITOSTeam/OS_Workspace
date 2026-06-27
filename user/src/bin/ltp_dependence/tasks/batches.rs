@@ -646,6 +646,16 @@ pub const FS_BIND_RBIND_SPECIAL_CHILD_TASKS: [&str; 8] = [
     "fs_bind_rbind32.sh",
 ];
 
+pub const FS_BIND_RBIND_TOPOLOGY_TASKS: [&str; 7] = [
+    "fs_bind_rbind33.sh",
+    "fs_bind_rbind34.sh",
+    "fs_bind_rbind35.sh",
+    "fs_bind_rbind36.sh",
+    "fs_bind_rbind37.sh",
+    "fs_bind_rbind38.sh",
+    "fs_bind_rbind39.sh",
+];
+
 pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
     "fs_bind_move01.sh",
     "fs_bind_move02.sh",
