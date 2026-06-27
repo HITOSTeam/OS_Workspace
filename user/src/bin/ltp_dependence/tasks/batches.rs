@@ -581,6 +581,19 @@ pub const NS_MOUNT_FOLLOWUP_TASKS: [&str; 20] = [
     "pidns04",
 ];
 
+pub const FS_BIND_BASE_REGRESSION_TASKS: [&str; 10] = [
+    "fs_bind01.sh",
+    "fs_bind02.sh",
+    "fs_bind03.sh",
+    "fs_bind04.sh",
+    "fs_bind05.sh",
+    "fs_bind06.sh",
+    "fs_bind07.sh",
+    "fs_bind07-2.sh",
+    "fs_bind08.sh",
+    "fs_bind_regression.sh",
+];
+
 pub const FS_BIND_MAIN_FOLLOWUP_TASKS: [&str; 17] = [
     "fs_bind07-2.sh",
     "fs_bind09.sh",
