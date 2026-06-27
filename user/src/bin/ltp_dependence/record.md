@@ -330,6 +330,12 @@
     // 该批覆盖 shared subtree 携带 shared/private child 递归 bind 到
     // shared/private/slave/unbindable subtree 时的子挂载传播、逐层卸载，
     // 以及 shared destination 下 private child clone 的新 peer group 语义。
+    // &super::FS_BIND_RBIND_SPECIAL_CHILD_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind25-32.sh 通过；组合回归 fs_bind_rbind01-32.sh 也通过。
+    // 该批覆盖 shared subtree 携带 slave/unbindable child 递归 bind 到
+    // shared/private/slave/unbindable subtree 时的传播边界，尤其是
+    // rbind 父树时按 Linux 语义跳过 unbindable child subtree。
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
     // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
