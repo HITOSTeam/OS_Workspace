@@ -119,6 +119,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // &super::FS_BIND_MOVE_CORE_TASKS,
+    // &super::FS_BIND_MOVE_NESTED_TASKS,
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
@@ -389,6 +390,7 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // &super::FS_BIND_MOVE_CORE_TASKS,
+    // &super::FS_BIND_MOVE_NESTED_TASKS,
     //
     // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,

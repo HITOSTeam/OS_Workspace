@@ -628,6 +628,19 @@ pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
     "fs_bind_move12.sh",
 ];
 
+pub const FS_BIND_MOVE_NESTED_TASKS: [&str; 10] = [
+    "fs_bind_move13.sh",
+    "fs_bind_move14.sh",
+    "fs_bind_move15.sh",
+    "fs_bind_move16.sh",
+    "fs_bind_move17.sh",
+    "fs_bind_move18.sh",
+    "fs_bind_move19.sh",
+    "fs_bind_move20.sh",
+    "fs_bind_move21.sh",
+    "fs_bind_move22.sh",
+];
+
 pub const PIDNS_MODULE_TASKS: [&str; 20] = [
     "pidns05",
     "pidns06",
