@@ -34,7 +34,7 @@ pub const BLOCK_SZ: usize = 4096;
 pub use block_dev::BlockDevice;
 pub use error::{Ext4Error, Result};
 pub use ext4::Ext4FileSystem;
-pub use vfs::Inode;
+pub use vfs::{Inode, InodeStatSnapshot};
 
 pub use block_cache::cache_stats;
 use block_cache::{block_cache_sync_all, get_block_cache};

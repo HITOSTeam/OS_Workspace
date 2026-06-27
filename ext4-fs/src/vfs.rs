@@ -110,6 +110,26 @@ pub struct Inode {
     block_size: usize,
 }
 
+#[derive(Clone, Copy)]
+pub struct InodeStatSnapshot {
+    pub inode_num: u32,
+    pub mode: u16,
+    pub uid: u32,
+    pub gid: u32,
+    pub nlink: u32,
+    pub size: u64,
+    pub special_rdev: u64,
+}
+
+impl InodeStatSnapshot {
+    pub fn rdev_for_mode(&self) -> u64 {
+        match self.mode & S_IFMT {
+            S_IFCHR | S_IFBLK => self.special_rdev,
+            _ => 0,
+        }
+    }
+}
+
 impl Inode {
     pub fn inode_num(&self) -> u32 {
         self.inode_num
@@ -222,6 +242,19 @@ impl Inode {
     /// Get cached block size
     pub fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    /// Read stat-relevant inode metadata with one block-cache lookup.
+    pub fn stat_snapshot(&self) -> InodeStatSnapshot {
+        self.read_disk_inode(|inode| InodeStatSnapshot {
+            inode_num: self.inode_num,
+            mode: inode.i_mode,
+            uid: inode.i_uid as u32,
+            gid: inode.i_gid as u32,
+            nlink: inode.i_links_count as u32,
+            size: inode.size(),
+            special_rdev: ((inode.i_block[1] as u64) << 32) | inode.i_block[0] as u64,
+        })
     }
 
     /// Read the disk inode
