@@ -318,6 +318,12 @@
     // shared/slave/unbindable 递归 bind 传播、堆叠 bind mount 逐层卸载、
     // slave 不向 master 反向传播卸载，以及 /proc/mounts 供 umount 工具
     // 消费时只暴露可见顶层挂载。
+    // &super::FS_BIND_RBIND_CHILD_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind09-16.sh 通过。该批覆盖 slave child 递归 bind 到
+    // shared/private/slave/unbindable parent，以及 unbindable child 递归
+    // bind 到 shared/private/slave/unbindable parent 时按 Linux 语义拒绝
+    // 克隆 unbindable subtree。
     // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
     // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
