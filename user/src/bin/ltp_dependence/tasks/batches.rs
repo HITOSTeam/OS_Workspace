@@ -624,6 +624,17 @@ pub const FS_BIND_RBIND_CHILD_TASKS: [&str; 8] = [
     "fs_bind_rbind16.sh",
 ];
 
+pub const FS_BIND_RBIND_SHARED_SUBTREE_TASKS: [&str; 8] = [
+    "fs_bind_rbind17.sh",
+    "fs_bind_rbind18.sh",
+    "fs_bind_rbind19.sh",
+    "fs_bind_rbind20.sh",
+    "fs_bind_rbind21.sh",
+    "fs_bind_rbind22.sh",
+    "fs_bind_rbind23.sh",
+    "fs_bind_rbind24.sh",
+];
+
 pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
     "fs_bind_move01.sh",
     "fs_bind_move02.sh",
