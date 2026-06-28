@@ -290,10 +290,12 @@
     // &super::NS_MOUNT_FOLLOWUP_TASKS,
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
-    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：setns01、setns02、
-    // unshare01、unshare02 通过。预期 TCONF：mountns01-04、timens01、
-    // pidns01 需要当前不支持的 namespace/kernel config；setns02 跳过
-    // CLONE_NEWUTS，同时仍验证 IPC namespace 路径。
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：mountns01-04、
+    // setns01、setns02、unshare01、unshare02 通过。setns02 的
+    // CLONE_NEWUTS 子项预期 TCONF，IPC namespace 子项通过；timens01、
+    // pidns01 仍因当前镜像缺少对应 namespace/kernel config 预期 TCONF。
+    // 2026-06-28 namespace anchor 回归还清理了 musl ELF interpreter
+    // e_flags 误判导致的 255，以及 /proc/config.gz zcat/gzip 探测链。
     // MOUNT_API_TASKS 已在 riscv64 运行：fanotify21-23 因缺少 fanotify/
     // debugfs/mkfs.ext2 支持预期 TCONF；mount01-07、umount01-03、
     // umount2_01-02、mount_setattr01、fsconfig01-03、fsopen01 在 glibc
@@ -551,11 +553,12 @@
     // unshare01.sh passes on riscv64 musl+glibc after adding a real unshare
     // command, user namespace id-map views, /proc/sys/user/max_mnt_namespaces,
     // and Linux-like shared root mount propagation across CLONE_NEWNS; the 8
-    // subtests are all TPASS, including --mount --propagation shared. The
-    // same diagnostic run still shows unrelated musl wrapper 255 for
-    // unshare01/unshare02/mountns01-04 and glibc mountns01-04 TCONF through
-    // the /proc/config.gz zcat->gzip probe chain, so those anchors are not
-    // counted as newly verified here.
+    // subtests are all TPASS, including --mount --propagation shared. Follow-up
+    // NS_MOUNT_CORE_TASKS rerun also passes mountns01-04, setns01-02, and
+    // unshare01-02 on riscv64 musl+glibc after relaxing ELF PT_INTERP e_flags
+    // matching and routing gzip/gunzip/zcat through static busybox. Expected
+    // TCONF remains for the setns02 CLONE_NEWUTS subcase and timens01/pidns01
+    // config-gated cases.
     // Expected TCONF/tool gaps still include cpio, insmod/lsmod modules,
     // keyctl, gcc, crontab, mkfs.tmpfs, uuidgen, nm, unzip, and several sysctl
     // config gates.
@@ -978,20 +981,17 @@
   RISC-V glibc lane 已实测全部 `TPASS`，覆盖 `brk01`、`sbrk01`、
   `sbrk02`、`mmap01`、`mmap02`、`mmap03`、`mmap04`、`mmap05`、
   `mmap06`、`mmap09`、`mprotect01`、`mprotect02`。RISC-V musl lane
-  若返回 `255`，原因是测试镜像 runtime ABI 不匹配：该镜像提供的
-  `/lib/ld-musl-riscv64.so.1` 是 soft-float ABI，而这批 LTP 测试二进制
-  是 double-float ABI。内核按 Linux-like ELF 加载规则拒绝这种主程序/
-  解释器 ABI 不一致组合，因此该失败不归类为 MemorySet/brk/mmap/mprotect
-  语义失败。若要 musl lane 也通过，需要替换为 hard-float musl runtime，
-  或使用 soft-float 编译的 musl LTP 产物。
+  的早期记录曾因内核把 PT_INTERP `e_flags` float ABI bits 与主程序做
+  等值校验而返回 `255`；2026-06-28 已改为 Linux-like interpreter
+  架构检查，不再要求这些 flag 相等。该旧 `255` 不归类为
+  MemorySet/brk/mmap/mprotect 语义失败；musl lane 需要用新内核重跑后再
+  记录最终 TPASS/TCONF 结果。
 
 - `mmapstress09 -d -p 2 -t 1`：按内存管理结果标记已通过。
-  RISC-V glibc lane 已实测 `TPASS`；RISC-V musl lane 若返回 `255`，
-  原因同样是测试镜像 runtime ABI 不匹配：`mmapstress09` 是 double-float
-  ABI，而 `/lib/ld-musl-riscv64.so.1` 是 soft-float ABI。内核已按
-  Linux-like ELF 加载规则拒绝这种主程序/解释器 ABI 不一致组合，因此该
-  失败不归类为 MemorySet/mmap 语义失败。若要 musl lane 也通过，需要
-  替换为 hard-float musl runtime，或使用 soft-float 编译的 musl LTP 产物。
+  RISC-V glibc lane 已实测 `TPASS`；RISC-V musl lane 的早期 `255`
+  同样属于旧 PT_INTERP `e_flags` 等值校验问题。2026-06-28 该加载器
+  语义已按 Linux 调整为 interpreter 架构检查；旧失败不归类为
+  MemorySet/mmap 语义失败，musl lane 需要用新内核重跑后再记录最终结果。
 
 ## 内存管理 修改计划
 
