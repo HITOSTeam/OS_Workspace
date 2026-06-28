@@ -547,9 +547,15 @@
     // missing cpio, unzip, mkfs.tmpfs, uuidgen, keyctl, and crontab.
     // Focused sendfile01.sh now passes on riscv64 musl+glibc after making TCP
     // accept sleep on the listener poll queue and making close cooperatively
-    // drain queued TCP data before removing the smoltcp handle. Remaining true
-    // failure from the batch probe: unshare01.sh user/mount namespace
-    // semantics.
+    // drain queued TCP data before removing the smoltcp handle. Focused
+    // unshare01.sh passes on riscv64 musl+glibc after adding a real unshare
+    // command, user namespace id-map views, /proc/sys/user/max_mnt_namespaces,
+    // and Linux-like shared root mount propagation across CLONE_NEWNS; the 8
+    // subtests are all TPASS, including --mount --propagation shared. The
+    // same diagnostic run still shows unrelated musl wrapper 255 for
+    // unshare01/unshare02/mountns01-04 and glibc mountns01-04 TCONF through
+    // the /proc/config.gz zcat->gzip probe chain, so those anchors are not
+    // counted as newly verified here.
     // Expected TCONF/tool gaps still include cpio, insmod/lsmod modules,
     // keyctl, gcc, crontab, mkfs.tmpfs, uuidgen, nm, unzip, and several sysctl
     // config gates.
