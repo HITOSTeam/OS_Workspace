@@ -293,6 +293,11 @@
     // close/wake 路径与 fd 表锁形成锁序阻塞。
     // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
     // 但 LTP driver 给出 PASS 与 ALL TESTS DONE。
+    // &super::UNRUN_FS_LINK_TASKS,
+    // 已在 riscv64 musl+glibc 验证：linktest.sh 默认 1000 个 symlink 与
+    // 1000 个 hardlink 均通过，两个 lane 均为 passed=2/failed=0。
+    // 日志归档：.tmp/output-linktest-focused-pass-20260629-1920.md
+    // sha256=3fc25c05ef9fc0a3519d1b4dd560e184fa160035e9ff2e79f06d74d4637ddf3f。
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
