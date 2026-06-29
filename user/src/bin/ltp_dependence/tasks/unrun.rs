@@ -535,8 +535,14 @@ pub const UNRUN_FS_BIND_TASKS: [&str; 61] = [
 pub const UNRUN_FS_RACER_TASKS: [&str; 1] = ["fs_racer.sh -t 5"];
 
 // fsx filesystem exerciser.
-// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FSX_TASKS: [&str; 1] = ["fsx.sh"];
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/ltp-aiodio.part3
+pub const UNRUN_FSX_TASKS: [&str; 5] = [
+    "fsx-linux -l 500000 -r 4096 -t 4096 -w 4096 -N 10000",
+    "fsx-linux -l 500000 -r 4096 -t 2048 -w 2048 -N 10000",
+    "fsx-linux -l 500000 -r 4096 -N 10000",
+    "fsx-linux -N 10000",
+    "fsx-linux -N 10000 -o 1024",
+];
 
 // Advanced filesystem tests (iso9660, quota).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs

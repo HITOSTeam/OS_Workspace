@@ -301,6 +301,31 @@
     // 已唤醒但未及时运行的 fs_racer worker 拖住。
     // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
     // 但 LTP driver 给出 PASS 与 ALL TESTS DONE；本轮 subagent 已复核。
+    // &super::UNRUN_FSX_TASKS,
+    // 本轮选择 ltp-aiodio.part3 中 fsx-linux 的前五个 upstream 参数
+    // （fsx01-05 形态）作为下一组文件 exerciser 推进目标；旧清单里的
+    // `fsx.sh` 属于 net.nfs 脚本入口，不是本组本地 filesystem fsx 覆盖。
+    // 目前尚未通过，不能计入已验证批次：riscv64 musl+glibc 共 10 RUN/0 PASS/
+    // 10 FAIL，均为 `fsx-linux.c:318: TFAIL: Some file operations failed`，
+    // 无 TBROK/TCONF/TSKIP/TWARN，两个 libc group 都正常 END，且有
+    // ALL TESTS DONE。日志归档：
+    // .tmp/output-fsx-linux-first5-20260629-205647.md
+    // sha256=8d6bd2798e80a8c1bf9b0d219c0c482daf75d12305652f7b0d4f0f6e030a6b8f。
+    // subagent 已复核该日志为完整失败，不是卡死，也没有任何可计通过。
+    // 诊断日志：
+    // .tmp/output-fsx-linux-debug-n50-20260629-205912.md
+    // sha256=6c926cea8352f525ace2ef032d2d2440e1d56e0829aafd26360cd01d41f9b07c。
+    // 该日志显示 glibc 在 truncate shrink 到 146225 后，再从 169005
+    // 写入扩展文件，随后普通 read 在 [146225,169005) 的 hole 起点读到旧
+    // mmap write 数据 `'l'`，Linux 语义应为零填充。已修复 OSInode
+    // direct/buffered/drop flush 写路径：写 offset 超过 inode size 时先
+    // zero-fill sparse gap，再写真实数据。
+    // 修复后的正式 first5 回归仍未通过：10 RUN/0 PASS/10 FAIL，日志归档：
+    // .tmp/output-fsx-linux-first5-zero-gap-20260629-210329.md
+    // sha256=dd8043808504fee5b054647357d8e8682577d5f74781e6ed7b6dd6656df1a2e1。
+    // subagent 已复核该日志仍为完整失败；后续需要继续用 -D 诊断新的首个
+    // mismatch，重点排查 MAP_SHARED file page cache/truncate cache/read buffer
+    // 一致性，而不能把 ALL TESTS DONE 误判为通过。
     // &super::UNRUN_FS_LINK_TASKS,
     // 已在 riscv64 musl+glibc 验证：linktest.sh 默认 1000 个 symlink 与
     // 1000 个 hardlink 均通过，两个 lane 均为 passed=2/failed=0。
