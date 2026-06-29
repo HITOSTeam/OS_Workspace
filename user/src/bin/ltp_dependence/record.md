@@ -285,11 +285,11 @@
     // EBADF/fts_read 警告；数据完整性检查通过，后续 chmod/fts 元数据批次应清理。
     // &super::UNRUN_FS_RACER_TASKS,
     // 已在 riscv64 musl+glibc 验证：fs_racer.sh 的 bounded
-    // concat,rm、create,dir、rename,link,symlink 子组（各 `-t 1`/`-t 3`）
-    // 通过；最终六条 UNRUN_FS_RACER_TASKS 组合回归每个 libc lane 均为
-    // 6 RUN/6 PASS。日志归档：
-    // .tmp/output-fs-racer-rename-link-symlink-focused-20260629-193010.md
-    // sha256=72d8c259c0d04c0a29b320eb18ac84f48afc2e9a2b26d08f290bffd362776d06。
+    // concat,rm、create,dir、rename,link,symlink、list 子组（各 `-t 1`/`-t 3`）
+    // 通过；最终八条 UNRUN_FS_RACER_TASKS 组合回归每个 libc lane 均为
+    // 8 RUN/8 PASS。日志归档：
+    // .tmp/output-fs-racer-list-focused-20260629-193637.md
+    // sha256=a11393aca34549a84db20c19d3c0246acf6412645837ba5dc198311784781100。
     // 本轮修复：dup3 替换目标 fd 时不再在 fd 表锁内析构旧 File，避免 pipe
     // close/wake 路径与 fd 表锁形成锁序阻塞。
     // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
