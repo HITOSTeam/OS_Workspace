@@ -28,6 +28,8 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // Optional adapter for the bundled musl sched_* libc wrappers:
 // const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
+const FOCUS_VFS_SMOKES: bool = false;
+const VFS_SMOKES: [&str; 1] = ["/user/path_cache_invalidation_smoke.bin"];
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 15] = [
     "/user/nested_epoll_smoke.bin",
@@ -301,6 +303,9 @@ fn try_poweroff() -> ! {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
+        if FOCUS_VFS_SMOKES {
+            run_named_cases("vfs-smoke", VFS_SMOKES.as_ref());
+        }
         if FOCUS_READINESS_SMOKES {
             run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
         }
