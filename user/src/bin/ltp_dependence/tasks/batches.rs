@@ -510,6 +510,32 @@ pub const NS_MOUNT_CORE_TASKS: [&str; 10] = [
 
 pub const KCMP_TASKS: [&str; 1] = ["kcmp01"];
 
+pub const FANOTIFY_NOTIFICATION_TASKS: [&str; 23] = [
+    "fanotify01",
+    "fanotify02",
+    "fanotify03",
+    "fanotify04",
+    "fanotify05",
+    "fanotify06",
+    "fanotify07",
+    "fanotify08",
+    "fanotify09",
+    "fanotify10",
+    "fanotify11",
+    "fanotify12",
+    "fanotify13",
+    "fanotify14",
+    "fanotify15",
+    "fanotify16",
+    "fanotify17",
+    "fanotify18",
+    "fanotify19",
+    "fanotify20",
+    "fanotify21",
+    "fanotify22",
+    "fanotify23",
+];
+
 // Fanotify / mount-API / namespace follow-up / pidns / module /
 // misc device-query (ioprio/iopl/perf_event/sysinfo/pathconf) group.
 pub const FANOTIFY_CORE_TASKS: [&str; 20] = [

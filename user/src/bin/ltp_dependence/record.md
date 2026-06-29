@@ -359,18 +359,18 @@
     // pidns05-06/10/13/16-17/30-32、getcpu01 通过。预期 TCONF：
     // pidns12/20 需要不支持的 namespace/kernel config；module 测试缺少
     // test .ko 文件或架构支持；membarrier01 在这里不支持。
-    // FANOTIFY_CORE_TASKS 已在 riscv64 运行且无 FAIL/TBROK；fanotify01-20
-    // 均因当前内核未配置 fanotify 报预期 TCONF，其中 fanotify13 还会跳过
-    // overlayfs-on-tmpfs 子项。
-    // 2026-06-29 复验 fanotify01-20：riscv64 musl+glibc 共 40 RUN/
-    // 40 harness-level PASS/0 FAIL，两个 group 均正常 END 且有 ALL TESTS
-    // DONE；但日志内 TPASS=0，全部为 fanotify 未配置或 overlayfs/tmpfs
-    // 不支持导致的 TCONF/skipped，不能视为真实 fanotify 功能通过。
-    // fanotify10 两个 lane 各为 passed 0/skipped 2/warnings 8，TWARN 均是
-    // cleanup unlink/rmdir ENOENT；无 TFAIL/TBROK。日志归档：
-    // .tmp/output-fanotify-core-20260629-231135.md
-    // sha256=8cb7d97ca12c08741921a3520c68ecb21fcac04f2f43e69b5bd72e15702fe9f0。
-    // 本轮 subagent 已复核：完整结束、预期 TCONF，不是卡死，也不是 TPASS。
+    // 2026-06-30 fanotify 通知/权限路径推进：FANOTIFY_NOTIFICATION_TASKS
+    // 覆盖 fanotify01-23，riscv64 musl+glibc 全组无 FAIL/TFAIL/TBROK/TWARN，
+    // 两个 group 均正常 END 且有 ALL TESTS DONE。fanotify01-12 已有真实
+    // TPASS，其中 fanotify10 两个 lane 各为 passed 303/failed 0/broken 0/
+    // skipped 40/warnings 0。保留预期 TCONF/skipped：FAN_REPORT_FID/
+    // FAN_REPORT_DFID_NAME/FAN_REPORT_PIDFD、FAN_MARK_IGNORE、
+    // FAN_MARK_EVICTABLE、overlayfs-on-tmpfs，以及 fanotify23 依赖的
+    // debugfs/mkfs.ext2；这些不计作 TPASS。日志归档：
+    // .tmp/output-fanotify-10-pass-20260630-011656.md
+    // sha256=9e7bd546d68c23c94848ef2082737e760350586ee6727320a102e3d8c0399722；
+    // .tmp/output-fanotify-01-23-pass-20260630-011828.md
+    // sha256=2c84abbef325721017ccf2e1cdc3c17b3009fafad5dfe8da2ab63acc5008f5d6。
     // &super::FS_BIND_BASE_REGRESSION_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
     // fs_bind01-08.sh、fs_bind07-2.sh 与 fs_bind_regression.sh 通过。
