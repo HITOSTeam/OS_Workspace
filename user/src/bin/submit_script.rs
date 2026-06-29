@@ -29,7 +29,7 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const FOCUS_READINESS_SMOKES: bool = false;
-const READINESS_SMOKES: [&str; 14] = [
+const READINESS_SMOKES: [&str; 15] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
     "/user/nested_epoll_ctl_del_smoke.bin",
@@ -43,6 +43,7 @@ const READINESS_SMOKES: [&str; 14] = [
     "/user/mq_notify_signal_smoke.bin",
     "/user/mq_unlink_epoll_smoke.bin",
     "/user/timerfd_epoll_smoke.bin",
+    "/user/regular_file_select_smoke.bin",
     "/user/dup3_lock_cleanup_smoke.bin",
 ];
 const FOCUS_PROCFS_SMOKES: bool = false;
