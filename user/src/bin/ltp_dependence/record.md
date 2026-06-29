@@ -362,6 +362,15 @@
     // FANOTIFY_CORE_TASKS 已在 riscv64 运行且无 FAIL/TBROK；fanotify01-20
     // 均因当前内核未配置 fanotify 报预期 TCONF，其中 fanotify13 还会跳过
     // overlayfs-on-tmpfs 子项。
+    // 2026-06-29 复验 fanotify01-20：riscv64 musl+glibc 共 40 RUN/
+    // 40 harness-level PASS/0 FAIL，两个 group 均正常 END 且有 ALL TESTS
+    // DONE；但日志内 TPASS=0，全部为 fanotify 未配置或 overlayfs/tmpfs
+    // 不支持导致的 TCONF/skipped，不能视为真实 fanotify 功能通过。
+    // fanotify10 两个 lane 各为 passed 0/skipped 2/warnings 8，TWARN 均是
+    // cleanup unlink/rmdir ENOENT；无 TFAIL/TBROK。日志归档：
+    // .tmp/output-fanotify-core-20260629-231135.md
+    // sha256=8cb7d97ca12c08741921a3520c68ecb21fcac04f2f43e69b5bd72e15702fe9f0。
+    // 本轮 subagent 已复核：完整结束、预期 TCONF，不是卡死，也不是 TPASS。
     // &super::FS_BIND_BASE_REGRESSION_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
     // fs_bind01-08.sh、fs_bind07-2.sh 与 fs_bind_regression.sh 通过。
