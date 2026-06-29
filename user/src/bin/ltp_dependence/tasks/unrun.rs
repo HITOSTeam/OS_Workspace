@@ -532,7 +532,7 @@ pub const UNRUN_FS_BIND_TASKS: [&str; 61] = [
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
 // The fs_racer_* helper scripts are infinite workers; only the top-level
 // driver has a bounded duration and cleanup path.
-pub const UNRUN_FS_RACER_TASKS: [&str; 8] = [
+pub const UNRUN_FS_RACER_TASKS: [&str; 10] = [
     "fs_racer.sh -g concat,rm -t 1",
     "fs_racer.sh -g concat,rm -t 3",
     "fs_racer.sh -g create,dir -t 1",
@@ -541,6 +541,8 @@ pub const UNRUN_FS_RACER_TASKS: [&str; 8] = [
     "fs_racer.sh -g rename,link,symlink -t 3",
     "fs_racer.sh -g list -t 1",
     "fs_racer.sh -g list -t 3",
+    "fs_racer.sh -g all -t 1",
+    "fs_racer.sh -g all -t 3",
 ];
 
 // fsx filesystem exerciser.
