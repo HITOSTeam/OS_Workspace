@@ -29,7 +29,10 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const FOCUS_VFS_SMOKES: bool = false;
-const VFS_SMOKES: [&str; 1] = ["/user/path_cache_invalidation_smoke.bin"];
+const VFS_SMOKES: [&str; 2] = [
+    "/user/path_cache_invalidation_smoke.bin",
+    "/user/exec_write_count_smoke.bin",
+];
 const FOCUS_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 15] = [
     "/user/nested_epoll_smoke.bin",
