@@ -285,14 +285,15 @@
     // EBADF/fts_read 警告；数据完整性检查通过，后续 chmod/fts 元数据批次应清理。
     // &super::UNRUN_FS_RACER_TASKS,
     // 已在 riscv64 musl+glibc 验证：fs_racer.sh 的 bounded
-    // concat,rm 与 create,dir 子组（各 `-t 1`/`-t 3`）通过；最终四条
-    // UNRUN_FS_RACER_TASKS 组合回归每个 libc lane 均为 4 RUN/4 PASS。
-    // 日志归档：.tmp/output-fs-racer-four-entry-combo-pass-20260629-1945.md
-    // sha256=264fceeb875fedd797085ce15f0dc04d12d809fff92a78ffa511e7df005c8d6d。
+    // concat,rm、create,dir、rename,link,symlink 子组（各 `-t 1`/`-t 3`）
+    // 通过；最终六条 UNRUN_FS_RACER_TASKS 组合回归每个 libc lane 均为
+    // 6 RUN/6 PASS。日志归档：
+    // .tmp/output-fs-racer-rename-link-symlink-focused-20260629-193010.md
+    // sha256=72d8c259c0d04c0a29b320eb18ac84f48afc2e9a2b26d08f290bffd362776d06。
     // 本轮修复：dup3 替换目标 fd 时不再在 fd 表锁内析构旧 File，避免 pipe
     // close/wake 路径与 fd 表锁形成锁序阻塞。
     // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
-    // 但 LTP driver 给出 PASS 与 ALL TESTS DONE。
+    // 但 LTP driver 给出 PASS 与 ALL TESTS DONE；本轮 subagent 已复核。
     // &super::UNRUN_FS_LINK_TASKS,
     // 已在 riscv64 musl+glibc 验证：linktest.sh 默认 1000 个 symlink 与
     // 1000 个 hardlink 均通过，两个 lane 均为 passed=2/failed=0。
