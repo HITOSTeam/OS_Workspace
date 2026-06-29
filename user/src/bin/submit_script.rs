@@ -15,6 +15,8 @@ const LTP_ENV_DEV_FS_TYPE: &[u8] = b"LTP_DEV_FS_TYPE=tmpfs\0";
 const LTP_ENV_SINGLE_FS_TYPE: &[u8] = b"LTP_SINGLE_FS_TYPE=tmpfs\0";
 const LTP_ENV_KERNEL: &[u8] = b"KERNEL=/config.gz\0";
 const LTP_ENV_LDD: &[u8] = b"LDD=/extra/bin/ldd\0";
+const LTP_ENV_TMPDIR: &[u8] = b"TMPDIR=/tmp\0";
+const LTP_ENV_FS_RACER_MAX_SIZE: &[u8] = b"FS_RACER_MAX_SIZE=1\0";
 const LTP_ENV_PATH_MUSL: &[u8] =
     b"PATH=/extra/bin:/user:/:/bin:/usr/bin:/musl/ltp/testcases/bin:/musl:/glibc:/glibc/ltp/testcases/bin\0";
 const LTP_ENV_PATH_GLIBC: &[u8] =
@@ -95,8 +97,13 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         // 目前已经进入 /musl 或 /glibc 但是测试在ltp下面
         // 拼接成完整相对路径运行，而不是cd 进入，参考ltp_testcode.sh进行
         let path = resolve_ltp_case_path(dir, script);
+        let work_dir = ltp_case_work_dir(dir, script);
+        if let Some(work_dir) = work_dir.as_ref() {
+            let _ = chdir(work_dir.as_str());
+        }
         println!("RUN LTP CASE {}", script);
         let ret = run_script(path.as_str(), &extra_args);
+        let _ = chdir(dir);
         if ret == 0 {
             println!("PASS LTP CASE {}", script);
         } else {
@@ -105,6 +112,18 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     }
 
     println!("#### OS COMP TEST GROUP END {} ####", group);
+}
+
+fn ltp_case_work_dir(dir: &str, script: &str) -> Option<String> {
+    let basename = script.rsplit('/').next().unwrap_or(script);
+    match basename {
+        "fs_racer.sh" => {
+            let mut work_dir = String::from(dir);
+            work_dir.push_str("/ltp/testcases/bin");
+            Some(work_dir)
+        }
+        _ => None,
+    }
 }
 
 fn path_exists(path: &str) -> bool {
@@ -193,6 +212,7 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         let is_glibc_ltp = name.contains("/glibc/ltp/testcases/");
         let is_slow_net_virt_case =
             name.ends_with("/wireguard01.sh") || name.ends_with("/wireguard02.sh");
+        let is_fs_racer_case = name.ends_with("/fs_racer.sh");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
         let ltp_musl_envs = [
@@ -201,6 +221,18 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
             LTP_ENV_KERNEL.as_ptr(),
             LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_PATH_MUSL.as_ptr(),
+            LTP_ENV_ROOT_MUSL.as_ptr(),
+            core::ptr::null(),
+        ];
+        let ltp_musl_fs_racer_envs = [
+            LTP_ENV_DEV.as_ptr(),
+            LTP_ENV_DEV_FS_TYPE.as_ptr(),
+            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
+            LTP_ENV_KERNEL.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_TMPDIR.as_ptr(),
+            LTP_ENV_FS_RACER_MAX_SIZE.as_ptr(),
             LTP_ENV_PATH_MUSL.as_ptr(),
             LTP_ENV_ROOT_MUSL.as_ptr(),
             core::ptr::null(),
@@ -226,6 +258,18 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             LTP_ENV_ROOT_GLIBC.as_ptr(),
             core::ptr::null(),
         ];
+        let ltp_glibc_fs_racer_envs = [
+            LTP_ENV_DEV.as_ptr(),
+            LTP_ENV_DEV_FS_TYPE.as_ptr(),
+            LTP_ENV_SINGLE_FS_TYPE.as_ptr(),
+            LTP_ENV_KERNEL.as_ptr(),
+            LTP_ENV_LDD.as_ptr(),
+            LTP_ENV_TMPDIR.as_ptr(),
+            LTP_ENV_FS_RACER_MAX_SIZE.as_ptr(),
+            LTP_ENV_PATH_GLIBC.as_ptr(),
+            LTP_ENV_ROOT_GLIBC.as_ptr(),
+            core::ptr::null(),
+        ];
         let ltp_glibc_slow_envs = [
             LTP_ENV_DEV.as_ptr(),
             LTP_ENV_DEV_FS_TYPE.as_ptr(),
@@ -243,13 +287,17 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             // CPU-heavy under single-core QEMU, so use LTP's timeout multiplier
             // only for that virtual-network batch.
             if is_musl_ltp {
-                if is_slow_net_virt_case {
+                if is_fs_racer_case {
+                    &ltp_musl_fs_racer_envs[..]
+                } else if is_slow_net_virt_case {
                     &ltp_musl_slow_envs[..]
                 } else {
                     &ltp_musl_envs[..]
                 }
             } else if is_glibc_ltp {
-                if is_slow_net_virt_case {
+                if is_fs_racer_case {
+                    &ltp_glibc_fs_racer_envs[..]
+                } else if is_slow_net_virt_case {
                     &ltp_glibc_slow_envs[..]
                 } else {
                     &ltp_glibc_envs[..]

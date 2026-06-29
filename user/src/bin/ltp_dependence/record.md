@@ -283,6 +283,16 @@
     // 预期 TCONF：fs_fill 报 tmpfs 可用内存不足，squashfs01 报当前镜像缺少
     // mksquashfs。fs_di 在深层随机目录树上仍打印非致命 coreutils chmod -R
     // EBADF/fts_read 警告；数据完整性检查通过，后续 chmod/fts 元数据批次应清理。
+    // &super::UNRUN_FS_RACER_TASKS,
+    // fs_racer.sh -g concat,rm -t 1 与单独运行的
+    // fs_racer.sh -g concat,rm -t 3 已在 riscv64 musl+glibc 验证通过；
+    // 后续连续组合 `-t 1` + `-t 3` 也已在 riscv64 musl+glibc 验证通过，
+    // 日志归档：.tmp/output-fs-racer-concat-rm-t1-t3-pass-clean-20260629-1905.md
+    // sha256=5c6942b535dce84e4cfd90c3e6b5feeff2261d95b05379baccc1f8b4ef402ad1。
+    // 本轮修复：dup3 替换目标 fd 时不再在 fd 表锁内析构旧 File，避免 pipe
+    // close/wake 路径与 fd 表锁形成锁序阻塞。
+    // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
+    // 但 LTP driver 给出 PASS 与 ALL TESTS DONE。
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
