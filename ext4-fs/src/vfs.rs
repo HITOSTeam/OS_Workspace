@@ -94,6 +94,26 @@ fn inode_caches_invalidate(inode_num: u32, block_device: &Arc<dyn BlockDevice>) 
     extents_cache_invalidate(inode_num, block_device);
 }
 
+#[cfg(debug_assertions)]
+fn debug_assert_extents_ordered(extents: &[Ext4Extent]) {
+    for pair in extents.windows(2) {
+        let prev = pair[0];
+        let next = pair[1];
+        let prev_end = prev.ee_block.saturating_add(prev.len());
+        debug_assert!(
+            prev_end <= next.ee_block,
+            "ext4 extents are not sorted or overlap: prev [{}, {}), next [{}, {})",
+            prev.ee_block,
+            prev_end,
+            next.ee_block,
+            next.ee_block.saturating_add(next.len())
+        );
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_assert_extents_ordered(_extents: &[Ext4Extent]) {}
+
 /// Virtual filesystem inode
 pub struct Inode {
     /// Inode number
@@ -596,10 +616,9 @@ impl Inode {
                 data
             });
             let extents = self.parse_extent_tree(&inode_data, block_size);
+            debug_assert_extents_ordered(&extents);
             extents_cache_put(self.inode_num, &self.block_device, extents)
         };
-        // Sparse regions inside an extent-based file must read back as zeros.
-        buf.fill(0);
         self.read_from_extents(&extents, offset, buf, block_size)
     }
 
@@ -716,6 +735,7 @@ impl Inode {
     ) -> usize {
         let file_start = offset;
         let file_end = offset.saturating_add(buf.len());
+        let mut covered_until = file_start;
 
         for extent in extents {
             let extent_start = extent.ee_block as usize * block_size;
@@ -732,13 +752,23 @@ impl Inode {
             if read_end <= read_start {
                 continue;
             }
+            if read_end <= covered_until {
+                continue;
+            }
+
+            let copy_start = core::cmp::max(read_start, covered_until);
+            if copy_start > covered_until {
+                let gap_start = covered_until - file_start;
+                let gap_end = copy_start - file_start;
+                buf[gap_start..gap_end].fill(0);
+            }
 
             // Destination offset in the caller's buffer (relative to requested `offset`).
-            let mut dst_off = read_start - file_start;
-            let mut remaining = read_end - read_start;
+            let mut dst_off = copy_start - file_start;
+            let mut remaining = read_end - copy_start;
 
             // Calculate physical position within the extent.
-            let offset_in_extent = read_start - extent_start;
+            let offset_in_extent = copy_start - extent_start;
             let mut cur_block = extent.start_block() as usize + offset_in_extent / block_size;
             let mut phys_off = offset_in_extent % block_size;
 
@@ -757,6 +787,12 @@ impl Inode {
                 phys_off = 0;
                 cur_block += 1;
             }
+            covered_until = read_end;
+        }
+
+        if covered_until < file_end {
+            let gap_start = covered_until - file_start;
+            buf[gap_start..].fill(0);
         }
 
         buf.len()
