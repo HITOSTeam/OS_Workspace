@@ -32,8 +32,14 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
 const RUN_NON_LTP_BASELINE: bool = true;
 const RUN_LTP_GROUPS: bool = false;
+const RUN_VFS_SMOKES: bool = false;
+const VFS_SMOKES: [&str; 3] = [
+    "/user/path_cache_invalidation_smoke.bin",
+    "/user/pending_write_stat_smoke.bin",
+    "/user/exec_write_count_smoke.bin",
+];
 const RUN_READINESS_SMOKES: bool = false;
-const READINESS_SMOKES: [&str; 14] = [
+const READINESS_SMOKES: [&str; 15] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
     "/user/nested_epoll_ctl_del_smoke.bin",
@@ -47,6 +53,7 @@ const READINESS_SMOKES: [&str; 14] = [
     "/user/mq_notify_signal_smoke.bin",
     "/user/mq_unlink_epoll_smoke.bin",
     "/user/timerfd_epoll_smoke.bin",
+    "/user/regular_file_select_smoke.bin",
     "/user/dup3_lock_cleanup_smoke.bin",
 ];
 const RUN_PROCFS_SMOKES: bool = false;
@@ -393,6 +400,9 @@ fn try_poweroff() -> ! {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
+        if RUN_VFS_SMOKES {
+            run_named_cases("vfs-smoke", VFS_SMOKES.as_ref());
+        }
         if RUN_READINESS_SMOKES {
             run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
         }
