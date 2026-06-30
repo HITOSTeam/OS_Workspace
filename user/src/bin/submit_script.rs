@@ -68,10 +68,6 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
         // 目前已经进入 /musl 或 /glibc 但是测试在ltp下面
         // 拼接成完整相对路径运行，而不是cd 进入，参考ltp_testcode.sh进行
         let path = resolve_ltp_case_path(dir, script);
-        let work_dir = ltp_case_work_dir(dir, script);
-        if let Some(work_dir) = work_dir.as_ref() {
-            let _ = chdir(work_dir.as_str());
-        }
         println!("RUN LTP CASE {}", script);
         let ret = run_script(path.as_str(), &extra_args);
         let _ = chdir(dir);
@@ -83,18 +79,6 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     }
 
     println!("#### OS COMP TEST GROUP END {} ####", group);
-}
-
-fn ltp_case_work_dir(dir: &str, script: &str) -> Option<String> {
-    let basename = script.rsplit('/').next().unwrap_or(script);
-    match basename {
-        "fs_racer.sh" => {
-            let mut work_dir = String::from(dir);
-            work_dir.push_str("/ltp/testcases/bin");
-            Some(work_dir)
-        }
-        _ => None,
-    }
 }
 
 fn path_exists(path: &str) -> bool {
