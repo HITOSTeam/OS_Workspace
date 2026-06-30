@@ -594,7 +594,7 @@
     // Focused sendfile01.sh now passes on riscv64 musl+glibc after making TCP
     // accept sleep on the listener poll queue and making close cooperatively
     // drain queued TCP data before removing the smoltcp handle. Focused
-    // unshare01.sh passes on riscv64 musl+glibc after adding a real unshare
+    // unshare01.sh passes on riscv64 musl+glibc with the util-linux unshare
     // command, user namespace id-map views, /proc/sys/user/max_mnt_namespaces,
     // and Linux-like shared root mount propagation across CLONE_NEWNS; the 8
     // subtests are all TPASS, including --mount --propagation shared. Follow-up
