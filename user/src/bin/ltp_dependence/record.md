@@ -284,23 +284,10 @@
     // mksquashfs。fs_di 在深层随机目录树上仍打印非致命 coreutils chmod -R
     // EBADF/fts_read 警告；数据完整性检查通过，后续 chmod/fts 元数据批次应清理。
     // &super::UNRUN_FS_RACER_TASKS,
-    // 已在 riscv64 musl+glibc 验证：fs_racer.sh 的 bounded
-    // concat,rm、create,dir、rename,link,symlink、list 子组以及 all 组合
-    // （各 `-t 1`/`-t 3`）通过；最终十条 UNRUN_FS_RACER_TASKS 组合回归
-    // 每个 libc lane 均为 10 RUN/10 PASS。日志归档：
-    // .tmp/output-fs-racer-all-combo-20260629-194436.md
-    // sha256=9b34395b5e1d18aa9d1990502fc8c217c86ac1ce0973386aff2abf2c185b0eec。
-    // 原始 upstream 条目 `fs_racer.sh -t 5` 也已在 riscv64 musl+glibc
-    // 无 cleanup marker/ktrace 状态下验证通过：两个 libc lane 均为
-    // 1 RUN/1 PASS，并正常出现 group end 与 ALL TESTS DONE。日志归档：
-    // .tmp/output-fs-racer-t5-clean-resched-postwake-both-20260629-204715.md
-    // sha256=ad8d6e20d763217548d78a4d44951e2c710e4ae393ebde7fcd271c3a17f5128e。
-    // 本轮修复：dup3 替换目标 fd 时不再在 fd 表锁内析构旧 File，避免 pipe
-    // close/wake 路径与 fd 表锁形成锁序阻塞；信号投递在标记 pending signal
-    // 并唤醒目标后显式请求对应 hart 重新调度，避免 killall cleanup 阶段被
-    // 已唤醒但未及时运行的 fs_racer worker 拖住。
-    // cleanup 阶段可能打印非致命 "Directory not empty"/"no process found" 警告，
-    // 但 LTP driver 给出 PASS 与 ALL TESTS DONE；本轮 subagent 已复核。
+    // 尚未按未改动的 upstream LTP 脚本重新计入已验证批次。此前 bounded
+    // fs_racer 探针依赖 rootfs overlay 修改测试脚本/worker 行为，不能作为
+    // upstream LTP 通过依据；该 overlay 已从提交中移除，后续需要重跑
+    // `fs_racer.sh -t 5` 后再更新记录。
     // &super::UNRUN_FSX_TASKS,
     // 本轮选择 ltp-aiodio.part3 中 fsx-linux 的前五个 upstream 参数
     // （fsx01-05 形态）作为下一组文件 exerciser 推进目标；旧清单里的
