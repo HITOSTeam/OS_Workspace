@@ -7,9 +7,7 @@ extern crate user;
 
 use alloc::{string::String, vec::Vec};
 mod ltp_dependence;
-mod submit_smokes;
 use ltp_dependence::*;
-use submit_smokes::*;
 use user::syscall::{self, RDONLY, chdir, close, execve, exit, fork, open, sync, waitpid};
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
@@ -130,20 +128,6 @@ fn resolve_ltp_case_path(dir: &str, script: &str) -> String {
     }
 
     installed
-}
-
-fn run_named_cases(group: &str, cases: &[&str]) {
-    println!("#### OS COMP TEST GROUP START {} ####", group);
-    for &case in cases {
-        println!("RUN CASE {}", case);
-        let ret = run_script(case, &[]);
-        if ret == 0 {
-            println!("PASS CASE {}", case);
-        } else {
-            println!("FAIL CASE {} : {}", case, ret);
-        }
-    }
-    println!("#### OS COMP TEST GROUP END {} ####", group);
 }
 
 fn run_non_ltp_baseline_scripts() {
@@ -323,18 +307,6 @@ fn try_poweroff() -> ! {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
-        if RUN_VFS_SMOKES {
-            run_named_cases("vfs-smoke", VFS_SMOKES.as_ref());
-        }
-        if RUN_READINESS_SMOKES {
-            run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
-        }
-        if RUN_PROCFS_SMOKES {
-            run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
-        }
-        if RUN_MEMORY_SMOKES {
-            run_named_cases("memory-smoke", MEMORY_SMOKES.as_ref());
-        }
         if RUN_NON_LTP_BASELINE {
             run_non_ltp_baseline_scripts();
         }
