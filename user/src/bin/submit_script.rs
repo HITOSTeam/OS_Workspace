@@ -30,7 +30,9 @@ const LTP_ENV_ROOT_GLIBC: &[u8] = b"LTPROOT=/glibc/ltp\0";
 // Optional adapter for the bundled musl sched_* libc wrappers:
 // const LTP_ENV_MUSL_SCHED_PRELOAD: &[u8] = b"LD_PRELOAD=/extra/libltp_sched_fix.so\0";
 const LTP_ENV_TIMEOUT_MUL_SLOW: &[u8] = b"LTP_TIMEOUT_MUL=4\0";
-const FOCUS_READINESS_SMOKES: bool = false;
+const RUN_NON_LTP_BASELINE: bool = true;
+const RUN_LTP_GROUPS: bool = false;
+const RUN_READINESS_SMOKES: bool = false;
 const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
@@ -47,13 +49,13 @@ const READINESS_SMOKES: [&str; 14] = [
     "/user/timerfd_epoll_smoke.bin",
     "/user/dup3_lock_cleanup_smoke.bin",
 ];
-const FOCUS_PROCFS_SMOKES: bool = false;
+const RUN_PROCFS_SMOKES: bool = false;
 const PROCFS_SMOKES: [&str; 3] = [
     "/user/proc_magic_links_smoke.bin",
     "/user/mount_namespace_smoke.bin",
     "/user/proc_maps_stack_smoke.bin",
 ];
-const FOCUS_MEMORY_SMOKES: bool = false;
+const RUN_MEMORY_SMOKES: bool = false;
 const MEMORY_SMOKES: [&str; 15] = [
     "/user/file_mmap_lazy_fault_smoke.bin",
     "/user/shared_file_alias_smoke.bin",
@@ -70,6 +72,18 @@ const MEMORY_SMOKES: [&str; 15] = [
     "/user/growsdown_guard_smoke.bin",
     "/user/stack_madvise_dontneed_smoke.bin",
     "/user/private_file_madvise_dontneed_smoke.bin",
+];
+const NON_LTP_BASELINE_SCRIPTS: [(&str, &str); 10] = [
+    ("basic", "basic_testcode.sh"),
+    ("busybox", "busybox_testcode.sh"),
+    ("lua", "lua_testcode.sh"),
+    ("netperf", "netperf_testcode.sh"),
+    ("cyclictest", "cyclictest_testcode.sh"),
+    ("iozone", "iozone_testcode.sh"),
+    ("libctest", "libctest_testcode.sh"),
+    ("libcbench", "libcbench_testcode.sh"),
+    ("unixbench", "unixbench_testcode.sh"),
+    ("iperf", "iperf_testcode.sh"),
 ];
 
 /// 运行ltp测试 使用 的脚本，由于目前ltp存在部分没法通过以及卡死
@@ -171,6 +185,37 @@ fn run_named_cases(group: &str, cases: &[&str]) {
         }
     }
     println!("#### OS COMP TEST GROUP END {} ####", group);
+}
+
+fn run_non_ltp_baseline_scripts() {
+    println!("#### OS COMP TEST GROUP START non-ltp-baseline ####");
+    for &(group, script) in NON_LTP_BASELINE_SCRIPTS.iter() {
+        run_libc_script_group("/musl", group, script);
+        run_libc_script_group("/glibc", group, script);
+    }
+    println!("#### OS COMP TEST GROUP END non-ltp-baseline ####");
+}
+
+fn run_libc_script_group(dir: &str, group: &str, script: &str) {
+    let libc = if dir.contains("musl") {
+        "musl"
+    } else if dir.contains("glibc") {
+        "glibc"
+    } else {
+        "unknown"
+    };
+    println!("RUN OS COMP CASE {} {}", libc, group);
+    let _ = chdir(dir);
+    let mut script_path = String::from(dir);
+    script_path.push('/');
+    script_path.push_str(script);
+    let shell_args = [script_path.as_str()];
+    let ret = run_script("/bin/sh", &shell_args);
+    if ret == 0 {
+        println!("PASS OS COMP CASE {} {}", libc, group);
+    } else {
+        println!("FAIL OS COMP CASE {} {} : {}", libc, group, ret);
+    }
 }
 
 /// 运行name 的测试文件。使用fork + exec子进程进行
@@ -348,134 +393,29 @@ fn try_poweroff() -> ! {
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
-        if FOCUS_READINESS_SMOKES {
+        if RUN_READINESS_SMOKES {
             run_named_cases("readiness-smoke", READINESS_SMOKES.as_ref());
         }
-        if FOCUS_PROCFS_SMOKES {
+        if RUN_PROCFS_SMOKES {
             run_named_cases("procfs-smoke", PROCFS_SMOKES.as_ref());
         }
-        if FOCUS_MEMORY_SMOKES {
+        if RUN_MEMORY_SMOKES {
             run_named_cases("memory-smoke", MEMORY_SMOKES.as_ref());
         }
-        // basic_test
-
-        // chdir("/musl");
-        // run_script("/musl/basic_testcode.sh");
-
-        // chdir("/glibc");
-        // run_script("/glibc/basic_testcode.sh");
-        // // busybox
-        // chdir("/musl");
-        // run_script("/musl/busybox_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/busybox_testcode.sh");
-        // //lua
-        // chdir("/musl");
-        // run_script("/musl/lua_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/lua_testcode.sh");
-        // // netperf
-        // chdir("/musl");
-        // run_script("/musl/netperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/netperf_testcode.sh");
-
-        // // below tests  take too long time
-
-        // //cyclic
-        // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh");
-
-        // // iozone
-        // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh");
-
-        // // libctest
-        // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh");
-
-        // // libbench
-        // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh");
-
-        run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
-
-        // // iperf (run last, to prevent the possible dead lock (dont know why todo))
-        // chdir("/musl");
-        // run_script("/musl/iperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iperf_testcode.sh");
+        if RUN_NON_LTP_BASELINE {
+            run_non_ltp_baseline_scripts();
+        }
+        if RUN_LTP_GROUPS {
+            run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        }
     }
     if !cfg!(target_arch = "riscv64") {
-        // basic_test
-
-        // chdir("/musl");
-        // run_script("/musl/basic_testcode.sh");
-
-        // chdir("/glibc");
-        // run_script("/glibc/basic_testcode.sh");
-        // // busybox
-        // chdir("/musl");
-        // run_script("/musl/busybox_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/busybox_testcode.sh");
-        // //lua
-        // chdir("/musl");
-        // run_script("/musl/lua_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/lua_testcode.sh");
-        // // netperf
-        // chdir("/musl");
-        // run_script("/musl/netperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/netperf_testcode.sh");
-
-        // // below tests  take too long time
-
-        // //cyclic
-        // chdir("/musl");
-        // run_script("/musl/cyclictest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/cyclictest_testcode.sh");
-
-        // // iozone
-        // chdir("/musl");
-        // run_script("/musl/iozone_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iozone_testcode.sh");
-
-        // libctest
-        // chdir("/musl");
-        // run_script("/musl/libctest_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/libctest_testcode.sh");
-
-        // libbench
-        // chdir("/musl");
-        // run_script("/musl/libcbench_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/libcbench_testcode.sh");
-
-        // unixbench_testcode.sh
-        // chdir("/musl");
-        // run_script("/musl/unixbench_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/unixbench_testcode.sh");
-
-        run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
-        // // iperf (run last, to prevent the possible dead lock (dont know why todo))
-        // chdir("/musl");
-        // run_script("/musl/iperf_testcode.sh");
-        // chdir("/glibc");
-        // run_script("/glibc/iperf_testcode.sh");
+        if RUN_NON_LTP_BASELINE {
+            run_non_ltp_baseline_scripts();
+        }
+        if RUN_LTP_GROUPS {
+            run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        }
     }
 
     println!("#### ALL TESTS DONE ####");
