@@ -114,15 +114,6 @@ fn resolve_ltp_case_path(dir: &str, script: &str) -> String {
     installed
 }
 
-fn run_non_ltp_baseline_scripts() {
-    println!("#### OS COMP TEST GROUP START non-ltp-baseline ####");
-    for &(group, script) in NON_LTP_BASELINE_SCRIPTS.iter() {
-        run_libc_script_group("/musl", group, script);
-        run_libc_script_group("/glibc", group, script);
-    }
-    println!("#### OS COMP TEST GROUP END non-ltp-baseline ####");
-}
-
 fn run_libc_script_group(dir: &str, group: &str, script: &str) {
     let libc = if dir.contains("musl") {
         "musl"
@@ -289,20 +280,19 @@ fn try_poweroff() -> ! {
 
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
-    // only run for riscv arch
-    if cfg!(target_arch = "riscv64") {
-        if RUN_NON_LTP_BASELINE {
-            run_non_ltp_baseline_scripts();
+    if RUN_NON_LTP_BASELINE {
+        println!("#### OS COMP TEST GROUP START non-ltp-baseline ####");
+        for &(group, script) in NON_LTP_BASELINE_SCRIPTS.iter() {
+            run_libc_script_group("/musl", group, script);
+            run_libc_script_group("/glibc", group, script);
         }
-        if RUN_LTP_GROUPS {
-            run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
-        }
+        println!("#### OS COMP TEST GROUP END non-ltp-baseline ####");
     }
-    if !cfg!(target_arch = "riscv64") {
-        if RUN_NON_LTP_BASELINE {
-            run_non_ltp_baseline_scripts();
-        }
-        if RUN_LTP_GROUPS {
+
+    if RUN_LTP_GROUPS {
+        if cfg!(target_arch = "riscv64") {
+            run_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
+        } else {
             run_non_riscv_ltp_groups(run_part_of_ltp_script_in_dir);
         }
     }
