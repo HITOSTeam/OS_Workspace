@@ -464,24 +464,7 @@ pub const UNRUN_COMMANDS_TASKS: [&str; 28] = [
 
 // Bind-mount shared-subtree tests (LTP "fs_bind" runtest suite).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs_bind
-pub const UNRUN_FS_BIND_TASKS: [&str; 87] = [
-    "fs_bind07-2.sh",
-    "fs_bind09.sh",
-    "fs_bind10.sh",
-    "fs_bind11.sh",
-    "fs_bind12.sh",
-    "fs_bind13.sh",
-    "fs_bind14.sh",
-    "fs_bind15.sh",
-    "fs_bind16.sh",
-    "fs_bind17.sh",
-    "fs_bind18.sh",
-    "fs_bind19.sh",
-    "fs_bind20.sh",
-    "fs_bind21.sh",
-    "fs_bind22.sh",
-    "fs_bind23.sh",
-    "fs_bind24.sh",
+pub const UNRUN_FS_BIND_TASKS: [&str; 61] = [
     "fs_bind_cloneNS01.sh",
     "fs_bind_cloneNS02.sh",
     "fs_bind_cloneNS03.sh",
@@ -511,15 +494,6 @@ pub const UNRUN_FS_BIND_TASKS: [&str; 87] = [
     "fs_bind_move20.sh",
     "fs_bind_move21.sh",
     "fs_bind_move22.sh",
-    "fs_bind_rbind01.sh",
-    "fs_bind_rbind02.sh",
-    "fs_bind_rbind03.sh",
-    "fs_bind_rbind04.sh",
-    "fs_bind_rbind05.sh",
-    "fs_bind_rbind06.sh",
-    "fs_bind_rbind07-2.sh",
-    "fs_bind_rbind07.sh",
-    "fs_bind_rbind08.sh",
     "fs_bind_rbind09.sh",
     "fs_bind_rbind10.sh",
     "fs_bind_rbind11.sh",
@@ -556,22 +530,19 @@ pub const UNRUN_FS_BIND_TASKS: [&str; 87] = [
 
 // Filesystem race/stress tests.
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FS_RACER_TASKS: [&str; 10] = [
-    "fs_racer.sh",
-    "fs_racer_dir_create.sh",
-    "fs_racer_dir_test.sh",
-    "fs_racer_file_concat.sh",
-    "fs_racer_file_create.sh",
-    "fs_racer_file_link.sh",
-    "fs_racer_file_list.sh",
-    "fs_racer_file_rename.sh",
-    "fs_racer_file_rm.sh",
-    "fs_racer_file_symlink.sh",
-];
+// The fs_racer_* helper scripts are infinite workers; only the top-level
+// driver has a bounded duration and cleanup path.
+pub const UNRUN_FS_RACER_TASKS: [&str; 1] = ["fs_racer.sh -t 5"];
 
 // fsx filesystem exerciser.
-// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs
-pub const UNRUN_FSX_TASKS: [&str; 1] = ["fsx.sh"];
+// Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/ltp-aiodio.part3
+pub const UNRUN_FSX_TASKS: [&str; 5] = [
+    "fsx-linux -l 500000 -r 4096 -t 4096 -w 4096 -N 10000",
+    "fsx-linux -l 500000 -r 4096 -t 2048 -w 2048 -N 10000",
+    "fsx-linux -l 500000 -r 4096 -N 10000",
+    "fsx-linux -N 10000",
+    "fsx-linux -N 10000 -o 1024",
+];
 
 // Advanced filesystem tests (iso9660, quota).
 // Runtest source: testsuits-for-oskernel/ltp-full-20240524/runtest/fs

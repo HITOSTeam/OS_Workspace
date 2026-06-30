@@ -510,6 +510,32 @@ pub const NS_MOUNT_CORE_TASKS: [&str; 10] = [
 
 pub const KCMP_TASKS: [&str; 1] = ["kcmp01"];
 
+pub const FANOTIFY_NOTIFICATION_TASKS: [&str; 23] = [
+    "fanotify01",
+    "fanotify02",
+    "fanotify03",
+    "fanotify04",
+    "fanotify05",
+    "fanotify06",
+    "fanotify07",
+    "fanotify08",
+    "fanotify09",
+    "fanotify10",
+    "fanotify11",
+    "fanotify12",
+    "fanotify13",
+    "fanotify14",
+    "fanotify15",
+    "fanotify16",
+    "fanotify17",
+    "fanotify18",
+    "fanotify19",
+    "fanotify20",
+    "fanotify21",
+    "fanotify22",
+    "fanotify23",
+];
+
 // Fanotify / mount-API / namespace follow-up / pidns / module /
 // misc device-query (ioprio/iopl/perf_event/sysinfo/pathconf) group.
 pub const FANOTIFY_CORE_TASKS: [&str; 20] = [
@@ -579,6 +605,132 @@ pub const NS_MOUNT_FOLLOWUP_TASKS: [&str; 20] = [
     "pidns02",
     "pidns03",
     "pidns04",
+];
+
+pub const FS_BIND_BASE_REGRESSION_TASKS: [&str; 10] = [
+    "fs_bind01.sh",
+    "fs_bind02.sh",
+    "fs_bind03.sh",
+    "fs_bind04.sh",
+    "fs_bind05.sh",
+    "fs_bind06.sh",
+    "fs_bind07.sh",
+    "fs_bind07-2.sh",
+    "fs_bind08.sh",
+    "fs_bind_regression.sh",
+];
+
+pub const FS_BIND_MAIN_FOLLOWUP_TASKS: [&str; 17] = [
+    "fs_bind07-2.sh",
+    "fs_bind09.sh",
+    "fs_bind10.sh",
+    "fs_bind11.sh",
+    "fs_bind12.sh",
+    "fs_bind13.sh",
+    "fs_bind14.sh",
+    "fs_bind15.sh",
+    "fs_bind16.sh",
+    "fs_bind17.sh",
+    "fs_bind18.sh",
+    "fs_bind19.sh",
+    "fs_bind20.sh",
+    "fs_bind21.sh",
+    "fs_bind22.sh",
+    "fs_bind23.sh",
+    "fs_bind24.sh",
+];
+
+pub const FS_BIND_CLONENS_TASKS: [&str; 7] = [
+    "fs_bind_cloneNS01.sh",
+    "fs_bind_cloneNS02.sh",
+    "fs_bind_cloneNS03.sh",
+    "fs_bind_cloneNS04.sh",
+    "fs_bind_cloneNS05.sh",
+    "fs_bind_cloneNS06.sh",
+    "fs_bind_cloneNS07.sh",
+];
+
+pub const FS_BIND_RBIND_PROPAGATION_TASKS: [&str; 9] = [
+    "fs_bind_rbind01.sh",
+    "fs_bind_rbind02.sh",
+    "fs_bind_rbind03.sh",
+    "fs_bind_rbind04.sh",
+    "fs_bind_rbind05.sh",
+    "fs_bind_rbind06.sh",
+    "fs_bind_rbind07-2.sh",
+    "fs_bind_rbind07.sh",
+    "fs_bind_rbind08.sh",
+];
+
+pub const FS_BIND_RBIND_CHILD_TASKS: [&str; 8] = [
+    "fs_bind_rbind09.sh",
+    "fs_bind_rbind10.sh",
+    "fs_bind_rbind11.sh",
+    "fs_bind_rbind12.sh",
+    "fs_bind_rbind13.sh",
+    "fs_bind_rbind14.sh",
+    "fs_bind_rbind15.sh",
+    "fs_bind_rbind16.sh",
+];
+
+pub const FS_BIND_RBIND_SHARED_SUBTREE_TASKS: [&str; 8] = [
+    "fs_bind_rbind17.sh",
+    "fs_bind_rbind18.sh",
+    "fs_bind_rbind19.sh",
+    "fs_bind_rbind20.sh",
+    "fs_bind_rbind21.sh",
+    "fs_bind_rbind22.sh",
+    "fs_bind_rbind23.sh",
+    "fs_bind_rbind24.sh",
+];
+
+pub const FS_BIND_RBIND_SPECIAL_CHILD_TASKS: [&str; 8] = [
+    "fs_bind_rbind25.sh",
+    "fs_bind_rbind26.sh",
+    "fs_bind_rbind27.sh",
+    "fs_bind_rbind28.sh",
+    "fs_bind_rbind29.sh",
+    "fs_bind_rbind30.sh",
+    "fs_bind_rbind31.sh",
+    "fs_bind_rbind32.sh",
+];
+
+pub const FS_BIND_RBIND_TOPOLOGY_TASKS: [&str; 7] = [
+    "fs_bind_rbind33.sh",
+    "fs_bind_rbind34.sh",
+    "fs_bind_rbind35.sh",
+    "fs_bind_rbind36.sh",
+    "fs_bind_rbind37.sh",
+    "fs_bind_rbind38.sh",
+    "fs_bind_rbind39.sh",
+];
+
+pub const FS_BIND_MOVE_CORE_TASKS: [&str; 12] = [
+    "fs_bind_move01.sh",
+    "fs_bind_move02.sh",
+    "fs_bind_move03.sh",
+    "fs_bind_move04.sh",
+    "fs_bind_move05.sh",
+    "fs_bind_move06.sh",
+    "fs_bind_move07.sh",
+    "fs_bind_move08.sh",
+    "fs_bind_move09.sh",
+    "fs_bind_move10.sh",
+    "fs_bind_move11.sh",
+    "fs_bind_move12.sh",
+];
+
+pub const FS_BIND_MOVE_NESTED_TASKS: [&str; 10] = [
+    "fs_bind_move13.sh",
+    "fs_bind_move14.sh",
+    "fs_bind_move15.sh",
+    "fs_bind_move16.sh",
+    "fs_bind_move17.sh",
+    "fs_bind_move18.sh",
+    "fs_bind_move19.sh",
+    "fs_bind_move20.sh",
+    "fs_bind_move21.sh",
+    "fs_bind_move22.sh",
 ];
 
 pub const PIDNS_MODULE_TASKS: [&str; 20] = [

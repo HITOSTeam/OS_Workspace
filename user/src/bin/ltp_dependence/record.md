@@ -283,6 +283,41 @@
     // 预期 TCONF：fs_fill 报 tmpfs 可用内存不足，squashfs01 报当前镜像缺少
     // mksquashfs。fs_di 在深层随机目录树上仍打印非致命 coreutils chmod -R
     // EBADF/fts_read 警告；数据完整性检查通过，后续 chmod/fts 元数据批次应清理。
+    // &super::UNRUN_FS_RACER_TASKS,
+    // 尚未按未改动的 upstream LTP 脚本重新计入已验证批次。此前 bounded
+    // fs_racer 探针依赖 rootfs overlay 修改测试脚本/worker 行为，不能作为
+    // upstream LTP 通过依据；该 overlay 已从提交中移除，后续需要重跑
+    // `fs_racer.sh -t 5` 后再更新记录。
+    // &super::UNRUN_FSX_TASKS,
+    // 本轮选择 ltp-aiodio.part3 中 fsx-linux 的前五个 upstream 参数
+    // （fsx01-05 形态）作为下一组文件 exerciser 推进目标；旧清单里的
+    // `fsx.sh` 属于 net.nfs 脚本入口，不是本组本地 filesystem fsx 覆盖。
+    // 目前尚未通过，不能计入已验证批次：riscv64 musl+glibc 共 10 RUN/0 PASS/
+    // 10 FAIL，均为 `fsx-linux.c:318: TFAIL: Some file operations failed`，
+    // 无 TBROK/TCONF/TSKIP/TWARN，两个 libc group 都正常 END，且有
+    // ALL TESTS DONE。日志归档：
+    // .tmp/output-fsx-linux-first5-20260629-205647.md
+    // sha256=8d6bd2798e80a8c1bf9b0d219c0c482daf75d12305652f7b0d4f0f6e030a6b8f。
+    // subagent 已复核该日志为完整失败，不是卡死，也没有任何可计通过。
+    // 诊断日志：
+    // .tmp/output-fsx-linux-debug-n50-20260629-205912.md
+    // sha256=6c926cea8352f525ace2ef032d2d2440e1d56e0829aafd26360cd01d41f9b07c。
+    // 该日志显示 glibc 在 truncate shrink 到 146225 后，再从 169005
+    // 写入扩展文件，随后普通 read 在 [146225,169005) 的 hole 起点读到旧
+    // mmap write 数据 `'l'`，Linux 语义应为零填充。已修复 OSInode
+    // direct/buffered/drop flush 写路径：写 offset 超过 inode size 时先
+    // zero-fill sparse gap，再写真实数据。
+    // 修复后的正式 first5 回归仍未通过：10 RUN/0 PASS/10 FAIL，日志归档：
+    // .tmp/output-fsx-linux-first5-zero-gap-20260629-210329.md
+    // sha256=dd8043808504fee5b054647357d8e8682577d5f74781e6ed7b6dd6656df1a2e1。
+    // subagent 已复核该日志仍为完整失败；后续需要继续用 -D 诊断新的首个
+    // mismatch，重点排查 MAP_SHARED file page cache/truncate cache/read buffer
+    // 一致性，而不能把 ALL TESTS DONE 误判为通过。
+    // &super::UNRUN_FS_LINK_TASKS,
+    // 已在 riscv64 musl+glibc 验证：linktest.sh 默认 1000 个 symlink 与
+    // 1000 个 hardlink 均通过，两个 lane 均为 passed=2/failed=0。
+    // 日志归档：.tmp/output-linktest-focused-pass-20260629-1920.md
+    // sha256=3fc25c05ef9fc0a3519d1b4dd560e184fa160035e9ff2e79f06d74d4637ddf3f。
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
@@ -290,10 +325,12 @@
     // &super::NS_MOUNT_FOLLOWUP_TASKS,
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
-    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：setns01、setns02、
-    // unshare01、unshare02 通过。预期 TCONF：mountns01-04、timens01、
-    // pidns01 需要当前不支持的 namespace/kernel config；setns02 跳过
-    // CLONE_NEWUTS，同时仍验证 IPC namespace 路径。
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：mountns01-04、
+    // setns01、setns02、unshare01、unshare02 通过。setns02 的
+    // CLONE_NEWUTS 子项预期 TCONF，IPC namespace 子项通过；timens01、
+    // pidns01 仍因当前镜像缺少对应 namespace/kernel config 预期 TCONF。
+    // 2026-06-28 namespace anchor 回归还清理了 musl ELF interpreter
+    // e_flags 误判导致的 255，以及 /proc/config.gz zcat/gzip 探测链。
     // MOUNT_API_TASKS 已在 riscv64 运行：fanotify21-23 因缺少 fanotify/
     // debugfs/mkfs.ext2 支持预期 TCONF；mount01-07、umount01-03、
     // umount2_01-02、mount_setattr01、fsconfig01-03、fsopen01 在 glibc
@@ -309,9 +346,90 @@
     // pidns05-06/10/13/16-17/30-32、getcpu01 通过。预期 TCONF：
     // pidns12/20 需要不支持的 namespace/kernel config；module 测试缺少
     // test .ko 文件或架构支持；membarrier01 在这里不支持。
-    // FANOTIFY_CORE_TASKS 已在 riscv64 运行且无 FAIL/TBROK；fanotify01-20
-    // 均因当前内核未配置 fanotify 报预期 TCONF，其中 fanotify13 还会跳过
-    // overlayfs-on-tmpfs 子项。
+    // 2026-06-30 fanotify 通知/权限路径推进：FANOTIFY_NOTIFICATION_TASKS
+    // 覆盖 fanotify01-23，riscv64 musl+glibc 全组无 FAIL/TFAIL/TBROK/TWARN，
+    // 两个 group 均正常 END 且有 ALL TESTS DONE。fanotify01-12 已有真实
+    // TPASS，其中 fanotify10 两个 lane 各为 passed 303/failed 0/broken 0/
+    // skipped 40/warnings 0。保留预期 TCONF/skipped：FAN_REPORT_FID/
+    // FAN_REPORT_DFID_NAME/FAN_REPORT_PIDFD、FAN_MARK_IGNORE、
+    // FAN_MARK_EVICTABLE、overlayfs-on-tmpfs，以及 fanotify23 依赖的
+    // debugfs/mkfs.ext2；这些不计作 TPASS。日志归档：
+    // .tmp/output-fanotify-10-pass-20260630-011656.md
+    // sha256=9e7bd546d68c23c94848ef2082737e760350586ee6727320a102e3d8c0399722；
+    // .tmp/output-fanotify-01-23-pass-20260630-011828.md
+    // sha256=2c84abbef325721017ccf2e1cdc3c17b3009fafad5dfe8da2ab63acc5008f5d6。
+    // &super::FS_BIND_BASE_REGRESSION_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind01-08.sh、fs_bind07-2.sh 与 fs_bind_regression.sh 通过。
+    // 该批覆盖 base bind shared-subtree 传播、private/slave/unbindable
+    // parent/child 组合，以及 unshared mountpoint 上 bind/rbind/MS_MOVE
+    // regression。fs_bind_regression.sh 三个子项均为 TPASS。
+    // &super::FS_BIND_RBIND_PROPAGATION_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
+    // fs_bind_rbind01-08.sh 与 fs_bind_rbind07-2.sh 通过。该批覆盖
+    // shared/slave/unbindable 递归 bind 传播、堆叠 bind mount 逐层卸载、
+    // slave 不向 master 反向传播卸载，以及 /proc/mounts 供 umount 工具
+    // 消费时只暴露可见顶层挂载。
+    // &super::FS_BIND_RBIND_CHILD_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind09-16.sh 通过。该批覆盖 slave child 递归 bind 到
+    // shared/private/slave/unbindable parent，以及 unbindable child 递归
+    // bind 到 shared/private/slave/unbindable parent 时按 Linux 语义拒绝
+    // 克隆 unbindable subtree。
+    // &super::FS_BIND_RBIND_SHARED_SUBTREE_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind17-24.sh 通过；组合回归 fs_bind_rbind01-24.sh 也通过。
+    // 该批覆盖 shared subtree 携带 shared/private child 递归 bind 到
+    // shared/private/slave/unbindable subtree 时的子挂载传播、逐层卸载，
+    // 以及 shared destination 下 private child clone 的新 peer group 语义。
+    // &super::FS_BIND_RBIND_SPECIAL_CHILD_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind25-32.sh 通过；组合回归 fs_bind_rbind01-32.sh 也通过。
+    // 该批覆盖 shared subtree 携带 slave/unbindable child 递归 bind 到
+    // shared/private/slave/unbindable subtree 时的传播边界，尤其是
+    // rbind 父树时按 Linux 语义跳过 unbindable child subtree。
+    // &super::FS_BIND_RBIND_TOPOLOGY_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_rbind33-39.sh 通过；组合回归 fs_bind_rbind01-39.sh 也通过。
+    // 该批覆盖 same-tree root-to-child rbind、shared child clone、slave/
+    // unbindable propagation 边界，以及 private parent 下 shared child 的
+    // 逐层卸载。修复点：same-tree rbind 克隆 shared peer child 时区分
+    // 原始 mount event 与本次 clone event，保留 Linux 式覆盖层卸载顺序；
+    // covered-peer unmount 清理仅在 clone source_display 被改写为目标路径时
+    // 使用真实 source 兜底匹配，避免误删仍需显式卸载的同源层。
+    // &super::FS_BIND_CLONENS_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP/TWARN：
+    // fs_bind_cloneNS01-07.sh 通过；组合回归 fs_bind_rbind01-39.sh、
+    // fs_bind_rbind07-2.sh 与 fs_bind_cloneNS01-07.sh 也通过。该批覆盖
+    // clone 后父/子 mount namespace 之间的 shared/slave/private/
+    // unbindable propagation、跨 namespace mount/umount fanout，以及
+    // shared/slave 链上的卸载传播方向。修复点：shared peer unmount 只在
+    // 起点 peer group 及其下游 slave/shared-slave peer group 内清理；没有
+    // shared peer group 的 mount namespace clone 记录按当前 namespace 栈项卸载，
+    // 避免反向删除 upstream master 层。
+    // &super::FS_BIND_MAIN_FOLLOWUP_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF：
+    // fs_bind07-2.sh、fs_bind09-24.sh 通过。该批覆盖 shared/slave
+    // p-node 传播、shared+slave master 继承、bind+propagation 组合标志、
+    // same-tree bind/rbind 子树克隆、MS_MOVE 子树重挂载，以及被覆盖 peer
+    // 挂载层的逐层卸载清理。
+    // &super::FS_BIND_MOVE_CORE_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP：
+    // fs_bind_move01-12.sh 通过。该批覆盖 shared/private/slave/
+    // unbindable subtree 移动到 shared/private/slave/unbindable parent 时的
+    // 传播语义。修复点：shared subtree move 保留原 peer group identity，
+    // 同时在目标 parent peer 下生成 move 副本；private source root 的普通
+    // bind 不再误克隆 moved child mount，避免把非递归 bind 当成 rbind。
+    // &super::FS_BIND_MOVE_NESTED_TASKS,
+    // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK/TCONF/TSKIP：
+    // fs_bind_move13-22.sh 通过；组合回归 fs_bind_move01-22.sh 也通过。
+    // 该批覆盖 unbindable subtree 的 move 拒绝、shared parent 下移动子树
+    // 的拒绝、移动 private parent 及其 shared/slave/unbindable child 到
+    // 既有 private mountpoint 时的 stack 语义，以及 shared tree 在自身
+    // bind tree 内的嵌套 move。修复点：MS_MOVE 允许在目标 mountpoint 上
+    // 形成新的顶层 stack，保留子挂载传播身份；同时按 Linux 语义拒绝
+    // shared parent 下的 subtree move 和需要向 shared target fanout 的
+    // unbindable subtree move。
     // &super::UNAME_SYSFS_ASLR_TASKS,
     // 已在 riscv64 musl+glibc 验证且无 FAIL/TBROK：newuname01、
     // utsname01-04、sysconf01、getpagesize01、syscall01 通过。预期 TCONF：
@@ -475,9 +593,16 @@
     // missing cpio, unzip, mkfs.tmpfs, uuidgen, keyctl, and crontab.
     // Focused sendfile01.sh now passes on riscv64 musl+glibc after making TCP
     // accept sleep on the listener poll queue and making close cooperatively
-    // drain queued TCP data before removing the smoltcp handle. Remaining true
-    // failure from the batch probe: unshare01.sh user/mount namespace
-    // semantics.
+    // drain queued TCP data before removing the smoltcp handle. Focused
+    // unshare01.sh passes on riscv64 musl+glibc with the util-linux unshare
+    // command, user namespace id-map views, /proc/sys/user/max_mnt_namespaces,
+    // and Linux-like shared root mount propagation across CLONE_NEWNS; the 8
+    // subtests are all TPASS, including --mount --propagation shared. Follow-up
+    // NS_MOUNT_CORE_TASKS rerun also passes mountns01-04, setns01-02, and
+    // unshare01-02 on riscv64 musl+glibc after relaxing ELF PT_INTERP e_flags
+    // matching and routing gzip/gunzip/zcat through static busybox. Expected
+    // TCONF remains for the setns02 CLONE_NEWUTS subcase and timens01/pidns01
+    // config-gated cases.
     // Expected TCONF/tool gaps still include cpio, insmod/lsmod modules,
     // keyctl, gcc, crontab, mkfs.tmpfs, uuidgen, nm, unzip, and several sysctl
     // config gates.
@@ -900,20 +1025,17 @@
   RISC-V glibc lane 已实测全部 `TPASS`，覆盖 `brk01`、`sbrk01`、
   `sbrk02`、`mmap01`、`mmap02`、`mmap03`、`mmap04`、`mmap05`、
   `mmap06`、`mmap09`、`mprotect01`、`mprotect02`。RISC-V musl lane
-  若返回 `255`，原因是测试镜像 runtime ABI 不匹配：该镜像提供的
-  `/lib/ld-musl-riscv64.so.1` 是 soft-float ABI，而这批 LTP 测试二进制
-  是 double-float ABI。内核按 Linux-like ELF 加载规则拒绝这种主程序/
-  解释器 ABI 不一致组合，因此该失败不归类为 MemorySet/brk/mmap/mprotect
-  语义失败。若要 musl lane 也通过，需要替换为 hard-float musl runtime，
-  或使用 soft-float 编译的 musl LTP 产物。
+  的早期记录曾因内核把 PT_INTERP `e_flags` float ABI bits 与主程序做
+  等值校验而返回 `255`；2026-06-28 已改为 Linux-like interpreter
+  架构检查，不再要求这些 flag 相等。该旧 `255` 不归类为
+  MemorySet/brk/mmap/mprotect 语义失败；musl lane 需要用新内核重跑后再
+  记录最终 TPASS/TCONF 结果。
 
 - `mmapstress09 -d -p 2 -t 1`：按内存管理结果标记已通过。
-  RISC-V glibc lane 已实测 `TPASS`；RISC-V musl lane 若返回 `255`，
-  原因同样是测试镜像 runtime ABI 不匹配：`mmapstress09` 是 double-float
-  ABI，而 `/lib/ld-musl-riscv64.so.1` 是 soft-float ABI。内核已按
-  Linux-like ELF 加载规则拒绝这种主程序/解释器 ABI 不一致组合，因此该
-  失败不归类为 MemorySet/mmap 语义失败。若要 musl lane 也通过，需要
-  替换为 hard-float musl runtime，或使用 soft-float 编译的 musl LTP 产物。
+  RISC-V glibc lane 已实测 `TPASS`；RISC-V musl lane 的早期 `255`
+  同样属于旧 PT_INTERP `e_flags` 等值校验问题。2026-06-28 该加载器
+  语义已按 Linux 调整为 interpreter 架构检查；旧失败不归类为
+  MemorySet/mmap 语义失败，musl lane 需要用新内核重跑后再记录最终结果。
 
 ## 内存管理 修改计划
 
