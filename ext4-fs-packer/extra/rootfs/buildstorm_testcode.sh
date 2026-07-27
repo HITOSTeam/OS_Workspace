@@ -35,13 +35,32 @@ else
     echo "BUILDSTORM_TOOLCHAIN fail"
 fi
 
-rm -rf /tmp/minibuild
-if cargo new --vcs none /tmp/minibuild >/dev/null 2>&1 \
-   && ( cd /tmp/minibuild && cargo build >/dev/null 2>&1 ) \
-   && [ "$(/tmp/minibuild/target/debug/minibuild)" = "Hello, world!" ]; then
-    echo "BUILDSTORM_MINIBUILD ok"
+MINIBUILD_DIR=/tmp/minibuild
+MINIBUILD_LOG=/tmp/buildstorm-minibuild.log
+echo "BUILDSTORM_MINIBUILD_STAGE cleanup"
+rm -rf "$MINIBUILD_DIR" "$MINIBUILD_LOG"
+MINIBUILD_STAGE=cargo_new
+echo "BUILDSTORM_MINIBUILD_STAGE $MINIBUILD_STAGE"
+if cargo new --vcs none "$MINIBUILD_DIR" >"$MINIBUILD_LOG" 2>&1; then
+    MINIBUILD_STAGE=cargo_build
+    echo "BUILDSTORM_MINIBUILD_STAGE $MINIBUILD_STAGE"
+    if ( cd "$MINIBUILD_DIR" && cargo build >>"$MINIBUILD_LOG" 2>&1 ); then
+        MINIBUILD_STAGE=run_binary
+        echo "BUILDSTORM_MINIBUILD_STAGE $MINIBUILD_STAGE"
+        if [ "$("$MINIBUILD_DIR"/target/debug/minibuild 2>>"$MINIBUILD_LOG")" = "Hello, world!" ]; then
+            echo "BUILDSTORM_MINIBUILD ok"
+        else
+            echo "BUILDSTORM_MINIBUILD fail stage=$MINIBUILD_STAGE"
+        fi
+    else
+        echo "BUILDSTORM_MINIBUILD fail stage=$MINIBUILD_STAGE"
+    fi
 else
-    echo "BUILDSTORM_MINIBUILD fail"
+    echo "BUILDSTORM_MINIBUILD fail stage=$MINIBUILD_STAGE"
+fi
+if [ "${MINIBUILD_STAGE}" != run_binary ] || [ ! -x "$MINIBUILD_DIR/target/debug/minibuild" ]; then
+    echo "----- minibuild diagnostic tail -----"
+    tail -80 "$MINIBUILD_LOG" 2>/dev/null
 fi
 
 cd /work/tgoskits 2>/dev/null || {

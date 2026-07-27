@@ -28,6 +28,13 @@ struct Args {
     #[arg(short = 'b', long = "base-image")]
     base_image: Option<PathBuf>,
 
+    /// Build the evaluation bootstrap disk only: copy init_proc.bin and
+    /// 0final_init.bin to /user, plus the two root-level evaluation scripts.
+    /// This deliberately skips normal rootfs overlays so their libc/loader
+    /// files cannot be mixed with the official evaluation image.
+    #[arg(long = "minimal-eval-root")]
+    minimal_eval_root: bool,
+
     /// Target directory to write the image into (host path)
     #[arg(short = 't', long = "target")]
     target: PathBuf,
@@ -98,21 +105,22 @@ fn main() -> anyhow::Result<()> {
     let staging_user = staging_dir.join("user");
     fs::create_dir_all(&staging_user)?;
 
-    // Create standard runtime directories expected by many Unix userland programs.
-    // In particular, iperf3 uses `mkstemp("/tmp/iperf3.XXXXXX")` per stream.
-    create_standard_dirs(&staging_dir)?;
+    if args.minimal_eval_root {
+        copy_minimal_eval_root(&args.user_dir, args.extra_dir.as_ref(), &staging_dir)?;
+    } else {
+        // Create standard runtime directories expected by many Unix userland programs.
+        // In particular, iperf3 uses `mkstemp("/tmp/iperf3.XXXXXX")` per stream.
+        create_standard_dirs(&staging_dir)?;
 
-    // Copy user binaries to staging/user
-    println!(
-        "Copying user binaries from '{}'...",
-        args.user_dir.display()
-    );
-    copy_dir_contents(&args.user_dir, &staging_user)?;
+        // Copy user binaries to staging/user.
+        println!(
+            "Copying user binaries from '{}'...",
+            args.user_dir.display()
+        );
+        copy_dir_contents(&args.user_dir, &staging_user)?;
 
-    // If extra overlays are provided, create /extra and copy them in order.
-    // The common tree is copied first, then the arch-specific tree can replace
-    // binaries and rootfs files with target-architecture versions.
-    if !extra_dirs.is_empty() {
+        // The common tree is copied first, then the arch-specific tree can replace
+        // binaries and rootfs files with target-architecture versions.
         for (label, extra) in &extra_dirs {
             copy_extra_overlay(label, extra, &staging_dir)?;
         }
@@ -171,14 +179,75 @@ fn main() -> anyhow::Result<()> {
 
     println!("Image created: {}", image_path.display());
     println!("Contents:");
-    println!("  /user  - user binaries");
-    if !extra_dirs.is_empty() {
+    if args.minimal_eval_root {
+        println!("  /user/init_proc.bin and /user/0final_init.bin");
+        println!("  /buildstorm_testcode.sh and /cagent_testcode.sh");
+    } else {
+        println!("  /user  - user binaries");
+    }
+    if !args.minimal_eval_root && !extra_dirs.is_empty() {
         println!("  /extra - additional files");
     }
     if let Some(ref base_image) = args.base_image {
         println!("  base   - {}", base_image.display());
     }
 
+    Ok(())
+}
+
+/// Populate the disk used beside an official evaluation rootfs.
+///
+/// Keep this allow-list intentionally small.  In particular, do not copy
+/// `rootfs/lib`, `rootfs/usr`, or architecture overlays: those can contain a
+/// different dynamic loader or libc than the official disk.
+fn copy_minimal_eval_root(
+    user_dir: &PathBuf,
+    extra_dir: Option<&PathBuf>,
+    staging_dir: &PathBuf,
+) -> anyhow::Result<()> {
+    println!("Building minimal evaluation bootstrap disk...");
+    create_minimal_eval_dirs(staging_dir)?;
+    let staging_user = staging_dir.join("user");
+    for name in ["init_proc.bin", "0final_init.bin"] {
+        copy_required_file(&user_dir.join(name), &staging_user.join(name))?;
+    }
+
+    let extra_dir = extra_dir.context("--minimal-eval-root requires --extra for test scripts")?;
+    let scripts = extra_dir.join("rootfs");
+    for name in ["buildstorm_testcode.sh", "cagent_testcode.sh"] {
+        copy_required_file(&scripts.join(name), &staging_dir.join(name))?;
+    }
+    Ok(())
+}
+
+/// Directories required by the two evaluation scripts, without importing any
+/// executable or runtime-library file from the local overlay.  `/work` is
+/// intentionally omitted: it must continue to resolve to the official image
+/// that contains the BuildStorm workload.
+fn create_minimal_eval_dirs(staging_root: &PathBuf) -> anyhow::Result<()> {
+    let tmp_dir = staging_root.join("tmp");
+    fs::create_dir_all(&tmp_dir)?;
+    fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777))?;
+    // `/home` is the rootfs marker used by the kernel when selecting disk0 or
+    // disk1 as the primary filesystem.  It is deliberately empty here.
+    for name in ["proc", "sys", "dev", "home"] {
+        fs::create_dir_all(staging_root.join(name))?;
+    }
+    Ok(())
+}
+
+fn copy_required_file(src: &PathBuf, dst: &PathBuf) -> anyhow::Result<()> {
+    if !src.is_file() {
+        anyhow::bail!("required minimal-eval file '{}' is missing", src.display());
+    }
+    let parent = dst
+        .parent()
+        .context("minimal-eval destination must have a parent directory")?;
+    fs::create_dir_all(parent)?;
+    fs::copy(src, dst).with_context(|| {
+        format!("copy required minimal-eval file '{}' to '{}'", src.display(), dst.display())
+    })?;
+    println!("  -> {}", dst.display());
     Ok(())
 }
 
@@ -241,6 +310,8 @@ fn create_standard_dirs(staging_root: &PathBuf) -> anyhow::Result<()> {
     fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777))?;
     fs::create_dir_all(staging_root.join("bin"))?;
     fs::create_dir_all(staging_root.join("usr/bin"))?;
+    // Keep the rootfs selection marker in the full patched-image mode too.
+    fs::create_dir_all(staging_root.join("home"))?;
     // iproute2 persists named network namespaces under /var/run/netns.
     fs::create_dir_all(staging_root.join("var/run/netns"))?;
     fs::create_dir_all(staging_root.join("run/netns"))?;
