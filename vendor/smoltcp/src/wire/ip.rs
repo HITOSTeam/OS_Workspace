@@ -874,7 +874,7 @@ pub fn pretty_print_ip_payload<T: Into<Repr>>(
                         );
                         format_checksum(f, valid)
                     }
-                }
+                },
             }
         }
         Protocol::Tcp => {

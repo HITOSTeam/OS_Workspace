@@ -1,4 +1,3 @@
-
 use alloc::{boxed::Box, vec::Vec};
 
 type LtpGroup = &'static [&'static str];
@@ -49,7 +48,6 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::SETPRIORITY_TASKS,
     // &super::PROC_TID_TASKS,
 
-
     // // // // 基础文件 I/O / fd / fcntl
     // &super::CWD_DIR_TASKS,
     // &super::ACCESS_TASKS,
@@ -78,7 +76,6 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::THREADING_PTRACE_TASKS,
     // &super::PIDFD_PRCTL_TASKS,
 
-
     // // // // 凭证 / capability / key
     // &super::GETRES_TASKS,
     // &super::CRED_SET_CORE_TASKS,
@@ -89,18 +86,13 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CAP_CRED16_QUERY_TASKS,
     // &super::CRED16_MUTATION_TASKS,
 
-
-
     // // // 信号 / futex / eventfd / timerfd / epoll
     // &super::SIGACTION_SIGNAL_CORE_TASKS,
     // &super::KILL_PAUSE_TGKILL_TASKS,
 
-
     // &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
     // &super::EVENTFD_FUTEX_TIMERFD_TASKS,
     // &super::EPOLL_CORE_TASKS,
-
-
 
     // // // 文件元数据 / 目录树 / 链接 / xattr
     // &super::CHOWN_TASKS,
@@ -129,8 +121,6 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::STAT_LFS_EXT_TASKS,
     // &super::STATX_EXT_TASKS,
 
-
-
     // // // 高级文件 I/O / pipe / splice / AIO / io_uring
     // &super::FALLOCATE_FSYNC_SYNC_TASKS,
     // &super::PIPE_CORE_TASKS,
@@ -151,7 +141,6 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::PIDNS_MODULE_TASKS,
     // &super::FANOTIFY_CORE_TASKS,
     // &super::UNAME_SYSFS_ASLR_TASKS,
-
 
     // // 内存管理
     // &super::MMAP_MPROTECT_CORE_TASKS,
@@ -324,9 +313,7 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
 ];
 
 const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
-
     //测试新的一批
-
     &super::GETITIMER_TASKS,
     &super::SETITIMER_TASKS,
     &super::GETRUSAGE_TASKS,
@@ -342,38 +329,30 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     &super::SETRLIMIT_TASKS,
     &super::GETRLIMIT_TASKS,
     &super::ROBUST_TID_TASKS,
-
     &super::FS_META_INOTIFY_XATTR_TASKS,
     &super::AIO_DIO_CORE_TASKS,
     &super::IOCTL_IOURING_OPEN_TASKS,
     &super::UNRUN_FS_TASKS,
-
     &super::UNAME_SYSFS_ASLR_TASKS,
     &super::IO_PERF_SYSINFO_PATHCONF_TASKS,
     &super::KCMP_TASKS,
     &super::UTS_NAME_TASKS,
     &super::UTS_QUERY_TASKS,
     &super::GETRANDOM_TASKS,
-
-
     //第二批
-
     &super::SYSV_IPC_CORE_TASKS,
     &super::SYSV_IPC_EXT_TASKS,
     &super::POSIX_MQ_SYSV_MSG_SEM_TASKS,
     &super::SYSV_SHM_CORE_TASKS,
     &super::IPC_NAMESPACE_TASKS,
-
     &super::NS_MOUNT_CORE_TASKS,
     &super::NS_MOUNT_FOLLOWUP_TASKS,
     &super::PIDNS_MODULE_TASKS,
     &super::FANOTIFY_CORE_TASKS,
-
     &super::NET_SOCKET_CONN_TASKS,
     &super::NET_SEND_RECV_TASKS,
     &super::NET_SOCKOPT_POLL_TASKS,
     &super::UNRUN_NET_IPV6_LIB_TASKS,
-
     &super::MLOCK_MADVISE_CORE_TASKS,
     &super::MPROTECT_MREMAP_MSYNC_TASKS,
     &super::UNRUN_MALLOC_TASKS,
@@ -398,8 +377,6 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::GETPRIORITY_TASKS,
     // &super::SETPRIORITY_TASKS,
     // &super::PROC_TID_TASKS,
-
-
 
     // // // 基础文件 I/O / fd / fcntl
     // &super::CWD_DIR_TASKS,
@@ -426,7 +403,6 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::SCHED_TC_TASKS,
     // &super::UNRUN_SCHED_TASKS,
 
-
     // //
     // // 凭证 / capability / key
     // &super::GETRES_TASKS,
@@ -438,15 +414,12 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::CAP_CRED16_QUERY_TASKS,
     // &super::CRED16_MUTATION_TASKS,
 
-
-
     // //
     // // // 信号 / futex / eventfd / timerfd / epoll
     // &super::SIGACTION_SIGNAL_CORE_TASKS,
     // &super::KILL_PAUSE_TGKILL_TASKS,
     // &super::CLOCK_TIMERFD_SIGNALFD_TASKS,
     // &super::EVENTFD_FUTEX_TIMERFD_TASKS,
-
 
     // &super::EPOLL_CORE_TASKS,
     // // //
@@ -472,7 +445,6 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::READLINK_CORE_TASKS,
     // &super::COPY_TRUNCATE_CORE_TASKS,
 
-
     // &super::CREAT_USERFAULTFD_TASKS,
     // &super::RENAME_UNLINK_TASKS,
 
@@ -480,13 +452,12 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
 
     //6_21到这里_2
 
-    
     // &super::XATTR_CORE_TASKS,
     // &super::FS_META_CHOWN_XATTR_TASKS,
     // &super::FS_META_INOTIFY_XATTR_TASKS,
     // &super::STAT_LFS_EXT_TASKS,
     // &super::STATX_EXT_TASKS,
-    
+
     // // 高级文件 I/O / pipe / splice / AIO / io_uring
     // &super::FALLOCATE_FSYNC_SYNC_TASKS,
     // &super::PIPE_CORE_TASKS,
@@ -494,7 +465,7 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::TEE_VMSPLICE_FADVISE_TASKS,
     // &super::AIO_DIO_CORE_TASKS,
     // &super::IOCTL_IOURING_OPEN_TASKS,
-    
+
     // // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
     // &super::MOUNT_API_TASKS,
@@ -647,7 +618,6 @@ const LOONGARCH_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // &super::CRED_SETGROUPS_GLIBC_ONLY_TASKS,
     // &super::NET_SEND_RECV_GLIBC_ONLY_TASKS,
 ];
-
 
 fn collect_ltp_groups(
     groups: &[LtpGroup],

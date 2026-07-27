@@ -15,8 +15,8 @@ mod lmbench_dependence;
 #[allow(unused_imports)]
 use lmbench_dependence::*;
 use user::syscall::{
-    self, _yield, chdir, close, execve, exit, fork, getdents64, getpid, kill, open, read, sleep, sync,
-    waitpid, RDONLY, WRONLY, SIGINT, SIGKILL, SIGTERM,
+    self, _yield, RDONLY, SIGINT, SIGKILL, SIGTERM, WRONLY, chdir, close, execve, exit, fork,
+    getdents64, getpid, kill, open, read, sleep, sync, waitpid,
 };
 
 const LTP_ENV_DEV: &[u8] = b"LTP_DEV=/dev/root\0";
@@ -78,17 +78,14 @@ fn monotonic_time_ms() -> u64 {
     }
 
     let mut ts = TimeSpec { sec: 0, nsec: 0 };
-    let ret = syscall::syscall(
-        SYSCALL_CLOCK_GETTIME,
-        [
-            CLOCK_MONOTONIC,
-            &mut ts as *mut TimeSpec as usize,
-            0,
-            0,
-            0,
-            0,
-        ],
-    );
+    let ret = syscall::syscall(SYSCALL_CLOCK_GETTIME, [
+        CLOCK_MONOTONIC,
+        &mut ts as *mut TimeSpec as usize,
+        0,
+        0,
+        0,
+        0,
+    ]);
     if ret < 0 || ts.sec < 0 || ts.nsec < 0 {
         return 0;
     }
@@ -98,7 +95,10 @@ fn monotonic_time_ms() -> u64 {
 }
 
 fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 const SUMMARY_TAIL_CAP: usize = b"Summary:".len() - 1;
@@ -342,7 +342,6 @@ fn print_summary_if_missing(summary: &OutputSummary) {
     println!("warnings {}", summary.warnings);
 }
 
-
 ///输入测试用例子写的数组，挨个测试
 fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
     let _ = chdir(dir);
@@ -358,21 +357,21 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
             extra_args.push(arg);
         }
         let path = resolve_ltp_case_path(dir, script);
-        // let start_ms = monotonic_time_ms();
+        let start_ms = monotonic_time_ms();
         ltp_case_memory_cleanup(script, index, false);
         println!("RUN LTP CASE {}", script);
-        // println!("LTP CASE START {} TIME_MS {}", script, start_ms);
+        println!("LTP CASE START {} TIME_MS {}", script, start_ms);
         let (ret, summary, captured) = run_script_with_captured_output(path.as_str(), &extra_args);
         if captured {
             print_summary_if_missing(&summary);
         }
-        // let end_ms = monotonic_time_ms();
-        // println!(
-        //     "LTP CASE END {} TIME_MS {} DURATION_MS {}",
-        //     script,
-        //     end_ms,
-        //     end_ms.saturating_sub(start_ms)
-        // );
+        let end_ms = monotonic_time_ms();
+        println!(
+            "LTP CASE END {} TIME_MS {} DURATION_MS {}",
+            script,
+            end_ms,
+            end_ms.saturating_sub(start_ms)
+        );
 
         println!("FAIL LTP CASE {} : {}", script, ret);
         ltp_case_memory_cleanup(script, index + 1, true);
@@ -380,11 +379,7 @@ fn run_part_of_ltp_script_in_dir(dir: &str, script_names: &[&str]) {
 }
 
 ///入口函数，打印#### 对应的信息
-fn run_ltp_lane(
-    group: &str,
-    dir: &str,
-    script_names: &[&str],
-) {
+fn run_ltp_lane(group: &str, dir: &str, script_names: &[&str]) {
     println!("#### OS COMP TEST GROUP START {} ####", group);
     run_part_of_ltp_script_in_dir(dir, script_names);
     println!("#### OS COMP TEST GROUP END {} ####", group);
@@ -392,11 +387,7 @@ fn run_ltp_lane(
 
 ///使用老的分组写法，跑那些老的分组
 #[allow(unused)]
-fn run_ltp_lane_old(
-    group: &str,
-    dir: &str,
-    collect_cases: fn(&str) -> Vec<&'static str>,
-) {
+fn run_ltp_lane_old(group: &str, dir: &str, collect_cases: fn(&str) -> Vec<&'static str>) {
     println!("#### OS COMP TEST GROUP START {} ####", group);
     let script_names = collect_cases(dir);
     run_part_of_ltp_script_in_dir(dir, script_names.as_slice());
@@ -432,19 +423,19 @@ fn resolve_ltp_case_path(dir: &str, script: &str) -> String {
     installed
 }
 
-fn run_named_cases(group: &str, cases: &[&str]) {
-    println!("#### OS COMP TEST GROUP START {} ####", group);
-    for &case in cases {
-        println!("RUN CASE {}", case);
-        let ret = run_script(case, &[]);
-        if ret == 0 {
-            println!("PASS CASE {}", case);
-        } else {
-            println!("FAIL CASE {} : {}", case, ret);
-        }
-    }
-    println!("#### OS COMP TEST GROUP END {} ####", group);
-}
+// fn run_named_cases(group: &str, cases: &[&str]) {
+//     println!("#### OS COMP TEST GROUP START {} ####", group);
+//     for &case in cases {
+//         println!("RUN CASE {}", case);
+//         let ret = run_script(case, &[]);
+//         if ret == 0 {
+//             println!("PASS CASE {}", case);
+//         } else {
+//             println!("FAIL CASE {} : {}", case, ret);
+//         }
+//     }
+//     println!("#### OS COMP TEST GROUP END {} ####", group);
+// }
 
 ///如果是LTP测试用例，添加对应的的环境信息使得他输出颜色
 fn run_script(name: &str, extra_args: &[&str]) -> i32 {
@@ -524,7 +515,8 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
             || name.ends_with("/vfork_freeze.sh")
             || name.ends_with("/run_freezer.sh");
         let is_msgstress01 = name.contains("/ltp/testcases/bin/msgstress01");
-        let is_slow_futex_cmp_requeue = cfg!(target_arch = "loongarch64")&& name.ends_with("/futex_cmp_requeue01");
+        let is_slow_futex_cmp_requeue =
+            cfg!(target_arch = "loongarch64") && name.ends_with("/futex_cmp_requeue01");
         // Device-dependent LTP helpers (tst_acquire_device) can use /dev/root
         // in this environment; keep all-filesystems loops bounded to tmpfs.
         let ltp_musl_envs = [
@@ -615,7 +607,7 @@ fn run_script(name: &str, extra_args: &[&str]) -> i32 {
         ];
         let empty_envs = [core::ptr::null()];
         let envs: &[*const u8] = if is_ltp_case {
-            if is_ltp_mmap1 || is_msgstress01 || is_slow_futex_cmp_requeue{
+            if is_ltp_mmap1 || is_msgstress01 || is_slow_futex_cmp_requeue {
                 if is_musl_ltp {
                     &ltp_musl_envs_slow_timeout[..]
                 } else if is_glibc_ltp {
@@ -655,17 +647,21 @@ fn try_poweroff() -> ! {
 
 #[allow(unused)]
 fn test_rv() {
-    // run_cyclist_suite("/musl", "musl");
-    // run_idle_drain();
-
-    // run_cyclist_suite("/glibc", "glibc");
-    // cleanup_remaining_processes("1");
+    run_cyclist_suite("/musl", "musl");
+    run_idle_drain();
+    run_cyclist_suite("/glibc", "glibc");
+    cleanup_remaining_processes("1");
     // //消除以下那些没有清理完毕的线程
 
-    run_iperf_suite("/musl", "musl");
     run_iperf_suite("/glibc", "glibc");
     cleanup_remaining_processes("1");
+    run_iperf_suite("/musl", "musl");
+    cleanup_remaining_processes("1");
 
+    // netperf
+    run_netperf_script("/musl", "musl");
+    run_netperf_script("/glibc", "glibc");
+    cleanup_remaining_processes("1");
 
     // // iozone
     chdir("/musl");
@@ -673,8 +669,8 @@ fn test_rv() {
     chdir("/glibc");
     run_script("/glibc/iozone_testcode.sh", &[]);
 
-    run_ltp_lane("ltp-musl","/musl", RISCV_LTP_CASES);
-    run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
+    run_ltp_lane("ltp-musl", "/musl", RISCV_LTP_CASES);
+    run_ltp_lane("ltp-glibc", "/glibc", RISCV_LTP_CASES);
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
 
@@ -696,11 +692,6 @@ fn test_rv() {
 
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
-    // netperf
-    chdir("/musl");
-    run_script("/musl/netperf_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/netperf_testcode.sh", &[]);
 
     // libctest 不需要跑glibc的libc test,跑了也没有分数
     chdir("/musl");
@@ -716,14 +707,12 @@ fn test_rv() {
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
 
-    // //lmbench
-    chdir("/musl");
-    run_script("/musl/lmbench_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/lmbench_testcode.sh", &[]);
-
-
-
+    lmbench_simple_musl();
+    cleanup_remaining_processes("1");
+    try_drop_kernel_caches();
+    lmbench_simple_glibc();
+    cleanup_remaining_processes("1");
+    try_drop_kernel_caches();
 }
 
 #[allow(unused)]
@@ -741,6 +730,10 @@ fn test_la() {
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
 
+    // netperf
+    run_netperf_script("/musl", "musl");
+    run_netperf_script("/glibc", "glibc");
+    try_drop_kernel_caches();
 
     // // iozone
     chdir("/musl");
@@ -749,8 +742,8 @@ fn test_la() {
     run_script("/glibc/iozone_testcode.sh", &[]);
 
     //LTP
-    run_ltp_lane("ltp-musl","/musl", LOONGARCH_LTP_CASES);
-    run_ltp_lane("ltp-glibc","/glibc",LOONGARCH_LTP_CASES);
+    run_ltp_lane("ltp-musl", "/musl", LOONGARCH_LTP_CASES);
+    run_ltp_lane("ltp-glibc", "/glibc", LOONGARCH_LTP_CASES);
 
     // basic_test
     chdir("/musl");
@@ -771,15 +764,6 @@ fn test_la() {
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
 
-
-    
-
-    // netperf
-    chdir("/musl");
-    run_script("/musl/netperf_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/netperf_testcode.sh", &[]);
-
     // libctest 不需要跑glibc的libc test,跑了也没有分数
     chdir("/musl");
     run_script("/musl/libctest_testcode.sh", &[]);
@@ -794,12 +778,12 @@ fn test_la() {
     cleanup_remaining_processes("1");
     try_drop_kernel_caches();
 
-    // //lmbench
-    chdir("/musl");
-    run_script("/musl/lmbench_testcode.sh", &[]);
-    chdir("/glibc");
-    run_script("/glibc/lmbench_testcode.sh", &[]);
-
+    lmbench_simple_musl();
+    cleanup_remaining_processes("1");
+    try_drop_kernel_caches();
+    lmbench_simple_glibc();
+    cleanup_remaining_processes("1");
+    try_drop_kernel_caches();
 }
 
 fn spawn_program(name: &str, extra_args: &[&str]) -> isize {
@@ -847,9 +831,12 @@ fn run_cyclictest_case(binary: &str, name: &str, args: &[&str]) {
 
     let status = run_script(binary, args);
 
-    let elapsed_ms = monotonic_time_ms().saturating_sub(start_ms);    
-    println!("====== cyclictest {} elapsed_ms: {} ======", name, elapsed_ms);
-    
+    let elapsed_ms = monotonic_time_ms().saturating_sub(start_ms);
+    println!(
+        "====== cyclictest {} elapsed_ms: {} ======",
+        name, elapsed_ms
+    );
+
     let result = if status == 0 { "success" } else { "fail" };
     println!("====== cyclictest {} end: {} ======", name, result);
 }
@@ -863,16 +850,12 @@ fn run_cyclist_suite(dir: &str, libc: &str) {
     let mut hackbench = String::from(dir);
     hackbench.push_str("/hackbench");
 
-    run_cyclictest_case(
-        cyclictest.as_str(),
-        "NO_STRESS_P1",
-        &["-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q"],
-    );
-    run_cyclictest_case(
-        cyclictest.as_str(),
-        "NO_STRESS_P8",
-        &["-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q"],
-    );
+    run_cyclictest_case(cyclictest.as_str(), "NO_STRESS_P1", &[
+        "-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q",
+    ]);
+    run_cyclictest_case(cyclictest.as_str(), "NO_STRESS_P8", &[
+        "-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q",
+    ]);
 
     println!("====== start hackbench ======");
     let hackbench_pid = spawn_program(hackbench.as_str(), &["-l", "100000000"]);
@@ -884,16 +867,12 @@ fn run_cyclist_suite(dir: &str, libc: &str) {
     //睡眠时间就是1s,和脚本一样
     sleep(1_000);
 
-    run_cyclictest_case(
-        cyclictest.as_str(),
-        "STRESS_P1",
-        &["-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q"],
-    );
-    run_cyclictest_case(
-        cyclictest.as_str(),
-        "STRESS_P8",
-        &["-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q"],
-    );
+    run_cyclictest_case(cyclictest.as_str(), "STRESS_P1", &[
+        "-a", "-i", "1000", "-t1", "-p99", "-D", "1s", "-q",
+    ]);
+    run_cyclictest_case(cyclictest.as_str(), "STRESS_P8", &[
+        "-a", "-i", "1000", "-t8", "-p99", "-D", "1s", "-q",
+    ]);
 
     let kill_status = kill(hackbench_pid as usize, SIGINT);
     let mut wait_status = 0;
@@ -910,23 +889,94 @@ fn run_iperf_case(binary: &str, name: &str, args: &[&str]) {
     let result = if status == 0 { "success" } else { "fail" };
     println!("====== iperf {} end: {} ======", name, result);
     println!("");
+    for _ in 0..10 {
+        _yield();
+    }
+    sleep(500);
 }
 ///这个参数的含义是不要等待,如果没有就返回当前用户程序
 const WAITPID_WNOHANG: usize = 0x00000001;
 
 fn waitpid_nohang(pid: isize, exit_code: &mut i32) -> isize {
     const SYSCALL_WAITPID: usize = 260;
-    syscall::syscall(
-        SYSCALL_WAITPID,
-        [
-            pid as usize,
-            exit_code as *mut i32 as usize,
-            WAITPID_WNOHANG,
-            0,
-            0,
-            0,
-        ],
-    )
+    syscall::syscall(SYSCALL_WAITPID, [
+        pid as usize,
+        exit_code as *mut i32 as usize,
+        WAITPID_WNOHANG,
+        0,
+        0,
+        0,
+    ])
+}
+
+fn run_netperf_case(binary: &str, name: &str, args: &[&str]) {
+    println!("====== netperf {} begin ======", name);
+    let mut netperf_args: Vec<&str> = Vec::new();
+    netperf_args.extend_from_slice(&[
+        "-H",
+        "127.0.0.1",
+        "-p",
+        "12865",
+        "-t",
+        name,
+        "-l",
+        "1",
+        "--",
+    ]);
+    netperf_args.extend_from_slice(args);
+    let status = run_script(binary, netperf_args.as_slice());
+    let result = if status == 0 { "success" } else { "fail" };
+    println!("====== netperf {} end: {} ======", name, result);
+}
+
+///模仿 netperf_testcode.sh, 但在启动 netserver 后等待服务真正 ready。
+fn run_netperf_script(dir: &str, libc: &str) {
+    let mut label = String::from("netperf-");
+    label.push_str(libc);
+    cleanup_remaining_processes(label.as_str());
+    let _ = chdir(dir);
+
+    println!("#### OS COMP TEST GROUP START netperf-{} ####", libc);
+
+    let mut netserver = String::from(dir);
+    netserver.push_str("/netserver");
+    let mut netperf = String::from(dir);
+    netperf.push_str("/netperf");
+
+    let server_pid = spawn_program(netserver.as_str(), &[
+        "-D",
+        "-L",
+        "127.0.0.1",
+        "-p",
+        "12865",
+    ]);
+    //在这里睡觉,不然服务器还没有启动完成就开始测试了
+    sleep(1_000);
+
+    run_netperf_case(netperf.as_str(), "UDP_STREAM", &[
+        "-s", "16k", "-S", "16k", "-m", "1k", "-M", "1k",
+    ]);
+    run_netperf_case(netperf.as_str(), "TCP_STREAM", &[
+        "-s", "16k", "-S", "16k", "-m", "1k", "-M", "1k",
+    ]);
+    run_netperf_case(netperf.as_str(), "UDP_RR", &[
+        "-s", "16k", "-S", "16k", "-m", "1k", "-M", "1k", "-r", "64,64", "-R", "1",
+    ]);
+    run_netperf_case(netperf.as_str(), "TCP_RR", &[
+        "-s", "16k", "-S", "16k", "-m", "1k", "-M", "1k", "-r", "64,64", "-R", "1",
+    ]);
+    run_netperf_case(netperf.as_str(), "TCP_CRR", &[
+        "-s", "16k", "-S", "16k", "-m", "1k", "-M", "1k", "-r", "64,64", "-R", "1",
+    ]);
+
+    if server_pid > 0 {
+        let _ = kill(server_pid as usize, SIGKILL);
+        let mut status = 0;
+        let _ = waitpid(server_pid, &mut status);
+    }
+
+    println!("#### OS COMP TEST GROUP END netperf-{} ####", libc);
+    cleanup_remaining_processes(label.as_str());
 }
 
 // 回收当前的所有子task
@@ -1098,14 +1148,19 @@ fn cleanup_remaining_processes(label: &str) {
         after.len(),
         reaped
     );
+    for _ in 0..10 {
+        _yield();
+        sleep(100);
+    }
 }
-
-
 
 fn start_iperf_server(iperf: &str) -> bool {
     let launcher_pid = spawn_program(iperf, &["-s", "-p", "5001", "-D"]);
     if launcher_pid < 0 {
-        println!("====== iperf server launcher spawn failed: {} ======", launcher_pid);
+        println!(
+            "====== iperf server launcher spawn failed: {} ======",
+            launcher_pid
+        );
         return false;
     }
     let mut wait_status = 0;
@@ -1114,10 +1169,15 @@ fn start_iperf_server(iperf: &str) -> bool {
         "====== iperf server launcher end: pid={} wait={} status={} ======",
         launcher_pid, wait_result, wait_status
     );
-
+    if wait_result != launcher_pid || wait_status != 0 {
+        return false;
+    }
+    for _ in 0..10 {
+        _yield();
+    }
+    sleep(1000);
     true
 }
-
 
 fn run_iperf_suite(dir: &str, libc: &str) {
     println!("#### OS COMP TEST GROUP START iperf-{} ####", libc);
@@ -1126,72 +1186,116 @@ fn run_iperf_suite(dir: &str, libc: &str) {
     let mut iperf = String::from(dir);
     iperf.push_str("/iperf3");
 
-    cleanup_remaining_processes("iperf-pre");
     if !start_iperf_server(iperf.as_str()) {
         cleanup_remaining_processes("iperf-start-failed");
         println!("#### OS COMP TEST GROUP END iperf-{} ####", libc);
         return;
     }
 
-    run_iperf_case(
-        iperf.as_str(),
-        "BASIC_UDP",
-        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-b", "1000G"],
-    );
-    run_iperf_case(
-        iperf.as_str(),
-        "BASIC_TCP",
-        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0"],
-    );
-    run_iperf_case(
-        iperf.as_str(),
-        "PARALLEL_UDP",
-        &[
-            "-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-P", "5",
-            "-b", "1000G",
-        ],
-    );
-    run_iperf_case(
-        iperf.as_str(),
-        "PARALLEL_TCP",
-        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-P", "5"],
-    );
-    run_iperf_case(
-        iperf.as_str(),
-        "REVERSE_UDP",
-        &[
-            "-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-u", "-R", "-b",
-            "1000G",
-        ],
-    );
-    run_iperf_case(
-        iperf.as_str(),
-        "REVERSE_TCP",
-        &["-c", "127.0.0.1", "-p", "5001", "-t", "2", "-i", "0", "-R"],
-    );
+    run_iperf_case(iperf.as_str(), "BASIC_UDP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+        "-u",
+        "-b",
+        "1000G",
+    ]);
+    run_iperf_case(iperf.as_str(), "BASIC_TCP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+    ]);
+    run_iperf_case(iperf.as_str(), "PARALLEL_UDP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+        "-u",
+        "-P",
+        "5",
+        "-b",
+        "1000G",
+    ]);
+    run_iperf_case(iperf.as_str(), "PARALLEL_TCP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+        "-P",
+        "5",
+    ]);
+    run_iperf_case(iperf.as_str(), "REVERSE_UDP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+        "-u",
+        "-R",
+        "-b",
+        "1000G",
+    ]);
+    run_iperf_case(iperf.as_str(), "REVERSE_TCP", &[
+        "-c",
+        "127.0.0.1",
+        "-p",
+        "5001",
+        "-t",
+        "2",
+        "-i",
+        "0",
+        "-R",
+    ]);
 
-    cleanup_remaining_processes("iperf-post");
     println!("#### OS COMP TEST GROUP END iperf-{} ####", libc);
 }
 
-
-
-
-//测试函数,单独开始一个LTP测试用例，查看是什么问题
 #[allow(unused)]
 fn test_ltp_bin_single() {
     println!("#### OS COMP TEST GROUP START ltp-musl-single ####");
-    run_part_of_ltp_script_in_dir("/musl", &["epoll_wait01"]);
+    //fanotify10
+    run_part_of_ltp_script_in_dir("/musl", &["fanotify16"]);
+    // run_part_of_ltp_script_in_dir("/musl", &["fanotify10"]);
+    // run_part_of_ltp_script_in_dir("/musl", &["fanotify01"]);
+    run_part_of_ltp_script_in_dir("/musl", &["fanotify14"]);
+
     println!("#### OS COMP TEST GROUP END ltp-musl-single ####");
 }
-
-
+#[allow(unused)]
+fn test_ltp_bin_single_glibc() {
+    println!("#### OS COMP TEST GROUP START ltp-glibc-single ####");
+    run_part_of_ltp_script_in_dir("/glibc", &["fanotify16"]);
+    // run_part_of_ltp_script_in_dir("/musl", &["fanotify10"]);
+    // run_part_of_ltp_script_in_dir("/musl", &["fanotify01"]);
+    run_part_of_ltp_script_in_dir("/musl", &["fanotify14"]);
+    println!("#### OS COMP TEST GROUP END ltp-glibc-single ####");
+}
 
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
     // only run for riscv arch
     if cfg!(target_arch = "riscv64") {
-
         // //首先制作对应的脚本
         // let mut musl_cases: Vec<&str> = Vec::new();
 
@@ -1203,24 +1307,112 @@ pub fn main() -> i32 {
         //     if !musl_cases.iter().any(|&x| x == case) {
         //         musl_cases.push(case);
         //     }
-        // }
+        //     // }
+        //         run_iperf_suite("/glibc", "glibc");
+        // cleanup_remaining_processes("1");
 
+        // run_iperf_suite("/musl", "musl");
+        // // cleanup_remaining_processes("1");
+        // chdir("/musl");
+        // run_script("/musl/libctest_testcode.sh", &[]);
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
 
+        // // // libcbench
+        // chdir("/musl");
+        // run_script("/musl/libcbench_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/libcbench_testcode.sh", &[]);
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // test_ltp_bin_single();
+        // test_ltp_bin_single_glibc();
+        // lmbench_simple_musl();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_glibc();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+
+        // chdir("/musl");
+        // run_script("/musl/netperf_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/netperf_testcode.sh", &[]);
+        // chdir("/musl");
+        // run_script("/musl/iozone_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/iozone_testcode.sh", &[]);
+
+        // run_iperf_suite("/glibc", "glibc");
+        // cleanup_remaining_processes("1");
+
+        // run_iperf_suite("/musl", "musl");
+        // cleanup_remaining_processes("1");
+        // run_netperf_script("/musl", "musl");
+        // run_netperf_script("/glibc", "glibc");
         // run_ltp_lane("ltp-glibc","/glibc",musl_cases.as_slice());
-    // run_ltp_lane("ltp-musl","/musl", RISCV_LTP_CASES);
-    // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
-        test_rv();
+        // run_ltp_lane("ltp-musl","/musl", RISCV_LTP_CASES);
+        // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
+
+        // lmbench_simple_musl();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_glibc();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+
+        // run_ltp_lane("ltp-musl","/musl", RISCV_LTP_CASES);
+        // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
+        // test_rv();
     }
     if !cfg!(target_arch = "riscv64") {
-    // run_ltp_lane("ltp-musl","/musl", LOONGARCH_LTP_CASES);
-    // run_ltp_lane("ltp-glibc","/glibc",LOONGARCH_LTP_CASES);
+        // run_ltp_lane("ltp-musl","/musl", LOONGARCH_LTP_CASES);
+        // run_ltp_lane("ltp-glibc","/glibc",LOONGARCH_LTP_CASES);
+        // chdir("/musl");
+        // run_script("/musl/libctest_testcode.sh", &[]);
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
 
-                //首先制作对应的脚本
+        // // // libcbench
+        // chdir("/musl");
+        // run_script("/musl/libcbench_testcode.sh", &[]);
+        // chdir("/glibc");
+        // run_script("/glibc/libcbench_testcode.sh", &[]);
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_musl();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_glibc();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+
+        // run_iperf_suite("/glibc", "glibc");
+        // cleanup_remaining_processes("1");
+
+        // run_iperf_suite("/musl", "musl");
+        // cleanup_remaining_processes("1");
+        // run_netperf_script("/musl", "musl");
+        // run_netperf_script("/glibc", "glibc");
+        // lmbench_simple_musl();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_glibc();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+
+        // lmbench_simple_musl();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+        // lmbench_simple_glibc();
+        // cleanup_remaining_processes("1");
+        // try_drop_kernel_caches();
+
+        //首先制作对应的脚本
         // let mut musl_cases: Vec<&str> = Vec::new();
-
-    // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
-
-        test_la();
+        // run_ltp_lane("ltp-musl","/musl", LOONGARCH_LTP_CASES);
+        // run_ltp_lane("ltp-glibc","/glibc",LOONGARCH_LTP_CASES);
+        // test_la();
     }
 
     println!("#### ALL TESTS DONE ####");

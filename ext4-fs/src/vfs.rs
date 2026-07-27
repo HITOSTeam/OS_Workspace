@@ -94,6 +94,26 @@ fn inode_caches_invalidate(inode_num: u32, block_device: &Arc<dyn BlockDevice>) 
     extents_cache_invalidate(inode_num, block_device);
 }
 
+#[cfg(debug_assertions)]
+fn debug_assert_extents_ordered(extents: &[Ext4Extent]) {
+    for pair in extents.windows(2) {
+        let prev = pair[0];
+        let next = pair[1];
+        let prev_end = prev.ee_block.saturating_add(prev.len());
+        debug_assert!(
+            prev_end <= next.ee_block,
+            "ext4 extents are not sorted or overlap: prev [{}, {}), next [{}, {})",
+            prev.ee_block,
+            prev_end,
+            next.ee_block,
+            next.ee_block.saturating_add(next.len())
+        );
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_assert_extents_ordered(_extents: &[Ext4Extent]) {}
+
 /// Virtual filesystem inode
 pub struct Inode {
     /// Inode number
@@ -108,6 +128,26 @@ pub struct Inode {
     block_device: Arc<dyn BlockDevice>,
     /// Cached block size (avoid locking fs repeatedly)
     block_size: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct InodeStatSnapshot {
+    pub inode_num: u32,
+    pub mode: u16,
+    pub uid: u32,
+    pub gid: u32,
+    pub nlink: u32,
+    pub size: u64,
+    pub special_rdev: u64,
+}
+
+impl InodeStatSnapshot {
+    pub fn rdev_for_mode(&self) -> u64 {
+        match self.mode & S_IFMT {
+            S_IFCHR | S_IFBLK => self.special_rdev,
+            _ => 0,
+        }
+    }
 }
 
 impl Inode {
@@ -222,6 +262,19 @@ impl Inode {
     /// Get cached block size
     pub fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    /// 通过一次块缓存查询读取 stat 所需的 inode 元数据。
+    pub fn stat_snapshot(&self) -> InodeStatSnapshot {
+        self.read_disk_inode(|inode| InodeStatSnapshot {
+            inode_num: self.inode_num,
+            mode: inode.i_mode,
+            uid: inode.i_uid as u32,
+            gid: inode.i_gid as u32,
+            nlink: inode.i_links_count as u32,
+            size: inode.size(),
+            special_rdev: ((inode.i_block[1] as u64) << 32) | inode.i_block[0] as u64,
+        })
     }
 
     /// Read the disk inode
@@ -552,66 +605,6 @@ impl Inode {
         }
     }
 
-    /// Read page-aligned regular-file data without populating the ext4
-    /// metadata block cache. Physically contiguous extent runs are submitted
-    /// as one multi-block device request.
-    pub fn read_data_pages(&self, offset: usize, dst: &mut [u8]) -> usize {
-        if offset % BLOCK_SZ != 0
-            || dst.len() % BLOCK_SZ != 0
-            || self.block_size != BLOCK_SZ
-            || !self.is_file()
-        {
-            return self.read_at(offset, dst);
-        }
-        let file_size = self.size() as usize;
-        if offset >= file_size || dst.is_empty() {
-            return 0;
-        }
-        let valid = dst.len().min(file_size - offset);
-        dst.fill(0);
-        let uses_extents = self.read_disk_inode(|inode| inode.uses_extents());
-        if !uses_extents {
-            return self.read_at(offset, &mut dst[..valid]);
-        }
-        let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
-            cached
-        } else {
-            let inode_data = self.read_disk_inode(|inode| {
-                let mut data = [0u32; 15];
-                data.copy_from_slice(&inode.i_block);
-                data
-            });
-            let parsed = self.parse_extent_tree(&inode_data, BLOCK_SZ);
-            extents_cache_put(self.inode_num, &self.block_device, parsed)
-        };
-        let first_lblock = offset / BLOCK_SZ;
-        let block_count = valid.saturating_add(BLOCK_SZ - 1) / BLOCK_SZ;
-        let mut relative = 0usize;
-        while relative < block_count {
-            let lblock = (first_lblock + relative) as u32;
-            let Some(first_pblock) = Self::map_logical_block(&extents, lblock) else {
-                relative += 1;
-                continue;
-            };
-            let mut run = 1usize;
-            while relative + run < block_count {
-                let next_lblock = (first_lblock + relative + run) as u32;
-                if Self::map_logical_block(&extents, next_lblock)
-                    != Some(first_pblock + run as u64)
-                {
-                    break;
-                }
-                run += 1;
-            }
-            let start = relative * BLOCK_SZ;
-            let end = start + run * BLOCK_SZ;
-            self.block_device
-                .read_blocks(first_pblock as usize, &mut dst[start..end]);
-            relative += run;
-        }
-        valid
-    }
-
     /// Read data using extent tree
     fn read_extents(&self, offset: usize, buf: &mut [u8], block_size: usize) -> usize {
         let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
@@ -623,10 +616,9 @@ impl Inode {
                 data
             });
             let extents = self.parse_extent_tree(&inode_data, block_size);
+            debug_assert_extents_ordered(&extents);
             extents_cache_put(self.inode_num, &self.block_device, extents)
         };
-        // Sparse regions inside an extent-based file must read back as zeros.
-        buf.fill(0);
         self.read_from_extents(&extents, offset, buf, block_size)
     }
 
@@ -743,6 +735,7 @@ impl Inode {
     ) -> usize {
         let file_start = offset;
         let file_end = offset.saturating_add(buf.len());
+        let mut covered_until = file_start;
 
         for extent in extents {
             let extent_start = extent.ee_block as usize * block_size;
@@ -759,13 +752,29 @@ impl Inode {
             if read_end <= read_start {
                 continue;
             }
+            if read_end <= covered_until {
+                continue;
+            }
+
+            let copy_start = core::cmp::max(read_start, covered_until);
+            if copy_start > covered_until {
+                let gap_start = covered_until - file_start;
+                let gap_end = copy_start - file_start;
+                buf[gap_start..gap_end].fill(0);
+            }
 
             // Destination offset in the caller's buffer (relative to requested `offset`).
-            let mut dst_off = read_start - file_start;
-            let mut remaining = read_end - read_start;
+            let mut dst_off = copy_start - file_start;
+            let mut remaining = read_end - copy_start;
+
+            if extent.is_unwritten() {
+                buf[dst_off..dst_off + remaining].fill(0);
+                covered_until = read_end;
+                continue;
+            }
 
             // Calculate physical position within the extent.
-            let offset_in_extent = read_start - extent_start;
+            let offset_in_extent = copy_start - extent_start;
             let mut cur_block = extent.start_block() as usize + offset_in_extent / block_size;
             let mut phys_off = offset_in_extent % block_size;
 
@@ -784,6 +793,12 @@ impl Inode {
                 phys_off = 0;
                 cur_block += 1;
             }
+            covered_until = read_end;
+        }
+
+        if covered_until < file_end {
+            let gap_start = covered_until - file_start;
+            buf[gap_start..].fill(0);
         }
 
         buf.len()
@@ -1386,15 +1401,12 @@ impl Inode {
             return Ok(());
         }
 
-        extents.insert(
-            insert_pos,
-            Ext4Extent {
-                ee_block: lblock,
-                ee_len: 1,
-                ee_start_hi: (pblock >> 32) as u16,
-                ee_start_lo: (pblock & 0xFFFF_FFFF) as u32,
-            },
-        );
+        extents.insert(insert_pos, Ext4Extent {
+            ee_block: lblock,
+            ee_len: 1,
+            ee_start_hi: (pblock >> 32) as u16,
+            ee_start_lo: (pblock & 0xFFFF_FFFF) as u32,
+        });
         Ok(())
     }
 
@@ -1547,60 +1559,6 @@ impl Inode {
         }
 
         Ok(written)
-    }
-
-    /// Write full data pages directly by contiguous extent run. Allocation and
-    /// inode metadata remain in the ext4 metadata cache; regular-file payload
-    /// pages are owned by the kernel page cache.
-    pub fn write_data_pages(&self, offset: usize, src: &[u8]) -> Result<usize> {
-        if offset % BLOCK_SZ != 0
-            || src.len() % BLOCK_SZ != 0
-            || self.block_size != BLOCK_SZ
-            || !self.is_file()
-        {
-            return self.write_at(offset, src);
-        }
-        if src.is_empty() {
-            return Ok(0);
-        }
-        let old_size = self.size() as usize;
-        let end = offset.saturating_add(src.len());
-        let first_lblock = (offset / BLOCK_SZ) as u32;
-        let end_lblock = (end / BLOCK_SZ) as u32;
-        let extents = self.ensure_write_blocks(first_lblock, end_lblock)?;
-        let mut relative = 0usize;
-        let block_count = src.len() / BLOCK_SZ;
-        while relative < block_count {
-            let lblock = first_lblock + relative as u32;
-            let first_pblock =
-                Self::map_logical_block(&extents, lblock).ok_or(Ext4Error::Unsupported)?;
-            let mut run = 1usize;
-            while relative + run < block_count {
-                if Self::map_logical_block(&extents, lblock + run as u32)
-                    != Some(first_pblock + run as u64)
-                {
-                    break;
-                }
-                run += 1;
-            }
-            let start = relative * BLOCK_SZ;
-            let finish = start + run * BLOCK_SZ;
-            self.block_device
-                .write_blocks(first_pblock as usize, &src[start..finish]);
-            relative += run;
-        }
-        if end > old_size {
-            self.modify_disk_inode(|inode| {
-                inode.i_size_lo = (end as u64 & 0xFFFF_FFFF) as u32;
-                inode.i_size_high = ((end as u64 >> 32) & 0xFFFF_FFFF) as u32;
-            });
-        }
-        Ok(src.len())
-    }
-
-    /// Persist cached inode metadata and any legacy cached payload blocks.
-    pub fn sync_inode_data(&self) {
-        super::block_cache::block_cache_sync_all();
     }
 
     /// Truncate a regular file to size 0 (frees all data blocks).

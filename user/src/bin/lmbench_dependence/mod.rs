@@ -1,4 +1,6 @@
-use super::{monotonic_time_ms, run_script};
+// use super::{monotonic_time_ms, run_script};
+use super::run_script;
+
 use user::syscall::chdir;
 
 pub const LMBENCH_MUSL_CASES: &[&str] = ALL_LMBENCH_CASES;
@@ -18,7 +20,7 @@ const ALL_LMBENCH_CASES: &[&str] = &[
     "lat_pipe",
     "lat_proc-fork",
     "lat_proc-exec",
-    "lat_proc-shell",
+    // "lat_proc-shell",
     "lmdd-write",
     "lat_pagefault",
     "lat_mmap",
@@ -35,17 +37,25 @@ fn run_lmbench_case(selected: &[&str], binary: &str, name: &str, args: &[&str]) 
     if !selected.contains(&name) {
         return 0;
     }
-    let start_ms = monotonic_time_ms();
-    println!("LMBENCH CASE START {} TIME_MS {}", name, start_ms);
+    // let start_ms = monotonic_time_ms();
+    // println!("LMBENCH CASE START {} TIME_MS {}", name, start_ms);
     let ret = run_script(binary, args);
-    let end_ms = monotonic_time_ms();
-    println!(
-        "LMBENCH CASE END {} TIME_MS {} DURATION_MS {}",
-        name,
-        end_ms,
-        end_ms.saturating_sub(start_ms)
-    );
+    // let end_ms = monotonic_time_ms();
+    // println!(
+    //     "LMBENCH CASE END {} TIME_MS {} DURATION_MS {}",
+    //     name,
+    //     end_ms,
+    //     end_ms.saturating_sub(start_ms)
+    // );
     ret
+}
+
+fn prepare_lmbench_tmp(busybox: &str) {
+    let _ = run_script(busybox, &[
+        "sh",
+        "-c",
+        "rm -rf /var/tmp; mkdir -p /var/tmp; rm -f /tmp/hello /var/tmp/XXX /var/tmp/lmbench; touch /var/tmp/lmbench",
+    ]);
 }
 
 fn run_lmbench_suite(
@@ -57,6 +67,7 @@ fn run_lmbench_suite(
     selected: &[&str],
 ) {
     let _ = chdir(dir);
+    prepare_lmbench_tmp(busybox);
     println!("#### OS COMP TEST GROUP START {} ####", group);
     println!("latency measurements");
 
@@ -65,8 +76,6 @@ fn run_lmbench_suite(
     let _ = run("lat_syscall-read", &["lat_syscall", "-P", "1", "read"]);
     let _ = run("lat_syscall-write", &["lat_syscall", "-P", "1", "write"]);
 
-    let _ = run_script(busybox, &["mkdir", "-p", "/var/tmp"]);
-    let _ = run_script(busybox, &["touch", "/var/tmp/lmbench"]);
     let _ = run("lat_syscall-stat", &[
         "lat_syscall",
         "-P",
@@ -103,7 +112,8 @@ fn run_lmbench_suite(
     let _ = run("lat_proc-fork", &["lat_proc", "-P", "1", "fork"]);
     let _ = run("lat_proc-exec", &["lat_proc", "-P", "1", "exec"]);
 
-    //镜像里面的 hello 有问题
+    //镜像里面的 hello 有问题,使用那个会导致我们一直fork,最终占满内存,对应的测例失败
+    //分析了以下主要的问题应该是权限位
     if selected.contains(&"lat_proc-shell") {
         let prepare_ret = run_script(busybox, &["sh", "-c", hello_wrapper]);
         if prepare_ret == 0 {

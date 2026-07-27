@@ -9,7 +9,6 @@
 // aligned with ltp_all.md
 pub const FORK_TASKS: [&str; 8] = [
     "fork01", "fork03", "fork04", "fork05", "fork07", "fork08", "fork09", "fork10",
-
 ];
 
 // WAIT_PID test cases

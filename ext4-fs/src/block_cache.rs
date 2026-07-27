@@ -1,6 +1,6 @@
 //! Block cache manager for ext4 filesystem
 
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec;
@@ -220,72 +220,28 @@ impl BlockCacheManager {
         self.compact_queue();
     }
 
-    fn evict_one(&mut self) -> bool {
+    fn evict_one(&mut self) {
         let mut scanned = 0usize;
         let limit = self.queue.len().saturating_add(1);
         while let Some((key, stamp)) = self.queue.pop_front() {
             scanned += 1;
-            let current = self.entries.get(&key).filter(|entry| entry.stamp == stamp);
-            let victim = current
-                .filter(|entry| Arc::strong_count(&entry.cache) == 1)
-                .map(|entry| Arc::clone(&entry.cache));
-            if let Some(cache) = victim {
-                cache.lock().sync();
-                drop(cache);
-                if let Some(entry) = self.entries.get(&key) {
-                    if entry.stamp == stamp && Arc::strong_count(&entry.cache) == 1 {
-                        self.entries.remove(&key);
-                        return true;
-                    }
+            if let Some(entry) = self.entries.get(&key) {
+                if entry.stamp == stamp && Arc::strong_count(&entry.cache) == 1 {
+                    self.entries.remove(&key);
+                    return;
                 }
-            } else if current.is_some() {
-                self.queue.push_back((key, stamp));
             }
             if scanned >= limit {
                 break;
             }
         }
-        false
+        panic!("Run out of BlockCache!");
     }
 
     fn ensure_capacity(&mut self) {
         while self.entries.len() >= BLOCK_CACHE_SIZE {
-            if !self.evict_one() {
-                break;
-            }
+            self.evict_one();
         }
-    }
-
-    pub fn reclaim_unused(&mut self, limit: usize) -> usize {
-        if limit == 0 {
-            return 0;
-        }
-        let mut reclaimed = 0usize;
-        let mut scanned = 0usize;
-        let scan_limit = self.queue.len();
-        while reclaimed < limit && scanned < scan_limit {
-            let Some((key, stamp)) = self.queue.pop_front() else {
-                break;
-            };
-            scanned += 1;
-            let current = self.entries.get(&key).filter(|entry| entry.stamp == stamp);
-            let victim = current
-                .filter(|entry| Arc::strong_count(&entry.cache) == 1)
-                .map(|entry| Arc::clone(&entry.cache));
-            if let Some(cache) = victim {
-                cache.lock().sync();
-                drop(cache);
-                if let Some(entry) = self.entries.get(&key) {
-                    if entry.stamp == stamp && Arc::strong_count(&entry.cache) == 1 {
-                        self.entries.remove(&key);
-                        reclaimed += 1;
-                    }
-                }
-            } else if current.is_some() {
-                self.queue.push_back((key, stamp));
-            }
-        }
-        reclaimed
     }
 
     fn load_block_range(
@@ -317,13 +273,10 @@ impl BlockCacheManager {
                 Arc::clone(&block_device),
                 &buf[offset..offset + BLOCK_SZ],
             )));
-            self.entries.insert(
-                key,
-                CacheEntry {
-                    cache: Arc::clone(&block_cache),
-                    stamp: 0,
-                },
-            );
+            self.entries.insert(key, CacheEntry {
+                cache: Arc::clone(&block_cache),
+                stamp: 0,
+            });
             self.mark_used(key);
             if i == 0 {
                 first_cache = Some(Arc::clone(&block_cache));
@@ -365,13 +318,10 @@ impl BlockCacheManager {
         CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
         self.ensure_capacity();
         let block_cache = Arc::new(Mutex::new(BlockCache::new_zeroed(block_id, block_device)));
-        self.entries.insert(
-            key,
-            CacheEntry {
-                cache: Arc::clone(&block_cache),
-                stamp: 0,
-            },
-        );
+        self.entries.insert(key, CacheEntry {
+            cache: Arc::clone(&block_cache),
+            stamp: 0,
+        });
         self.mark_used(key);
         block_cache
     }
@@ -407,9 +357,4 @@ pub fn block_cache_sync_all() {
     for entry in manager.entries.values() {
         entry.cache.lock().sync();
     }
-}
-
-/// Reclaim unused block caches. Returns the number of cache entries dropped.
-pub fn block_cache_reclaim_unused(limit: usize) -> usize {
-    BLOCK_CACHE_MANAGER.lock().reclaim_unused(limit)
 }

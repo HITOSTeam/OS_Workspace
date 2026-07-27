@@ -10,8 +10,11 @@ fn main(argc: usize, argv: &[&usize]) -> usize {
     println!("[init_proc] start");
     if fork() == 0 {
         if cfg!(feature = "submit") {
-            if exec("submit_script.bin\0", &[core::ptr::null::<u8>()]) < 0 {
+            // 暂时先使用这个
+            if exec("0final_init.bin\0", &[core::ptr::null::<u8>()]) < 0 {
                 exec("00shell.bin\0", &[core::ptr::null::<u8>()]);
+                // if exec("submit_script.bin\0", &[core::ptr::null::<u8>()]) < 0 {
+                // }
             }
         } else {
             exec("00shell.bin\0", &[core::ptr::null::<u8>()]);
