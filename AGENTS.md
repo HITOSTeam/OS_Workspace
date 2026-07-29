@@ -6,17 +6,10 @@
 - Do not optimize only for "one more test passes". Prefer Linux-like semantics, reusable fixes, and maintainable subsystem changes.
 - Later contributors are expected to keep optimizing, refactoring, and improving transitional implementations.
 
-## Read First
-
-- `OSGuide/ltp_test_summary.md`
-- `OSGuide/roadmap.md`
-- `OSGuide/parts/code_structure_audit.md`
-
 ## Project Structure
 
 - `os/`: kernel source and QEMU targets.
 - `user/`: user-space apps and LTP submit wiring.
-- `tests/`: Rust-side tests.
 - `testsuits-for-oskernel/`: external test suites.
 - `ext4-fs/`, `ext4-fs-packer/`: filesystem implementation and image builder.
 - `exampleOs/`: reference implementations for debugging ideas.
