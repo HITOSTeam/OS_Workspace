@@ -1,0 +1,9 @@
+# Runtime output and writable benchmark images
+.tmp/
+
+# Large competition assets
+*.img
+*.tar.xz
+
+# External final test-suite checkout
+testsuits-for-oskernel/
