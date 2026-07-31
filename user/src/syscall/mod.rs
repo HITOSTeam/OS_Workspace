@@ -15,6 +15,9 @@ const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPENAT: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
+const SYSCALL_MKDIRAT: usize = 34;
+const SYSCALL_MOUNT: usize = 40;
+const SYSCALL_UMOUNT2: usize = 39;
 const SYSCALL_SYNC: usize = 81;
 const SYSCALL_PIPE2: usize = 59;
 const SYSCALL_DUP3: usize = 24;
@@ -207,6 +210,34 @@ pub fn getpid() -> isize {
 
 pub fn sync() -> isize {
     syscall(SYSCALL_SYNC, [0, 0, 0, 0, 0, 0])
+}
+
+pub fn mkdirat(dirfd: isize, path: &str, mode: usize) -> isize {
+    syscall(
+        SYSCALL_MKDIRAT,
+        [dirfd as usize, path.as_ptr() as usize, mode, 0, 0, 0],
+    )
+}
+
+pub fn mount(source: &str, target: &str, fs_type: &str, flags: usize) -> isize {
+    syscall(
+        SYSCALL_MOUNT,
+        [
+            source.as_ptr() as usize,
+            target.as_ptr() as usize,
+            fs_type.as_ptr() as usize,
+            flags,
+            0,
+            0,
+        ],
+    )
+}
+
+pub fn umount2(target: &str, flags: usize) -> isize {
+    syscall(
+        SYSCALL_UMOUNT2,
+        [target.as_ptr() as usize, flags, 0, 0, 0, 0],
+    )
 }
 
 pub fn poweroff() -> ! {

@@ -299,31 +299,6 @@ fn eval_stmt(stmt: &str, env: &mut Environment) -> bool {
                 }
                 _ => {}
             }
-
-            if argv[0].ends_with(".sh") {
-                // Prefer busybox `sh` for OSComp scripts (while/read/eval/redirections).
-                let script = argv[0].clone();
-                let mut sh_argv: Vec<String> = Vec::new();
-                let busybox = find_busybox(env).unwrap_or_else(|| String::from("busybox"));
-                sh_argv.push(busybox);
-                sh_argv.push(String::from("sh"));
-                sh_argv.push(script);
-                for a in argv.iter().skip(1) {
-                    sh_argv.push(a.clone());
-                }
-                let pid = fork();
-                if pid == 0 {
-                    exec_command(&sh_argv, env);
-                } else {
-                    let mut status: i32 = 0;
-                    let _ = waitpid(pid as isize, &mut status);
-                    env.set(
-                        String::from("?"),
-                        alloc::format!("{}", decode_wait_status(status)),
-                    );
-                }
-                continue;
-            }
         }
 
         if pipeline.commands.len() == 1 {
