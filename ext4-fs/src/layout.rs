@@ -401,6 +401,8 @@ pub struct Ext4Extent {
 }
 
 impl Ext4Extent {
+    const INIT_MAX_LEN: u16 = 0x8000;
+
     /// Get physical start block
     pub fn start_block(&self) -> u64 {
         (self.ee_start_hi as u64) << 32 | self.ee_start_lo as u64
@@ -408,8 +410,48 @@ impl Ext4Extent {
 
     /// Get extent length (number of blocks)
     pub fn len(&self) -> u32 {
-        // High bit indicates uninitialized extent
-        (self.ee_len & 0x7FFF) as u32
+        // ext4 reserves values above 0x8000 for unwritten extents.  The
+        // boundary value 0x8000 itself is a fully initialized 32768-block
+        // extent, so masking the high bit would incorrectly turn it into an
+        // empty extent.
+        if self.ee_len <= Self::INIT_MAX_LEN {
+            self.ee_len as u32
+        } else {
+            (self.ee_len - Self::INIT_MAX_LEN) as u32
+        }
+    }
+
+    /// Whether this extent is preallocated but has not been initialized.
+    pub fn is_unwritten(&self) -> bool {
+        self.ee_len > Self::INIT_MAX_LEN
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ext4Extent;
+
+    fn extent_with_raw_len(ee_len: u16) -> Ext4Extent {
+        Ext4Extent {
+            ee_block: 0,
+            ee_len,
+            ee_start_hi: 0,
+            ee_start_lo: 1,
+        }
+    }
+
+    #[test]
+    fn max_initialized_extent_keeps_all_32768_blocks() {
+        let extent = extent_with_raw_len(0x8000);
+        assert_eq!(extent.len(), 32768);
+        assert!(!extent.is_unwritten());
+    }
+
+    #[test]
+    fn unwritten_extent_decodes_length_without_losing_zero_fill_state() {
+        let extent = extent_with_raw_len(0x8001);
+        assert_eq!(extent.len(), 1);
+        assert!(extent.is_unwritten());
     }
 }
 

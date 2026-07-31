@@ -1,20 +1,32 @@
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Ext4 packer that creates an ext4 image with:
-///   /user - user binaries
-///   /extra - additional files (optional)
-/// Arch-specific extra overlays can be layered after the common extra tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ImageKind {
+    /// Legacy image containing the system root and /user.
+    Combined,
+    /// System root seeded from the base image and extra overlays, without /user binaries.
+    System,
+    /// Standalone filesystem mounted at /user; binaries live at its filesystem root.
+    User,
+}
+
+/// Ext4 image builder for the system root, the standalone /user filesystem,
+/// or the legacy combined layout.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Directory containing user binaries (will be placed in /user)
+    /// Image layout to build
+    #[arg(long, value_enum, default_value_t = ImageKind::Combined)]
+    kind: ImageKind,
+
+    /// Directory containing user binaries
     #[arg(short = 'u', long = "user")]
-    user_dir: PathBuf,
+    user_dir: Option<PathBuf>,
 
     /// Optional extra directory to pack (will be placed in /extra)
     #[arg(short = 'e', long = "extra")]
@@ -39,17 +51,46 @@ struct Args {
     /// Image file name (default: fs.ext4)
     #[arg(short = 'o', long = "output", default_value = "fs.ext4")]
     output: String,
+
+    /// Optional ext4 volume label
+    #[arg(short = 'L', long = "label")]
+    label: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Check user_dir exists and is a directory
-    if !args.user_dir.exists() || !args.user_dir.is_dir() {
-        anyhow::bail!(
-            "user dir '{}' does not exist or is not a directory",
-            args.user_dir.display()
-        );
+    match args.kind {
+        ImageKind::Combined | ImageKind::User => {
+            let user_dir = args
+                .user_dir
+                .as_ref()
+                .context("--user is required for combined and user images")?;
+            if !user_dir.is_dir() {
+                anyhow::bail!(
+                    "user dir '{}' does not exist or is not a directory",
+                    user_dir.display()
+                );
+            }
+        }
+        ImageKind::System => {
+            if args.user_dir.is_some() {
+                anyhow::bail!("--user is not valid for a system image");
+            }
+            if args.base_image.is_none()
+                && args.extra_dir.is_none()
+                && args.arch_extra_dir.is_none()
+            {
+                anyhow::bail!(
+                    "system image needs at least one of --base-image, --extra, or --arch-extra"
+                );
+            }
+        }
+    }
+    if args.kind == ImageKind::User
+        && (args.base_image.is_some() || args.extra_dir.is_some() || args.arch_extra_dir.is_some())
+    {
+        anyhow::bail!("user images cannot use --base-image, --extra, or --arch-extra");
     }
 
     let mut extra_dirs: Vec<(&str, &PathBuf)> = Vec::new();
@@ -83,7 +124,8 @@ fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&args.target)?;
 
     // Create a temporary staging directory with the desired layout
-    let staging_dir = args.target.join("_staging");
+    let staging_name = alloc_staging_name(&args.output);
+    let staging_dir = args.target.join(staging_name);
     if staging_dir.exists() {
         fs::remove_dir_all(&staging_dir)?;
     }
@@ -94,20 +136,22 @@ fn main() -> anyhow::Result<()> {
         seed_from_base_image(&staging_dir, base_image)?;
     }
 
-    // Create /user directory in staging
-    let staging_user = staging_dir.join("user");
-    fs::create_dir_all(&staging_user)?;
+    if args.kind != ImageKind::User {
+        // Create standard runtime directories expected by many Unix userland programs.
+        // In particular, iperf3 uses `mkstemp("/tmp/iperf3.XXXXXX")` per stream.
+        create_standard_dirs(&staging_dir)?;
+    }
 
-    // Create standard runtime directories expected by many Unix userland programs.
-    // In particular, iperf3 uses `mkstemp("/tmp/iperf3.XXXXXX")` per stream.
-    create_standard_dirs(&staging_dir)?;
-
-    // Copy user binaries to staging/user
-    println!(
-        "Copying user binaries from '{}'...",
-        args.user_dir.display()
-    );
-    copy_dir_contents(&args.user_dir, &staging_user)?;
+    if let Some(user_dir) = args.user_dir.as_ref() {
+        println!("Copying user binaries from '{}'...", user_dir.display());
+        if args.kind == ImageKind::User {
+            copy_dir_contents(user_dir, &staging_dir)?;
+        } else {
+            let staging_user = staging_dir.join("user");
+            fs::create_dir_all(&staging_user)?;
+            copy_dir_contents(user_dir, &staging_user)?;
+        }
+    }
 
     // If extra overlays are provided, create /extra and copy them in order.
     // The common tree is copied first, then the arch-specific tree can replace
@@ -123,13 +167,34 @@ fn main() -> anyhow::Result<()> {
     // scripts invoked as `./foo.sh` will fail in busybox/ash.
     fix_shell_script_modes(&staging_dir)?;
 
+    finish_image(&args, &staging_dir, &extra_dirs)
+}
+
+fn alloc_staging_name(output: &str) -> String {
+    let safe_output: String = output
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("_staging_{safe_output}")
+}
+
+fn finish_image(
+    args: &Args,
+    staging_dir: &PathBuf,
+    extra_dirs: &[(&str, &PathBuf)],
+) -> anyhow::Result<()> {
     let image_path = args.target.join(&args.output);
     // Ensure we don't reuse a partially-written/corrupted image from a previous failed run.
     if image_path.exists() {
         fs::remove_file(&image_path)?;
     }
 
-    // Check mke2fs availability
     if Command::new("mke2fs").arg("-V").output().is_err() {
         eprintln!(
             "`mke2fs` not found. Please install e2fsprogs (provides mke2fs).\nOn Debian/Ubuntu: sudo apt install e2fsprogs"
@@ -137,22 +202,25 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // Build arguments: mke2fs -t ext4 -F -b 4096 -O ... -d <staging> <image> <size>
-    // Use 4096 byte block size for compatibility with our ext4-fs implementation.
-    // Disable journal/metadata checksums since our ext4-fs driver doesn't update them.
     println!(
-        "Creating ext4 image '{}' of size {} (block size: 4096)...",
+        "Creating {:?} ext4 image '{}' of size {} (block size: 4096)...",
+        args.kind,
         image_path.display(),
         args.size,
     );
-    let status = Command::new("mke2fs")
+    let mut command = Command::new("mke2fs");
+    command
         .arg("-t")
         .arg("ext4")
         .arg("-F")
         .arg("-b")
-        .arg("4096") // Force 4096 byte block size
+        .arg("4096")
         .arg("-O")
-        .arg("^has_journal,^metadata_csum,^metadata_csum_seed")
+        .arg("^has_journal,^metadata_csum,^metadata_csum_seed");
+    if let Some(label) = args.label.as_ref() {
+        command.arg("-L").arg(label);
+    }
+    let status = command
         .arg("-d")
         .arg(staging_dir.as_os_str())
         .arg(image_path.as_os_str())
@@ -166,19 +234,20 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Clean up staging directory
-    fs::remove_dir_all(&staging_dir)?;
+    fs::remove_dir_all(staging_dir)?;
 
     println!("Image created: {}", image_path.display());
-    println!("Contents:");
-    println!("  /user  - user binaries");
+    match args.kind {
+        ImageKind::Combined => println!("  /user  - user binaries"),
+        ImageKind::System => println!("  /      - system root without user binaries"),
+        ImageKind::User => println!("  /      - contents mounted at /user"),
+    }
     if !extra_dirs.is_empty() {
         println!("  /extra - additional files");
     }
     if let Some(ref base_image) = args.base_image {
         println!("  base   - {}", base_image.display());
     }
-
     Ok(())
 }
 
@@ -241,6 +310,8 @@ fn create_standard_dirs(staging_root: &PathBuf) -> anyhow::Result<()> {
     fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777))?;
     fs::create_dir_all(staging_root.join("bin"))?;
     fs::create_dir_all(staging_root.join("usr/bin"))?;
+    fs::create_dir_all(staging_root.join("user"))?;
+    fs::create_dir_all(staging_root.join("mnt/oscomp"))?;
     // iproute2 persists named network namespaces under /var/run/netns.
     fs::create_dir_all(staging_root.join("var/run/netns"))?;
     fs::create_dir_all(staging_root.join("run/netns"))?;

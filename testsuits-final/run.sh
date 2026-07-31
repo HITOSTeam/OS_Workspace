@@ -248,20 +248,21 @@ fi
 MAKE_COMMAND=(
     make
     -C "${OS_DIR}"
-    run_ext4
+    run_final
     "ARCH=${ARCH}"
     "SUBMIT=0"
+    "BASH_SHELL=1"
     "LOG=${LOG_LEVEL}"
     "SMP=${SMP}"
     "MEM=${MEM}"
     "EXT4_REBUILD=${EXT4_REBUILD_VALUE}"
-    "EXT4_SIZE=${EXT4_SIZE:-1G}"
-    "DISK_IMG=${RUN_IMAGE}"
+    "USER_EXT4_SIZE=${USER_EXT4_SIZE:-256M}"
+    "FINAL_IMG=${RUN_IMAGE}"
     "QEMU_TIMEOUT=0"
     "QEMU_EXTRA_ARGS=${QEMU_EXTRA_ARGS}"
 )
 
-note "Launching QEMU; final image is attached as the second VirtIO disk."
+note "Launching QEMU; final image is /dev/vda and the generated /user image is /dev/vdb."
 
 run_interactive() {
     local status

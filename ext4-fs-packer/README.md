@@ -1,14 +1,12 @@
 # ext4-fs-packer
 
-This tool creates an ext4 filesystem image with a structured layout:
+This tool creates one of three ext4 layouts:
 
-**ATTENTION**:This lib is just a tool for the RUSTOS competion. I dont maintain the git healthily.
-The doc might not be consistent with the code in time.
-
-```
-/user   - User binaries (required)
-/extra  - Additional files (optional, common + arch overlays)
-```
+- `system`: a system root seeded from a base image and overlays, without user
+  binaries;
+- `user`: a standalone filesystem mounted at `/user`; user binaries are stored
+  at the image root;
+- `combined`: the legacy layout containing both the system root and `/user`.
 
 It uses the system `mke2fs -d` command from `e2fsprogs` to populate the image.
 
@@ -29,49 +27,43 @@ cargo build --release
 ### Create an image
 
 ```sh
-# Basic: pack user binaries only
-./target/release/ext4-fs-packer -u /path/to/user_binaries -t /path/to/output -S 64M
+# Standalone /user filesystem
+./target/release/ext4-fs-packer --kind user \
+    -u /path/to/user_binaries -t /path/to/output \
+    -o user.ext4 -L congcore-user -S 256M
 
-# With extra files
-./target/release/ext4-fs-packer -u /path/to/user_binaries -e /path/to/extra_files -t /path/to/output -S 64M
-
-# With common and architecture-specific extra files
-./target/release/ext4-fs-packer -u /path/to/user_binaries \
+# System root without /user binaries
+./target/release/ext4-fs-packer --kind system \
     -e /path/to/extra_common \
     --arch-extra /path/to/extra-riscv64 \
-    -t /path/to/output -S 64M
-
-# Based on an existing ext4 image
-./target/release/ext4-fs-packer -u /path/to/user_binaries \
-    -e /path/to/extra_files \
-    --arch-extra /path/to/extra-riscv64 \
     -b /path/to/base.ext4 \
-    -t /path/to/output -S 64M
+    -t /path/to/output -o system.ext4 -L congcore-system -S 4G
+
+# Legacy combined image
+./target/release/ext4-fs-packer --kind combined \
+    -u /path/to/user_binaries -e /path/to/extra_common \
+    -b /path/to/base.ext4 -t /path/to/output -S 4G
 ```
 
 ### Options
 
 | Option                | Description                                            |
 | --------------------- | ------------------------------------------------------ |
-| `-u, --user <DIR>`    | Directory containing user binaries (placed in `/user`) |
-| `-e, --extra <DIR>`   | Optional common extra directory (placed in `/extra`)   |
+| `--kind <KIND>`       | `combined`, `system`, or `user`; default: `combined`   |
+| `-u, --user <DIR>`    | User binaries; required by `combined` and `user`       |
+| `-e, --extra <DIR>`   | Common system overlay (placed in `/extra`)             |
 | `--arch-extra <DIR>`  | Optional arch-specific extra overlay copied after `--extra` |
 | `-b, --base-image <IMG>` | Optional base ext4 image to seed contents           |
 | `-t, --target <DIR>`  | Output directory for the image                         |
 | `-S, --size <SIZE>`   | Image size (e.g., 16M, 64M, 1G). Default: 64M          |
 | `-o, --output <NAME>` | Output filename. Default: fs.ext4                      |
+| `-L, --label <LABEL>` | Optional ext4 volume label                             |
 
 ### Example with CongCore
 
 ```sh
-# From the project root, pack user binaries
-cd ext4-fs-packer
-cargo run --release -- -u ../user/target/riscv64gc-unknown-none-elf/release -t target -S 64M
-
-# Or with testsuits
-cargo run --release -- -u ../user/target/riscv64gc-unknown-none-elf/release \
-    -e ../testsuits-for-oskernel/sdcard \
-    -t target -S 128M
+make -C os system_img ARCH=riscv64 EXT4_SIZE=4G
+make -C os user_img ARCH=riscv64 USER_EXT4_SIZE=256M
 ```
 
 The CongCore build uses `ext4-fs-packer/extra` for architecture-neutral text
@@ -82,6 +74,7 @@ loongarch64-specific overlays should live in `extra-loongarch64`.
 ## Notes
 
 - The packer uses `mke2fs -d` which copies contents into the image at creation time
+- Seeding a system/combined image from `--base-image` also requires `debugfs`
 - No root privileges or loop device mounting required
 - If `mke2fs` is not present, install `e2fsprogs`:
   ```sh

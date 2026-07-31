@@ -767,6 +767,14 @@ impl Inode {
             let mut dst_off = copy_start - file_start;
             let mut remaining = read_end - copy_start;
 
+            // Unwritten extents are allocated on disk but expose zeroes until
+            // they are converted to initialized extents.
+            if extent.is_unwritten() {
+                buf[dst_off..dst_off + remaining].fill(0);
+                covered_until = read_end;
+                continue;
+            }
+
             // Calculate physical position within the extent.
             let offset_in_extent = copy_start - extent_start;
             let mut cur_block = extent.start_block() as usize + offset_in_extent / block_size;
