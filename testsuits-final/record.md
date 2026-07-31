@@ -483,7 +483,8 @@ BYTES=0
   - procfs 上叠加 sysfs 后 magic 为 `0x62656572`；
   - 第一次卸载显露下层 procfs，第二次卸载显露原 ext4 目录；
   - 打开下层 procfs FD 时普通卸载返回 `EBUSY`，关闭 FD 后成功；
-  - BuildStorm 使用的重复 `mount -t proc proc /proc` 可成功并逐层卸载。
+  - 对当前顶层重复相同 source、filesystem type 和 target 的挂载返回
+    `EBUSY`；使用不同 source/backend 时仍可 overmount 并逐层卸载。
 - 运行日志：
   `.tmp/final-runs/20260730-134710-riscv64-shell/serial.log`。
 - CAgent 回归得到 7/10 通过；`fs-create`、`fs-directory`、`fs-search` 未在脚本
@@ -494,3 +495,59 @@ BYTES=0
 - busybox `unshare -pf` 被现有参数校验以 `EINVAL` 拒绝，因此 PID namespace
   运行态还需使用 LTP `pidns03` 或补齐对应 unshare/clone 接线后验证。
 
+### RISC-V LTP 聚焦回归
+
+环境：
+
+- 内核基线：`e78c5e16441b6cef297baaf5f483270f24fca0f5`，包含本节记录的未提交
+  mount 工作区修改。
+- 初赛 LTP 源码：`dev_final`，
+  `e63f2d0b42298acb2b4653dd53c8ccecae974c69`。
+- 初赛 RISC-V 测试镜像 SHA-256：
+  `284da8681f561a75f7023bfff09b6e3720894f894891885a9c4d8b4e92e4605a`。
+- QEMU 11.0.3；RISC-V64，8 vCPU，1 GiB。
+- 所有有效复跑均使用重新生成的 system ext4 和 QEMU `-snapshot`，避免 LTP
+  写入的 `/tmp`、临时 mount 和固定随机路径污染下一轮。
+- 临时设置 `RUN_NON_LTP_BASELINE=false`、`RUN_LTP_GROUPS=true`，只运行 LTP；
+  测试完成后已恢复默认值，`submit_plan.rs` 的聚焦分组也已全部恢复为注释。
+
+首轮 `MOUNT_API_TASKS` 暴露出：同一个 source 在同一个 target 上直接重复挂载
+错误成功，导致 `mount02` 失败，并遗留一层挂载污染后续 `umount02`。对照 Linux
+`mount(2)` 后将判断收窄为：
+
+- 相同 source、filesystem type 和当前顶层 target：`EBUSY`；
+- target 相同但 source/backend 不同：允许 overmount；
+- `umount` 只弹出当前顶层，显露下层挂载。
+
+修复后的干净快照结果：
+
+- `MOUNT_API_TASKS`：
+  - glibc 的 `mount01-07`、`umount01-03`、`umount2_01-02`、
+    `mount_setattr01`、`fsconfig01-03`、`fsopen01` 全部通过；
+  - musl 除既有的 `mount03` setuid ELF 执行差异和 `mount07`
+    `realpath(nosymfollow)` 差异外，其余相同 mount/umount 用例通过；
+  - `fanotify21-23` 和 `fsconfig01` 中缺少的功能/工具按 LTP 报告预期
+    `TCONF`，没有新增内核失败。
+- `FSTATFS_TASKS + STATFS_TASKS`：
+  - musl/glibc 的 `fstatfs02`、`statfs02`、`statfs03` 全部通过；
+  - 无 `TFAIL`、`TBROK` 或 `TWARN`。
+- `NS_MOUNT_CORE_TASKS`：
+  - musl/glibc 的 `mountns01-04`、`setns01-02`、`unshare01-02` 全部通过；
+  - `timens01`、`pidns01` 因当前镜像内核配置不满足而预期 `TCONF`；
+  - 无 `TFAIL`、`TBROK` 或 `TWARN`。
+
+复现命令模板：
+
+```zsh
+make -C os run_ext4 ARCH=riscv64 SUBMIT=1 LOG=warn SMP=8 MEM=1G \
+  EXT4_REBUILD=0 EXT4_SIZE=4G QEMU_EXTRA_ARGS=-snapshot
+```
+
+有效日志及 SHA-256：
+
+- `.tmp/ltp-mount-api-riscv64-20260730-clean.log`：
+  `dce03f622a9f251620600c607afdcbb2dc8dfb554ef1cf8e511061e8002c4a6c`
+- `.tmp/ltp-statfs-riscv64-20260730.log`：
+  `184f17ff557f317a7371820f061e5ddbb0371e2fda02ed08746fe2ba4e401ef8`
+- `.tmp/ltp-mountns-riscv64-20260730.log`：
+  `32397c0460df9a432db6e7b1c81441e14e5645e4bbef61500489f08aecf77ee9`

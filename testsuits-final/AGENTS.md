@@ -5,6 +5,25 @@
 本目录存放 2026 年全国大学生 OS 比赛内核赛道决赛测试资产，用于决赛测例的
 接入、诊断和性能优化。
 
+## 总体目标与 Linux 标准
+
+总体目标是在行为正确的前提下，尽可能快地完成全部 final 测试。实现和评审时
+以 Linux 的用户可观察语义、ABI 和并发正确性作为标准，同时把吞吐、延迟、
+内存占用和多核扩展性作为核心约束。
+
+不要求逐行移植 Linux，也不要求完整复制与当前决赛场景无关的内部结构、边界
+功能和实现细节。允许采用更简单、更适合本项目架构的机制，但必须满足：
+
+- final 测试依赖的 Linux 行为正确，错误码、同步、资源生命周期和并发结果可信；
+- 机制可复用、可维护，不针对单个测试名称、固定输入或评分脚本硬编码；
+- 不以牺牲初赛/LTP 已支持语义、稳定性或安全性换取局部速度；
+- 优先修复真实瓶颈，避免为了形式上接近 Linux 引入不必要的复杂度和开销；
+- 对尚未实现的 Linux 细节明确记录适用边界，并确认不会影响当前 final 测试。
+
+判断一项实现是否可接受时，顺序是：正确性与 ABI、并发和资源安全、final
+测试完成度、性能、内部实现相似度。Linux 源码用于确认语义和成熟设计，不是
+要求内部实现一比一复制。
+
 优先在 `../os/` 中实现符合 Linux 语义、可复用且可维护的子系统修复。禁止为
 单个测例硬编码返回值、伪造输出或破坏初赛测例兼容性。
 
@@ -29,8 +48,6 @@
 - `testsuits-for-oskernel/scripts/buildstorm_testcode.sh`
 - `testsuits-for-oskernel/judge/judge_cagent-glibc.py`
 - `testsuits-for-oskernel/judge/judge_buildstorm-glibc.py`
-- 如果存在，则阅读 `../OSGuide/ltp_test_summary.md`、
-  `../OSGuide/roadmap.md` 和 `../OSGuide/parts/code_structure_audit.md`
 
 决赛测例源码应保持在 `final-2026` 分支。评分常量和脚本可能更新，因此每份
 测试报告都必须记录实际使用的源码 commit。
@@ -162,11 +179,15 @@ RISC-V 的期望核数设为 8，把 LoongArch 的期望核数设为 12；README
 
 ## 接入原则
 
-决赛镜像本身是完整根文件系统，但当前内核启动仍要求主文件系统中存在
-`/user/init_proc.bin`。因此 `run.sh` 保留生成的 `fs.ext4` 作为第一块 VirtIO
-启动盘，将决赛镜像作为第二块盘；内核通过双盘路径回退访问 `/glibc`、
-`/work`、`/root` 等目录。该模式与原有 LTP 运行入口隔离，不要静默替换现有
-初赛启动路径。
+决赛镜像本身是完整根文件系统。`run.sh` 将它作为第一块 VirtIO 盘
+`/dev/vda` 和根文件系统 `/`，另行生成只包含 CongCore 用户程序的
+`user.ext4`，作为 `/dev/vdb` 挂载到 `/user`。路径解析不得在磁盘间回退；
+每个路径只在最长匹配的挂载所对应的文件系统中查找。
+
+初赛入口使用三盘布局：`system.ext4` 为 `/dev/vda` 和 `/`，`user.ext4`
+为 `/dev/vdb` 和 `/user`，初赛 sdcard 为 `/dev/vdc` 和 `/mnt/oscomp`；
+`/glibc` 与 `/musl` 是从 `/mnt/oscomp` 建立的 bind mount。决赛入口只使用
+前述决赛根盘和 user 盘，不挂载初赛 system/test 镜像。
 
 建议按以下阶段推进：
 
