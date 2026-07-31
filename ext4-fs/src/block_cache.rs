@@ -5,7 +5,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use lazy_static::lazy_static;
 use spin::Mutex;
 
@@ -17,18 +17,64 @@ pub struct BlockCache {
     block_id: usize,
     /// underlying block device
     block_device: Arc<dyn BlockDevice>,
-    /// whether the block is dirty
-    modified: bool,
+    /// Generation most recently modified in memory.
+    dirty_generation: u64,
+    /// Generation most recently written to the device.
+    synced_generation: u64,
+    /// Serialize writeback without holding the cache data lock across I/O.
+    writeback_in_progress: bool,
+}
+
+struct Writeback {
+    generation: u64,
+    block_id: usize,
+    block_device: Arc<dyn BlockDevice>,
+    data: Vec<u8>,
+}
+
+enum WritebackPreparation {
+    Done,
+    Busy(Arc<dyn BlockDevice>),
+    Ready(Writeback),
 }
 
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static CACHE_LOADS: AtomicU64 = AtomicU64::new(0);
+static CACHE_COALESCED_WAITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_WAIT_RETRIES: AtomicU64 = AtomicU64::new(0);
+static CACHE_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+static CACHE_PREFETCHED_BLOCKS: AtomicU64 = AtomicU64::new(0);
 
 pub fn cache_stats() -> (u64, u64) {
     (
         CACHE_HITS.load(Ordering::Relaxed),
         CACHE_MISSES.load(Ordering::Relaxed),
     )
+}
+
+/// Detailed block-cache counters for performance diagnostics.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CacheDiagnostics {
+    pub hits: u64,
+    pub misses: u64,
+    pub loads: u64,
+    pub coalesced_waits: u64,
+    pub wait_retries: u64,
+    pub evictions: u64,
+    pub prefetched_blocks: u64,
+}
+
+pub fn cache_diagnostics() -> CacheDiagnostics {
+    CacheDiagnostics {
+        hits: CACHE_HITS.load(Ordering::Relaxed),
+        misses: CACHE_MISSES.load(Ordering::Relaxed),
+        loads: CACHE_LOADS.load(Ordering::Relaxed),
+        coalesced_waits: CACHE_COALESCED_WAITS.load(Ordering::Relaxed),
+        wait_retries: CACHE_WAIT_RETRIES.load(Ordering::Relaxed),
+        evictions: CACHE_EVICTIONS.load(Ordering::Relaxed),
+        prefetched_blocks: CACHE_PREFETCHED_BLOCKS.load(Ordering::Relaxed),
+    }
 }
 
 impl BlockCache {
@@ -41,7 +87,9 @@ impl BlockCache {
             cache,
             block_id,
             block_device,
-            modified: false,
+            dirty_generation: 0,
+            synced_generation: 0,
+            writeback_in_progress: false,
         }
     }
 
@@ -54,7 +102,9 @@ impl BlockCache {
             cache,
             block_id,
             block_device,
-            modified: false,
+            dirty_generation: 0,
+            synced_generation: 0,
+            writeback_in_progress: false,
         }
     }
 
@@ -70,8 +120,14 @@ impl BlockCache {
             block_device,
             // Mark dirty because on-disk data may contain stale bytes from a
             // previously freed block.
-            modified: true,
+            dirty_generation: 1,
+            synced_generation: 0,
+            writeback_in_progress: false,
         }
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty_generation = self.dirty_generation.saturating_add(1);
     }
 
     /// Get the address of an offset inside the cached block data
@@ -97,7 +153,7 @@ impl BlockCache {
     {
         let type_size = core::mem::size_of::<T>();
         assert!(offset + type_size <= BLOCK_SZ);
-        self.modified = true;
+        self.mark_dirty();
         let addr = self.addr_of_offset(offset);
         unsafe { &mut *(addr as *mut T) }
     }
@@ -119,40 +175,49 @@ impl BlockCache {
 
     /// Get raw mutable byte slice from cache
     pub fn get_bytes_mut(&mut self, offset: usize, len: usize) -> &mut [u8] {
-        self.modified = true;
+        self.mark_dirty();
         &mut self.cache[offset..offset + len]
     }
 
-    /// Sync cache to disk
-    pub fn sync(&mut self) {
-        if self.modified {
-            self.modified = false;
-            self.block_device.write_block(self.block_id, &self.cache);
-        }
+    fn writeback_target(&self) -> u64 {
+        self.dirty_generation
     }
-}
 
-impl Drop for BlockCache {
-    fn drop(&mut self) {
-        self.sync()
+    fn prepare_writeback(&mut self, target: u64) -> WritebackPreparation {
+        if self.synced_generation >= target {
+            return WritebackPreparation::Done;
+        }
+        if self.writeback_in_progress {
+            return WritebackPreparation::Busy(Arc::clone(&self.block_device));
+        }
+        self.writeback_in_progress = true;
+        WritebackPreparation::Ready(Writeback {
+            generation: self.dirty_generation,
+            block_id: self.block_id,
+            block_device: Arc::clone(&self.block_device),
+            data: self.cache.clone(),
+        })
+    }
+
+    fn finish_writeback(&mut self, generation: u64) {
+        debug_assert!(self.writeback_in_progress);
+        self.synced_generation = self.synced_generation.max(generation);
+        self.writeback_in_progress = false;
     }
 }
 
 /// Block cache size.
 ///
 /// Use a larger cache on LoongArch to reduce cold-start IO for glibc assets.
+#[cfg(not(test))]
 const BLOCK_CACHE_SIZE: usize = if cfg!(target_arch = "loongarch64") {
     2048
 } else {
     512
 };
 
-/// Read-ahead blocks on cache miss.
-const READ_AHEAD_BLOCKS: usize = if cfg!(target_arch = "loongarch64") {
-    2
-} else {
-    1
-};
+#[cfg(test)]
+const BLOCK_CACHE_SIZE: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheKey {
@@ -174,11 +239,65 @@ fn cache_key(block_id: usize, block_device: &Arc<dyn BlockDevice>) -> CacheKey {
 struct CacheEntry {
     cache: Arc<Mutex<BlockCache>>,
     stamp: u64,
+    evicting: bool,
+}
+
+struct LoadState {
+    done: AtomicBool,
+}
+
+impl LoadState {
+    fn new() -> Self {
+        Self {
+            done: AtomicBool::new(false),
+        }
+    }
+
+    fn finish(&self) {
+        self.done.store(true, Ordering::Release);
+    }
+
+    fn is_done(&self) -> bool {
+        self.done.load(Ordering::Acquire)
+    }
+}
+
+struct LoadingEntry {
+    state: Arc<LoadState>,
+    block_device: Arc<dyn BlockDevice>,
+}
+
+enum CacheSlot {
+    Loading(LoadingEntry),
+    Ready(CacheEntry),
+}
+
+struct LoadTicket {
+    start_block: usize,
+    count: usize,
+    state: Arc<LoadState>,
+    block_device: Arc<dyn BlockDevice>,
+    reserved_keys: Vec<CacheKey>,
+}
+
+struct EvictionTicket {
+    key: CacheKey,
+    stamp: u64,
+    cache: Arc<Mutex<BlockCache>>,
+}
+
+enum CacheLookup {
+    Ready(Arc<Mutex<BlockCache>>),
+    Created(Arc<Mutex<BlockCache>>),
+    Wait(Arc<LoadState>),
+    Load(LoadTicket),
+    Evict(EvictionTicket),
+    Retry,
 }
 
 /// Block cache manager
 pub struct BlockCacheManager {
-    entries: BTreeMap<CacheKey, CacheEntry>,
+    entries: BTreeMap<CacheKey, CacheSlot>,
     queue: VecDeque<(CacheKey, u64)>,
     stamp: u64,
 }
@@ -200,8 +319,10 @@ impl BlockCacheManager {
             return;
         }
         let mut new_queue = VecDeque::with_capacity(self.entries.len());
-        for (key, entry) in self.entries.iter() {
-            new_queue.push_back((*key, entry.stamp));
+        for (key, slot) in self.entries.iter() {
+            if let CacheSlot::Ready(entry) = slot {
+                new_queue.push_back((*key, entry.stamp));
+            }
         }
         self.queue = new_queue;
     }
@@ -213,123 +334,226 @@ impl BlockCacheManager {
 
     fn mark_used(&mut self, key: CacheKey) {
         let stamp = self.next_stamp();
-        if let Some(entry) = self.entries.get_mut(&key) {
+        if let Some(CacheSlot::Ready(entry)) = self.entries.get_mut(&key) {
             entry.stamp = stamp;
+            entry.evicting = false;
+            self.queue.push_back((key, stamp));
+            self.compact_queue();
         }
-        self.queue.push_back((key, stamp));
-        self.compact_queue();
     }
 
-    fn evict_one(&mut self) {
-        let mut scanned = 0usize;
-        let limit = self.queue.len().saturating_add(1);
-        while let Some((key, stamp)) = self.queue.pop_front() {
-            scanned += 1;
-            if let Some(entry) = self.entries.get(&key) {
-                if entry.stamp == stamp && Arc::strong_count(&entry.cache) == 1 {
-                    self.entries.remove(&key);
-                    return;
-                }
-            }
-            if scanned >= limit {
+    fn lookup(&mut self, key: CacheKey) -> Option<CacheLookup> {
+        let found = match self.entries.get(&key) {
+            Some(CacheSlot::Ready(entry)) => Some(CacheLookup::Ready(Arc::clone(&entry.cache))),
+            Some(CacheSlot::Loading(entry)) => Some(CacheLookup::Wait(Arc::clone(&entry.state))),
+            None => None,
+        };
+        if matches!(found, Some(CacheLookup::Ready(_))) {
+            self.mark_used(key);
+        }
+        found
+    }
+
+    fn select_eviction(&mut self) -> Option<EvictionTicket> {
+        let scan_limit = self.queue.len();
+        for _ in 0..scan_limit {
+            let Some((key, stamp)) = self.queue.pop_front() else {
                 break;
+            };
+            let mut keep_candidate = false;
+            let ticket = match self.entries.get_mut(&key) {
+                Some(CacheSlot::Ready(entry)) if entry.stamp == stamp => {
+                    if !entry.evicting && Arc::strong_count(&entry.cache) == 1 {
+                        entry.evicting = true;
+                        Some(EvictionTicket {
+                            key,
+                            stamp,
+                            cache: Arc::clone(&entry.cache),
+                        })
+                    } else {
+                        keep_candidate = true;
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if keep_candidate {
+                self.queue.push_back((key, stamp));
+            }
+            if ticket.is_some() {
+                return ticket;
             }
         }
-        panic!("Run out of BlockCache!");
+        None
     }
 
-    fn ensure_capacity(&mut self) {
-        while self.entries.len() >= BLOCK_CACHE_SIZE {
-            self.evict_one();
+    fn finish_eviction(&mut self, ticket: &EvictionTicket) -> bool {
+        let can_remove = matches!(
+            self.entries.get(&ticket.key),
+            Some(CacheSlot::Ready(entry))
+                if entry.evicting
+                    && entry.stamp == ticket.stamp
+                    && Arc::ptr_eq(&entry.cache, &ticket.cache)
+                    && Arc::strong_count(&entry.cache) == 2
+        );
+        if can_remove {
+            self.entries.remove(&ticket.key);
+            CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            let mut requeue = None;
+            if let Some(CacheSlot::Ready(entry)) = self.entries.get_mut(&ticket.key)
+                && Arc::ptr_eq(&entry.cache, &ticket.cache)
+            {
+                entry.evicting = false;
+                requeue = Some(entry.stamp);
+            }
+            if let Some(stamp) = requeue {
+                self.queue.push_back((ticket.key, stamp));
+            }
+            false
         }
     }
 
-    fn load_block_range(
+    fn prepare_load(
         &mut self,
         block_device: Arc<dyn BlockDevice>,
         start_block: usize,
         count: usize,
-    ) -> Arc<Mutex<BlockCache>> {
-        let count = count.max(1);
-        let total_bytes = count.saturating_mul(BLOCK_SZ);
-        let mut buf = vec![0u8; total_bytes];
-        block_device.read_blocks(start_block, &mut buf);
+    ) -> CacheLookup {
+        let requested_key = cache_key(start_block, &block_device);
+        if let Some(found) = self.lookup(requested_key) {
+            return found;
+        }
 
-        let mut first_cache: Option<Arc<Mutex<BlockCache>>> = None;
-        for i in 0..count {
-            let block_id = start_block + i;
-            let key = cache_key(block_id, &block_device);
-            if let Some(entry) = self.entries.get(&key) {
-                if i == 0 {
-                    first_cache = Some(Arc::clone(&entry.cache));
-                }
-                self.mark_used(key);
-                continue;
-            }
-            self.ensure_capacity();
-            let offset = i * BLOCK_SZ;
-            let block_cache = Arc::new(Mutex::new(BlockCache::new_with_data(
-                block_id,
-                Arc::clone(&block_device),
-                &buf[offset..offset + BLOCK_SZ],
-            )));
+        let mut range_keys = Vec::with_capacity(count.min(BLOCK_CACHE_SIZE));
+        for index in 0..count.max(1).min(BLOCK_CACHE_SIZE) {
+            let Some(block_id) = start_block.checked_add(index) else {
+                break;
+            };
+            range_keys.push(cache_key(block_id, &block_device));
+        }
+        let missing_keys = range_keys
+            .iter()
+            .copied()
+            .filter(|key| !self.entries.contains_key(key))
+            .collect::<Vec<_>>();
+
+        if self.entries.len().saturating_add(missing_keys.len()) > BLOCK_CACHE_SIZE {
+            return self
+                .select_eviction()
+                .map(CacheLookup::Evict)
+                .unwrap_or(CacheLookup::Retry);
+        }
+
+        let state = Arc::new(LoadState::new());
+        for key in missing_keys.iter().copied() {
             self.entries.insert(
                 key,
-                CacheEntry {
-                    cache: Arc::clone(&block_cache),
+                CacheSlot::Loading(LoadingEntry {
+                    state: Arc::clone(&state),
+                    block_device: Arc::clone(&block_device),
+                }),
+            );
+        }
+
+        CacheLookup::Load(LoadTicket {
+            start_block,
+            count: range_keys.len(),
+            state,
+            block_device,
+            reserved_keys: missing_keys,
+        })
+    }
+
+    fn publish_load(
+        &mut self,
+        ticket: &LoadTicket,
+        mut loaded: Vec<(CacheKey, Arc<Mutex<BlockCache>>)>,
+    ) -> Arc<Mutex<BlockCache>> {
+        let requested_key = cache_key(ticket.start_block, &ticket.block_device);
+        let mut published = 0u64;
+
+        // Publish in reverse physical order so the explicitly requested block
+        // receives the newest LRU stamp rather than the speculative tail.
+        loaded.reverse();
+        for (key, cache) in loaded {
+            let owns_slot = matches!(
+                self.entries.get(&key),
+                Some(CacheSlot::Loading(entry))
+                    if Arc::ptr_eq(&entry.state, &ticket.state)
+            );
+            if !owns_slot {
+                continue;
+            }
+            self.entries.insert(
+                key,
+                CacheSlot::Ready(CacheEntry {
+                    cache,
                     stamp: 0,
-                },
+                    evicting: false,
+                }),
             );
             self.mark_used(key);
-            if i == 0 {
-                first_cache = Some(Arc::clone(&block_cache));
-            }
+            published = published.saturating_add(1);
         }
-        first_cache.expect("missing requested block cache")
+
+        self.mark_used(requested_key);
+        let requested = match self.entries.get(&requested_key) {
+            Some(CacheSlot::Ready(entry)) => Arc::clone(&entry.cache),
+            _ => panic!("missing requested block cache after load"),
+        };
+        ticket.state.finish();
+        CACHE_LOADS.fetch_add(1, Ordering::Relaxed);
+        CACHE_PREFETCHED_BLOCKS.fetch_add(published.saturating_sub(1), Ordering::Relaxed);
+        requested
     }
 
-    /// Get block cache for given block id
-    pub fn get_block_cache(
+    fn prepare_zeroed(
         &mut self,
         block_id: usize,
         block_device: Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<BlockCache>> {
+    ) -> CacheLookup {
         let key = cache_key(block_id, &block_device);
-        if let Some(entry) = self.entries.get(&key) {
-            let cache_clone = Arc::clone(&entry.cache);
-            self.mark_used(key);
-            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-            return cache_clone;
+        if let Some(found) = self.lookup(key) {
+            return found;
         }
-        CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-        self.load_block_range(block_device, block_id, READ_AHEAD_BLOCKS)
-    }
-
-    /// Get block cache for given block id without reading old disk contents when absent.
-    pub fn get_block_cache_zeroed(
-        &mut self,
-        block_id: usize,
-        block_device: Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<BlockCache>> {
-        let key = cache_key(block_id, &block_device);
-        if let Some(entry) = self.entries.get(&key) {
-            let cache_clone = Arc::clone(&entry.cache);
-            self.mark_used(key);
-            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-            return cache_clone;
+        if self.entries.len() >= BLOCK_CACHE_SIZE {
+            return self
+                .select_eviction()
+                .map(CacheLookup::Evict)
+                .unwrap_or(CacheLookup::Retry);
         }
-        CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-        self.ensure_capacity();
         let block_cache = Arc::new(Mutex::new(BlockCache::new_zeroed(block_id, block_device)));
         self.entries.insert(
             key,
-            CacheEntry {
+            CacheSlot::Ready(CacheEntry {
                 cache: Arc::clone(&block_cache),
                 stamp: 0,
-            },
+                evicting: false,
+            }),
         );
         self.mark_used(key);
-        block_cache
+        CacheLookup::Created(block_cache)
+    }
+
+    fn snapshots(
+        &self,
+    ) -> (
+        Vec<Arc<Mutex<BlockCache>>>,
+        Vec<(Arc<LoadState>, Arc<dyn BlockDevice>)>,
+    ) {
+        let mut ready = Vec::new();
+        let mut loading = Vec::new();
+        for slot in self.entries.values() {
+            match slot {
+                CacheSlot::Ready(entry) => ready.push(Arc::clone(&entry.cache)),
+                CacheSlot::Loading(entry) => {
+                    loading.push((Arc::clone(&entry.state), Arc::clone(&entry.block_device)))
+                }
+            }
+        }
+        (ready, loading)
     }
 }
 
@@ -344,8 +568,115 @@ pub fn get_block_cache(
     block_id: usize,
     block_device: Arc<dyn BlockDevice>,
 ) -> Arc<Mutex<BlockCache>> {
-    let mut manager = BLOCK_CACHE_MANAGER.lock();
-    manager.get_block_cache(block_id, block_device)
+    get_block_cache_with_hint(block_id, block_device, 1)
+}
+
+fn wait_for_load(state: &LoadState, block_device: &Arc<dyn BlockDevice>) {
+    while !state.is_done() {
+        CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+        block_device.io_relax();
+    }
+}
+
+fn sync_cache_through(cache: &Arc<Mutex<BlockCache>>, target: u64) {
+    loop {
+        let preparation = cache.lock().prepare_writeback(target);
+        match preparation {
+            WritebackPreparation::Done => return,
+            WritebackPreparation::Busy(block_device) => block_device.io_relax(),
+            WritebackPreparation::Ready(writeback) => {
+                writeback
+                    .block_device
+                    .write_block(writeback.block_id, &writeback.data);
+                cache.lock().finish_writeback(writeback.generation);
+            }
+        }
+    }
+}
+
+pub(crate) fn sync_block_cache(cache: &Arc<Mutex<BlockCache>>) {
+    let target = cache.lock().writeback_target();
+    sync_cache_through(cache, target);
+}
+
+fn sync_eviction(ticket: EvictionTicket) {
+    sync_block_cache(&ticket.cache);
+    {
+        let mut manager = BLOCK_CACHE_MANAGER.lock();
+        manager.finish_eviction(&ticket);
+    }
+}
+
+/// Get a block cache and, on a miss, load up to `read_ahead` contiguous blocks.
+///
+/// The caller must bound the hint to a known contiguous on-disk range. Existing
+/// ready entries are never overwritten, so speculative reads cannot clobber a
+/// dirty cache block.
+pub(crate) fn get_block_cache_with_hint(
+    block_id: usize,
+    block_device: Arc<dyn BlockDevice>,
+    read_ahead: usize,
+) -> Arc<Mutex<BlockCache>> {
+    let mut miss_counted = false;
+    loop {
+        let action = {
+            let mut manager = BLOCK_CACHE_MANAGER.lock();
+            manager.prepare_load(Arc::clone(&block_device), block_id, read_ahead)
+        };
+        match action {
+            CacheLookup::Ready(cache) => {
+                if !miss_counted {
+                    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                }
+                return cache;
+            }
+            CacheLookup::Created(cache) => return cache,
+            CacheLookup::Wait(state) => {
+                if !miss_counted {
+                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                    CACHE_COALESCED_WAITS.fetch_add(1, Ordering::Relaxed);
+                    miss_counted = true;
+                }
+                wait_for_load(&state, &block_device);
+            }
+            CacheLookup::Load(ticket) => {
+                if !miss_counted {
+                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                }
+                let mut buf = vec![0u8; ticket.count.saturating_mul(BLOCK_SZ)];
+                ticket
+                    .block_device
+                    .read_blocks(ticket.start_block, &mut buf);
+
+                let mut loaded = Vec::with_capacity(ticket.reserved_keys.len());
+                for index in 0..ticket.count {
+                    let block_id = ticket.start_block + index;
+                    let key = cache_key(block_id, &ticket.block_device);
+                    if !ticket.reserved_keys.contains(&key) {
+                        continue;
+                    }
+                    let offset = index * BLOCK_SZ;
+                    let cache = Arc::new(Mutex::new(BlockCache::new_with_data(
+                        block_id,
+                        Arc::clone(&ticket.block_device),
+                        &buf[offset..offset + BLOCK_SZ],
+                    )));
+                    loaded.push((key, cache));
+                }
+
+                let cache = {
+                    let mut manager = BLOCK_CACHE_MANAGER.lock();
+                    manager.publish_load(&ticket, loaded)
+                };
+                return cache;
+            }
+            CacheLookup::Evict(ticket) => sync_eviction(ticket),
+            CacheLookup::Retry => {
+                CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+                block_device.io_relax();
+            }
+        }
+    }
 }
 
 /// Get a zero-initialized block cache for a freshly allocated block.
@@ -353,14 +684,384 @@ pub fn get_block_cache_zeroed(
     block_id: usize,
     block_device: Arc<dyn BlockDevice>,
 ) -> Arc<Mutex<BlockCache>> {
-    let mut manager = BLOCK_CACHE_MANAGER.lock();
-    manager.get_block_cache_zeroed(block_id, block_device)
+    let mut miss_counted = false;
+    loop {
+        let action = {
+            let mut manager = BLOCK_CACHE_MANAGER.lock();
+            manager.prepare_zeroed(block_id, Arc::clone(&block_device))
+        };
+        match action {
+            CacheLookup::Ready(cache) => {
+                if !miss_counted {
+                    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                }
+                return cache;
+            }
+            CacheLookup::Created(cache) => {
+                if !miss_counted {
+                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                }
+                return cache;
+            }
+            CacheLookup::Wait(state) => {
+                if !miss_counted {
+                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                    CACHE_COALESCED_WAITS.fetch_add(1, Ordering::Relaxed);
+                    miss_counted = true;
+                }
+                wait_for_load(&state, &block_device);
+            }
+            CacheLookup::Evict(ticket) => sync_eviction(ticket),
+            CacheLookup::Retry => {
+                CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+                block_device.io_relax();
+            }
+            CacheLookup::Load(_) => unreachable!("zeroed cache lookup cannot start a disk load"),
+        }
+    }
 }
 
 /// Sync all block caches to disk
 pub fn block_cache_sync_all() {
-    let manager = BLOCK_CACHE_MANAGER.lock();
-    for entry in manager.entries.values() {
-        entry.cache.lock().sync();
+    loop {
+        let (ready, loading) = {
+            let manager = BLOCK_CACHE_MANAGER.lock();
+            manager.snapshots()
+        };
+        if !loading.is_empty() {
+            for (state, block_device) in loading {
+                wait_for_load(&state, &block_device);
+            }
+            continue;
+        }
+        let targets = ready
+            .into_iter()
+            .map(|cache| {
+                let target = cache.lock().writeback_target();
+                (cache, target)
+            })
+            .collect::<Vec<_>>();
+        for (cache, target) in targets {
+            sync_cache_through(&cache, target);
+        }
+        return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex as StdMutex, MutexGuard as StdMutexGuard, OnceLock, mpsc};
+    use std::thread;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct GateState {
+        target: Option<usize>,
+        blocked: bool,
+        entered: bool,
+    }
+
+    #[derive(Default)]
+    struct IoGate {
+        state: StdMutex<GateState>,
+        changed: Condvar,
+    }
+
+    impl IoGate {
+        fn block(&self, block_id: usize) {
+            let mut state = self.state.lock().unwrap();
+            state.target = Some(block_id);
+            state.blocked = true;
+            state.entered = false;
+        }
+
+        fn wait_if_blocked(&self, start_block: usize, count: usize) {
+            let mut state = self.state.lock().unwrap();
+            let end_block = start_block.saturating_add(count);
+            let is_target = state
+                .target
+                .is_some_and(|target| start_block <= target && target < end_block);
+            if !state.blocked || !is_target {
+                return;
+            }
+            state.entered = true;
+            self.changed.notify_all();
+            while state.blocked {
+                state = self.changed.wait(state).unwrap();
+            }
+        }
+
+        fn wait_until_entered(&self) {
+            let state = self.state.lock().unwrap();
+            let (state, timeout) = self
+                .changed
+                .wait_timeout_while(state, Duration::from_secs(2), |state| !state.entered)
+                .unwrap();
+            assert!(
+                !timeout.timed_out() && state.entered,
+                "I/O gate was not entered"
+            );
+        }
+
+        fn release(&self) {
+            let mut state = self.state.lock().unwrap();
+            state.blocked = false;
+            self.changed.notify_all();
+        }
+    }
+
+    #[derive(Default)]
+    struct TestDevice {
+        blocks: StdMutex<BTreeMap<usize, Vec<u8>>>,
+        read_operations: AtomicUsize,
+        blocks_read: AtomicUsize,
+        write_operations: AtomicUsize,
+        read_gate: IoGate,
+        write_gate: IoGate,
+    }
+
+    impl TestDevice {
+        fn disk_byte(block_id: usize) -> u8 {
+            (block_id % 251) as u8
+        }
+
+        fn first_disk_byte(&self, block_id: usize) -> u8 {
+            self.blocks
+                .lock()
+                .unwrap()
+                .get(&block_id)
+                .map_or_else(|| Self::disk_byte(block_id), |data| data[0])
+        }
+    }
+
+    impl BlockDevice for TestDevice {
+        fn io_relax(&self) {
+            thread::yield_now();
+        }
+
+        fn read_block(&self, block_id: usize, buf: &mut [u8]) {
+            self.read_blocks(block_id, buf);
+        }
+
+        fn write_block(&self, block_id: usize, buf: &[u8]) {
+            self.write_blocks(block_id, buf);
+        }
+
+        fn read_blocks(&self, block_id: usize, buf: &mut [u8]) {
+            assert_eq!(buf.len() % BLOCK_SZ, 0);
+            let count = buf.len() / BLOCK_SZ;
+            self.read_operations.fetch_add(1, Ordering::Relaxed);
+            self.blocks_read.fetch_add(count, Ordering::Relaxed);
+            self.read_gate.wait_if_blocked(block_id, count);
+            let blocks = self.blocks.lock().unwrap();
+            for (index, chunk) in buf.chunks_mut(BLOCK_SZ).enumerate() {
+                let id = block_id + index;
+                if let Some(data) = blocks.get(&id) {
+                    chunk.copy_from_slice(data);
+                } else {
+                    chunk.fill(Self::disk_byte(id));
+                }
+            }
+        }
+
+        fn write_blocks(&self, block_id: usize, buf: &[u8]) {
+            assert_eq!(buf.len() % BLOCK_SZ, 0);
+            let count = buf.len() / BLOCK_SZ;
+            self.write_operations.fetch_add(1, Ordering::Relaxed);
+            self.write_gate.wait_if_blocked(block_id, count);
+            let mut blocks = self.blocks.lock().unwrap();
+            for (index, chunk) in buf.chunks(BLOCK_SZ).enumerate() {
+                blocks.insert(block_id + index, chunk.to_vec());
+            }
+        }
+    }
+
+    fn test_lock() -> StdMutexGuard<'static, ()> {
+        static TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        TEST_LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap()
+    }
+
+    fn reset_cache() {
+        {
+            let mut manager = BLOCK_CACHE_MANAGER.lock();
+            *manager = BlockCacheManager::new();
+        }
+        CACHE_HITS.store(0, Ordering::Relaxed);
+        CACHE_MISSES.store(0, Ordering::Relaxed);
+        CACHE_LOADS.store(0, Ordering::Relaxed);
+        CACHE_COALESCED_WAITS.store(0, Ordering::Relaxed);
+        CACHE_WAIT_RETRIES.store(0, Ordering::Relaxed);
+        CACHE_EVICTIONS.store(0, Ordering::Relaxed);
+        CACHE_PREFETCHED_BLOCKS.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn concurrent_cold_miss_is_single_flight() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        device.read_gate.block(7);
+
+        let loader_device: Arc<dyn BlockDevice> = device.clone();
+        let loader = thread::spawn(move || get_block_cache(7, loader_device));
+        device.read_gate.wait_until_entered();
+
+        let waiter_device: Arc<dyn BlockDevice> = device.clone();
+        let waiter = thread::spawn(move || get_block_cache(7, waiter_device));
+        while cache_diagnostics().coalesced_waits == 0 {
+            thread::yield_now();
+        }
+
+        device.read_gate.release();
+        let first = loader.join().unwrap();
+        let second = waiter.join().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(device.read_operations.load(Ordering::Relaxed), 1);
+        assert_eq!(cache_diagnostics().loads, 1);
+        drop((first, second));
+        reset_cache();
+    }
+
+    #[test]
+    fn blocked_cache_fill_does_not_hold_manager_lock() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        let block_device: Arc<dyn BlockDevice> = device.clone();
+        drop(get_block_cache(1, Arc::clone(&block_device)));
+        device.read_gate.block(9);
+
+        let miss_device = Arc::clone(&block_device);
+        let miss = thread::spawn(move || get_block_cache(9, miss_device));
+        device.read_gate.wait_until_entered();
+
+        let (sent, received) = mpsc::channel();
+        let hit_device = Arc::clone(&block_device);
+        let hit = thread::spawn(move || {
+            let cache = get_block_cache(1, hit_device);
+            sent.send(cache).unwrap();
+        });
+        let cached = received
+            .recv_timeout(Duration::from_millis(500))
+            .expect("cache hit blocked behind unrelated disk I/O");
+
+        device.read_gate.release();
+        drop(cached);
+        hit.join().unwrap();
+        drop(miss.join().unwrap());
+        reset_cache();
+    }
+
+    #[test]
+    fn sync_all_does_not_hold_manager_lock_during_writeback() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        let block_device: Arc<dyn BlockDevice> = device.clone();
+        drop(get_block_cache(2, Arc::clone(&block_device)));
+        drop(get_block_cache_zeroed(1, Arc::clone(&block_device)));
+        device.write_gate.block(1);
+
+        let sync = thread::spawn(block_cache_sync_all);
+        device.write_gate.wait_until_entered();
+
+        let (sent, received) = mpsc::channel();
+        let hit_device = Arc::clone(&block_device);
+        let hit = thread::spawn(move || {
+            let cache = get_block_cache(2, hit_device);
+            sent.send(cache).unwrap();
+        });
+        let cached = received
+            .recv_timeout(Duration::from_millis(500))
+            .expect("cache lookup blocked behind writeback");
+
+        device.write_gate.release();
+        drop(cached);
+        hit.join().unwrap();
+        sync.join().unwrap();
+        reset_cache();
+    }
+
+    #[test]
+    fn writeback_releases_cache_lock_and_preserves_racing_write() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        let block_device: Arc<dyn BlockDevice> = device.clone();
+        let cache = get_block_cache_zeroed(1, Arc::clone(&block_device));
+        cache.lock().get_bytes_mut(0, 1)[0] = 0xaa;
+        device.write_gate.block(1);
+
+        let sync = thread::spawn(block_cache_sync_all);
+        device.write_gate.wait_until_entered();
+
+        let (sent, received) = mpsc::channel();
+        let writer_cache = Arc::clone(&cache);
+        let writer = thread::spawn(move || {
+            writer_cache.lock().get_bytes_mut(0, 1)[0] = 0xbb;
+            sent.send(()).unwrap();
+        });
+        received
+            .recv_timeout(Duration::from_millis(500))
+            .expect("cache writer blocked behind device I/O");
+
+        device.write_gate.release();
+        writer.join().unwrap();
+        sync.join().unwrap();
+        assert_eq!(device.first_disk_byte(1), 0xaa);
+
+        block_cache_sync_all();
+        assert_eq!(device.first_disk_byte(1), 0xbb);
+        assert_eq!(device.write_operations.load(Ordering::Relaxed), 2);
+        drop(cache);
+        reset_cache();
+    }
+
+    #[test]
+    fn read_ahead_batches_io_without_clobbering_dirty_cache() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        let block_device: Arc<dyn BlockDevice> = device.clone();
+        let dirty = get_block_cache_zeroed(11, Arc::clone(&block_device));
+        dirty.lock().get_bytes_mut(0, 1)[0] = 0xaa;
+
+        let requested = get_block_cache_with_hint(10, Arc::clone(&block_device), 3);
+        assert_eq!(
+            requested.lock().get_bytes(0, 1)[0],
+            TestDevice::disk_byte(10)
+        );
+        let same_dirty = get_block_cache(11, Arc::clone(&block_device));
+        assert!(Arc::ptr_eq(&dirty, &same_dirty));
+        assert_eq!(same_dirty.lock().get_bytes(0, 1)[0], 0xaa);
+        drop(get_block_cache(12, Arc::clone(&block_device)));
+
+        assert_eq!(device.read_operations.load(Ordering::Relaxed), 1);
+        assert_eq!(device.blocks_read.load(Ordering::Relaxed), 3);
+        assert_eq!(cache_diagnostics().prefetched_blocks, 1);
+        drop((dirty, same_dirty, requested));
+        reset_cache();
+    }
+
+    #[test]
+    fn dirty_lru_eviction_writes_back_outside_manager() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device = Arc::new(TestDevice::default());
+        let block_device: Arc<dyn BlockDevice> = device.clone();
+        let dirty = get_block_cache_zeroed(0, Arc::clone(&block_device));
+        dirty.lock().get_bytes_mut(0, 1)[0] = 0x5a;
+        drop(dirty);
+
+        for block_id in 1..=BLOCK_CACHE_SIZE {
+            drop(get_block_cache(block_id, Arc::clone(&block_device)));
+        }
+
+        assert_eq!(device.first_disk_byte(0), 0x5a);
+        assert_eq!(device.write_operations.load(Ordering::Relaxed), 1);
+        assert_eq!(cache_diagnostics().evictions, 1);
+        reset_cache();
     }
 }

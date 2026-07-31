@@ -17,6 +17,8 @@
 
 #![no_std]
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod bitmap;
 mod block_cache;
@@ -33,10 +35,10 @@ pub const BLOCK_SZ: usize = 4096;
 
 pub use block_dev::BlockDevice;
 pub use error::{Ext4Error, Result};
-pub use ext4::Ext4FileSystem;
+pub use ext4::{Ext4FileSystem, Ext4FileSystemHandle};
 pub use vfs::{Inode, InodeStatSnapshot};
 
-pub use block_cache::cache_stats;
+pub use block_cache::{CacheDiagnostics, cache_diagnostics, cache_stats};
 use block_cache::{block_cache_sync_all, get_block_cache};
 
 /// Flush all cached blocks to the underlying block device.

@@ -1,7 +1,8 @@
 //! Virtual filesystem layer for ext4
 
+use super::block_cache::{get_block_cache_with_hint, sync_block_cache};
 use super::error::{Ext4Error, Result};
-use super::ext4::Ext4FileSystem;
+use super::ext4::{Ext4FileSystem, Ext4FileSystemHandle};
 use super::layout::*;
 use super::{BLOCK_SZ, BlockDevice, get_block_cache};
 use alloc::collections::BTreeMap;
@@ -40,6 +41,14 @@ const EXTENTS_CACHE_MAX: usize = 256;
 const EXTENTS_IN_INODE: usize = (15 * 4 - 12) / 12;
 const EXTENTS_PER_NODE: usize = (BLOCK_SZ - 12) / 12;
 const EXTENT_TREE_MAX_DEPTH: u16 = 5;
+const EXTENT_READ_AHEAD_BLOCKS: usize = 32;
+
+fn extent_read_ahead_blocks(phys_off: usize, remaining: usize, block_size: usize) -> usize {
+    phys_off
+        .saturating_add(remaining)
+        .div_ceil(block_size)
+        .clamp(1, EXTENT_READ_AHEAD_BLOCKS)
+}
 
 lazy_static! {
     static ref DIR_INDEX_CACHE: Mutex<BTreeMap<InodeCacheKey, Arc<Mutex<DirIndex>>>> =
@@ -123,7 +132,7 @@ pub struct Inode {
     /// Offset within the block
     block_offset: usize,
     /// Filesystem reference
-    fs: Arc<Mutex<Ext4FileSystem>>,
+    fs: Arc<Ext4FileSystemHandle>,
     /// Block device reference
     block_device: Arc<dyn BlockDevice>,
     /// Cached block size (avoid locking fs repeatedly)
@@ -226,7 +235,7 @@ impl Inode {
         inode_num: u32,
         block_id: usize,
         block_offset: usize,
-        fs: Arc<Mutex<Ext4FileSystem>>,
+        fs: Arc<Ext4FileSystemHandle>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Self {
         let block_size = fs.lock().block_size();
@@ -245,7 +254,7 @@ impl Inode {
         inode_num: u32,
         block_id: usize,
         block_offset: usize,
-        fs: Arc<Mutex<Ext4FileSystem>>,
+        fs: Arc<Ext4FileSystemHandle>,
         block_device: Arc<dyn BlockDevice>,
         block_size: usize,
     ) -> Self {
@@ -781,7 +790,14 @@ impl Inode {
             let mut phys_off = offset_in_extent % block_size;
 
             while remaining > 0 {
-                let cache = get_block_cache(cur_block, Arc::clone(&self.block_device));
+                // `remaining` is already clipped to this extent, so the hint
+                // never crosses a non-contiguous physical mapping.
+                let read_ahead = extent_read_ahead_blocks(phys_off, remaining, block_size);
+                let cache = get_block_cache_with_hint(
+                    cur_block,
+                    Arc::clone(&self.block_device),
+                    read_ahead,
+                );
                 let to_read = remaining.min(block_size - phys_off);
 
                 {
@@ -1983,7 +1999,10 @@ impl Inode {
                 let cache = get_block_cache(data_block as usize, Arc::clone(&self.block_device));
                 let mut guard = cache.lock();
                 guard.get_bytes_mut(0, BLOCK_SZ).fill(0);
-                guard.sync();
+                drop(guard);
+                // Directory initialization is ordered before publishing its
+                // inode. Flush without holding the cache lock across I/O.
+                sync_block_cache(&cache);
             }
             self.dir_write_entry_at(data_block, 0, 12, inode_num, Ext4DirEntry::FT_DIR, ".")?;
             self.dir_write_entry_at(

@@ -6,7 +6,7 @@ use super::vfs::Inode;
 use super::{BLOCK_SZ, BlockDevice, get_block_cache};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 
 /// Ext4 filesystem structure
 pub struct Ext4FileSystem {
@@ -24,9 +24,33 @@ pub struct Ext4FileSystem {
     next_alloc_inode: u32,
 }
 
+/// Cooperative lock for filesystem-wide allocator metadata.
+///
+/// Linux never sleeps while holding a raw spinlock.  This compact ext4 backend
+/// still performs an occasional cold bitmap read while its allocator state is
+/// locked, so contenders must yield through `BlockDevice::io_relax()` instead
+/// of burning a CPU on `spin::Mutex::lock()`.  The scope is intentionally much
+/// narrower than the removed kernel-wide ext4 lock: inode data and directory
+/// lookups do not take this lock unless they need shared allocator metadata.
+pub struct Ext4FileSystemHandle {
+    inner: Mutex<Ext4FileSystem>,
+    wait_device: Arc<dyn BlockDevice>,
+}
+
+impl Ext4FileSystemHandle {
+    pub fn lock(&self) -> MutexGuard<'_, Ext4FileSystem> {
+        loop {
+            if let Some(guard) = self.inner.try_lock() {
+                return guard;
+            }
+            self.wait_device.io_relax();
+        }
+    }
+}
+
 impl Ext4FileSystem {
     /// Open an existing ext4 filesystem from block device
-    pub fn open(block_device: Arc<dyn BlockDevice>) -> Arc<Mutex<Self>> {
+    pub fn open(block_device: Arc<dyn BlockDevice>) -> Arc<Ext4FileSystemHandle> {
         match Self::try_open(block_device) {
             Ok(fs) => fs,
             Err(_) => panic!("Invalid ext4 magic number!"),
@@ -34,7 +58,7 @@ impl Ext4FileSystem {
     }
 
     /// Attempt to open an ext4 filesystem; returns an error if the superblock is invalid.
-    pub fn try_open(block_device: Arc<dyn BlockDevice>) -> Result<Arc<Mutex<Self>>> {
+    pub fn try_open(block_device: Arc<dyn BlockDevice>) -> Result<Arc<Ext4FileSystemHandle>> {
         // Read superblock (located at byte offset 1024)
         // For 4K blocks, superblock is in block 0 at offset 1024
         // For 1K blocks, superblock is in block 1
@@ -82,18 +106,22 @@ impl Ext4FileSystem {
             group_descs.push(gd);
         }
 
-        Ok(Arc::new(Mutex::new(Self {
-            block_device,
-            superblock,
-            group_descs,
-            is_64bit,
-            next_alloc_block: superblock.s_first_data_block as u64,
-            next_alloc_inode: superblock.s_first_ino,
-        })))
+        let wait_device = Arc::clone(&block_device);
+        Ok(Arc::new(Ext4FileSystemHandle {
+            inner: Mutex::new(Self {
+                block_device,
+                superblock,
+                group_descs,
+                is_64bit,
+                next_alloc_block: superblock.s_first_data_block as u64,
+                next_alloc_inode: superblock.s_first_ino,
+            }),
+            wait_device,
+        }))
     }
 
     /// Get the root inode (inode 2)
-    pub fn root_inode(efs: &Arc<Mutex<Self>>) -> Inode {
+    pub fn root_inode(efs: &Arc<Ext4FileSystemHandle>) -> Inode {
         let fs = efs.lock();
         let block_device = Arc::clone(&fs.block_device);
         let (block_id, offset) = fs.get_inode_pos(EXT4_ROOT_INO);
