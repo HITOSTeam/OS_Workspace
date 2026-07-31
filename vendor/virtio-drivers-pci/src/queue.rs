@@ -2,7 +2,7 @@
 
 use crate::hal::{BufferDirection, Dma, Hal, PhysAddr};
 use crate::transport::Transport;
-use crate::{align_up, nonnull_slice_from_raw_parts, pages, Error, Result, PAGE_SIZE};
+use crate::{Error, PAGE_SIZE, Result, align_up, nonnull_slice_from_raw_parts, pages};
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 use bitflags::bitflags;
@@ -14,8 +14,23 @@ use core::mem::{size_of, take};
 #[cfg(test)]
 use core::ptr;
 use core::ptr::NonNull;
-use core::sync::atomic::{fence, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering, fence};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
+
+/// Read-only progress snapshot for a virtqueue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtQueueState {
+    /// Index of the queue within the device.
+    pub queue_index: u16,
+    /// Next available-ring index maintained by the driver.
+    pub available_index: u16,
+    /// Latest used-ring index published by the device.
+    pub used_index: u16,
+    /// Used-ring index already consumed by the driver.
+    pub last_used_index: u16,
+    /// Number of descriptors currently owned by the device.
+    pub descriptors_in_use: u16,
+}
 
 /// The mechanism for bulk data transport on virtio devices.
 ///
@@ -382,6 +397,19 @@ impl<H: Hal, const SIZE: usize> VirtQueue<H, SIZE> {
         // Safe because self.used points to a valid, aligned, initialised, dereferenceable, readable
         // instance of UsedRing.
         self.last_used_idx != unsafe { (*self.used.as_ptr()).idx.load(Ordering::Acquire) }
+    }
+
+    /// Returns a read-only snapshot of queue progress for timeout diagnostics.
+    pub fn state(&self) -> VirtQueueState {
+        // Safe because `used` points to a valid, aligned and readable used ring.
+        let used_index = unsafe { (*self.used.as_ptr()).idx.load(Ordering::Acquire) };
+        VirtQueueState {
+            queue_index: self.queue_idx,
+            available_index: self.avail_idx,
+            used_index,
+            last_used_index: self.last_used_idx,
+            descriptors_in_use: self.num_used,
+        }
     }
 
     /// Returns the descriptor index (a.k.a. token) of the next used element without popping it, or
@@ -986,9 +1014,9 @@ mod tests {
         device::common::Feature,
         hal::fake::FakeHal,
         transport::{
-            fake::{FakeTransport, QueueStatus, State},
-            mmio::{MmioTransport, VirtIOHeader, MODERN_VERSION},
             DeviceType,
+            fake::{FakeTransport, QueueStatus, State},
+            mmio::{MODERN_VERSION, MmioTransport, VirtIOHeader},
         },
     };
     use core::ptr::NonNull;
