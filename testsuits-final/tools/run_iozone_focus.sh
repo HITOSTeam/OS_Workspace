@@ -12,6 +12,14 @@ root_image=$2
 log_path=$3
 shared_workspace=${IOZONE_SHARED_WORKSPACE:-/Users/bytedance/projects/OS_Workspace}
 user_image=${IOZONE_USER_IMG:-"${shared_workspace}/ext4-fs-packer/target/user.ext4"}
+run_count=${IOZONE_RUNS:-3}
+
+case ${run_count} in
+    ''|*[!0-9]*|0)
+        echo "error: IOZONE_RUNS must be a positive integer" >&2
+        exit 2
+        ;;
+esac
 
 for path in \
     "${workspace}/os" \
@@ -39,7 +47,7 @@ mkdir -p "$(dirname "${log_path}")"
     echo "  architecture:    riscv64"
     echo "  memory/SMP:      2G/8"
     echo "  image mode:      snapshot"
-    echo "  workload:        3x {4-worker sequential write/read + random read}"
+    echo "  workload:        ${run_count}x {4-worker sequential write/read + random read}"
 } >"${log_path}"
 
 build_command=(
@@ -62,7 +70,7 @@ if [[ "${IOZONE_SKIP_BUILD:-0}" != "1" ]]; then
     fi
 fi
 
-kernel_elf="${workspace}/target/riscv64gc-unknown-none-elf/release/os"
+kernel_elf=${IOZONE_KERNEL_ELF:-"${workspace}/target/riscv64gc-unknown-none-elf/release/os"}
 if [[ ! -f "${kernel_elf}" ]]; then
     echo "error: kernel ELF not found: ${kernel_elf}" >&2
     exit 2
@@ -94,9 +102,10 @@ if [[ -n "${IOZONE_MONITOR_SOCKET:-}" ]]; then
     )
 fi
 
-expect -f - "${log_path}" "${qemu_command[@]}" <<'EXPECT_EOF'
+expect -f - "${log_path}" "${run_count}" "${qemu_command[@]}" <<'EXPECT_EOF'
 set log_path [lindex $argv 0]
-set qemu_command [lrange $argv 1 end]
+set run_count [lindex $argv 1]
+set qemu_command [lrange $argv 2 end]
 
 log_file -a $log_path
 set timeout 1800
@@ -128,7 +137,8 @@ expect {
 # measurable while keeping the focused regression short. Repeating three
 # times exposes both cold and warm-cache behavior without invoking any of the
 # unrelated unixbench/libcbench/BuildStorm workloads.
-set guest_command {/glibc/busybox sh -c 'cd /glibc || exit 1; export LD_LIBRARY_PATH=/glibc/lib; RC=0; N=1; while [ "$N" -le 3 ]; do read START _ < /proc/uptime; ./iozone -t 4 -i 0 -i 1 -r 1k -s 4m; SEQ_RC=$?; ./iozone -t 4 -i 0 -i 2 -r 1k -s 4m; RAND_RC=$?; read END _ < /proc/uptime; echo "IOZONE_FOCUSED_RUN run=$N start_s=$START end_s=$END seq_rc=$SEQ_RC rand_rc=$RAND_RC"; if [ "$SEQ_RC" -ne 0 ] || [ "$RAND_RC" -ne 0 ]; then RC=1; fi; N=$((N + 1)); done; ./busybox cat /proc/perf; echo "IOZONE_FOCUSED_DONE rc=$RC"'}
+set guest_command {/glibc/busybox sh -c 'cd /glibc || exit 1; export LD_LIBRARY_PATH=/glibc/lib; RC=0; N=1; while [ "$N" -le __IOZONE_RUNS__ ]; do read START _ < /proc/uptime; ./iozone -t 4 -i 0 -i 1 -r 1k -s 4m; SEQ_RC=$?; ./iozone -t 4 -i 0 -i 2 -r 1k -s 4m; RAND_RC=$?; read END _ < /proc/uptime; echo "IOZONE_FOCUSED_RUN run=$N start_s=$START end_s=$END seq_rc=$SEQ_RC rand_rc=$RAND_RC"; if [ "$SEQ_RC" -ne 0 ] || [ "$RAND_RC" -ne 0 ]; then RC=1; fi; N=$((N + 1)); done; ./busybox cat /proc/perf; echo "IOZONE_FOCUSED_DONE rc=$RC"'}
+set guest_command [string map [list __IOZONE_RUNS__ $run_count] $guest_command]
 
 set timeout 900
 send -- "$guest_command\r"
