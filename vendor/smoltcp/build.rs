@@ -34,6 +34,7 @@ fn main() {
     // only rebuild if build.rs changed. Otherwise Cargo will rebuild if any
     // other file changed.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-check-cfg=cfg(fuzzing)");
 
     // Rebuild if config envvar changed.
     for (name, _) in CONFIGS {

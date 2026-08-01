@@ -72,6 +72,13 @@ let mut buffer = vec![0; repr.buffer_len() + repr.payload_len];
 
 mod field {
     pub type Field = ::core::ops::Range<usize>;
+    #[cfg(any(
+        feature = "medium-ethernet",
+        feature = "medium-ieee802154",
+        feature = "proto-dhcpv4",
+        feature = "proto-rpl",
+        feature = "proto-sixlowpan"
+    ))]
     pub type Rest = ::core::ops::RangeFrom<usize>;
 }
 

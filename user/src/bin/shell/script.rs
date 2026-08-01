@@ -26,10 +26,6 @@ fn read_file_to_string(path: &str) -> Option<String> {
     Some(out)
 }
 
-fn basename(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
 pub fn split_script_statements(script: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();

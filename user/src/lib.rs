@@ -54,7 +54,7 @@ fn clear_bss() {
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
-pub extern "C" fn _start(argc: usize, argv: usize) {
+pub extern "C" fn _start(_argc: usize, argv: usize) {
     #[cfg(target_arch = "loongarch64")]
     early_user_write(b"[user _start] enter\n");
     clear_bss();

@@ -1,14 +1,13 @@
 use core::fmt::{self, Write};
 
 use crate::syscall::write;
-const STDIN: usize = 0;
 const STDOUT: usize = 1;
 struct Stdout;
 
 impl Write for Stdout {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         // TODO : check if it is ok?
-        write(1, s.as_bytes());
+        write(STDOUT, s.as_bytes());
         Ok(())
     }
 }

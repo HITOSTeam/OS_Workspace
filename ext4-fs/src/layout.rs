@@ -2,9 +2,6 @@
 //!
 //! Reference: https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout
 
-use super::{BLOCK_SZ, BlockDevice};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter, Result};
 
 /// Ext4 magic number
@@ -22,9 +19,6 @@ pub const EXT4_ROOT_INO: u32 = 2;
 /// Maximum file name length
 pub const EXT4_NAME_LEN: usize = 255;
 
-/// Inode size (typically 256 bytes in ext4)
-pub const EXT4_INODE_SIZE: usize = 256;
-
 // Inode mode flags
 pub const S_IFMT: u16 = 0o170000; // File type mask
 pub const S_IFSOCK: u16 = 0o140000; // Socket
@@ -38,8 +32,6 @@ pub const S_IFIFO: u16 = 0o010000; // FIFO
 // Feature flags
 pub const EXT4_FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
 pub const EXT4_FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
-pub const EXT4_FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
-
 // Inode flags
 pub const EXT4_EXTENTS_FL: u32 = 0x00080000;
 

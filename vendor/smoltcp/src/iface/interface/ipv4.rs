@@ -87,6 +87,10 @@ impl InterfaceInner {
         })
     }
 
+    #[cfg_attr(
+        not(feature = "proto-ipv4-fragmentation"),
+        allow(unused_variables)
+    )]
     pub(super) fn process_ipv4<'a>(
         &mut self,
         sockets: &mut SocketSet,

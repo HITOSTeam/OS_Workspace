@@ -6,7 +6,7 @@ use user::{
 };
 
 #[unsafe(no_mangle)]
-fn main(argc: usize, argv: &[&usize]) -> usize {
+fn main(_argc: usize, _argv: &[&usize]) -> usize {
     println!("[init_proc] start");
     if fork() == 0 {
         if cfg!(feature = "submit") {

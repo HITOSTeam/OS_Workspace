@@ -95,8 +95,9 @@ impl Routes {
             .map_err(|_| RouteTableFull)?;
         Ok(old)
     }
+    #[cfg(feature = "proto-ipv4")]
     pub fn set_gateway_ipv4(&mut self, gateway: Ipv4Address) {
-        self.storage.push(Route::new_ipv4_gateway(gateway));
+        let _ = self.storage.push(Route::new_ipv4_gateway(gateway));
     }
     /// Add a default ipv6 gateway (ie. "ip -6 route add ::/0 via `gateway`").
     ///

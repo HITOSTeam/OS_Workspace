@@ -43,8 +43,11 @@ const GLIBC_ENV_LOCPATH: &[u8] = b"LOCPATH=/usr/lib/locale\0";
 // sched_setscheduler
 const LOONGARCH_MUSL_CYCLICTEST_PRELOAD: &[u8] =
     b"LD_PRELOAD=/extra/libcyclictest_sched_loongarch_fix.so\0";
+// 聚焦回归配置暂时停用，保留后续重新启用的测试清单。
+#[allow(dead_code)]
 const FOCUS_READINESS_SMOKES: bool = false;
 
+#[allow(dead_code)]
 const READINESS_SMOKES: [&str; 14] = [
     "/user/nested_epoll_smoke.bin",
     "/user/nested_epoll_ctl_wakeup_smoke.bin",
@@ -1363,7 +1366,7 @@ pub fn main() -> i32 {
 
         // run_ltp_lane("ltp-musl","/musl", RISCV_LTP_CASES);
         // run_ltp_lane("ltp-glibc","/glibc",RISCV_LTP_CASES);
-        // test_rv();
+        test_rv();
     }
     if !cfg!(target_arch = "riscv64") {
         // run_ltp_lane("ltp-musl","/musl", LOONGARCH_LTP_CASES);

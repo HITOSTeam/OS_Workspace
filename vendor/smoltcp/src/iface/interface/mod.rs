@@ -30,21 +30,24 @@ pub use igmp::MulticastError;
 use super::packet::*;
 
 use core::result::Result;
-use heapless::{LinearMap, Vec};
+#[cfg(feature = "proto-igmp")]
+use heapless::LinearMap;
+use heapless::Vec;
 
 #[cfg(feature = "_proto-fragmentation")]
 use super::fragmentation::FragKey;
-#[cfg(any(feature = "proto-ipv4", feature = "proto-sixlowpan"))]
+#[cfg(feature = "_proto-fragmentation")]
 use super::fragmentation::PacketAssemblerSet;
 use super::fragmentation::{Fragmenter, FragmentsBuffer};
 
 #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
 use super::neighbor::{Answer as NeighborAnswer, Cache as NeighborCache};
 use super::socket_set::SocketSet;
-use crate::config::{
-    IFACE_MAX_ADDR_COUNT, IFACE_MAX_MULTICAST_GROUP_COUNT,
-    IFACE_MAX_SIXLOWPAN_ADDRESS_CONTEXT_COUNT,
-};
+use crate::config::IFACE_MAX_ADDR_COUNT;
+#[cfg(feature = "proto-igmp")]
+use crate::config::IFACE_MAX_MULTICAST_GROUP_COUNT;
+#[cfg(feature = "proto-sixlowpan")]
+use crate::config::IFACE_MAX_SIXLOWPAN_ADDRESS_CONTEXT_COUNT;
 use crate::iface::Routes;
 use crate::phy::PacketMeta;
 use crate::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -98,6 +101,7 @@ pub struct InterfaceInner {
 
     #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     neighbor_cache: NeighborCache,
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     hardware_addr: HardwareAddress,
     #[cfg(feature = "medium-ieee802154")]
     sequence_no: u8,
@@ -221,6 +225,7 @@ impl Interface {
             inner: InterfaceInner {
                 now,
                 caps,
+                #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
                 hardware_addr: config.hardware_addr,
                 ip_addrs: Vec::new(),
                 #[cfg(feature = "proto-ipv4")]
@@ -589,7 +594,7 @@ impl Interface {
 
         enum EgressError {
             Exhausted,
-            Dispatch(DispatchError),
+            Dispatch,
         }
 
         let mut emitted_any = false;
@@ -611,7 +616,7 @@ impl Interface {
 
                 inner
                     .dispatch_ip(t, meta, response, &mut self.fragmenter)
-                    .map_err(EgressError::Dispatch)?;
+                    .map_err(|_| EgressError::Dispatch)?;
 
                 emitted_any = true;
 
@@ -688,7 +693,7 @@ impl Interface {
 
             match result {
                 Err(EgressError::Exhausted) => break, // Device buffer full.
-                Err(EgressError::Dispatch(_)) => {
+                Err(EgressError::Dispatch) => {
                     // `NeighborCache` already takes care of rate limiting the neighbor discovery
                     // requests from the socket. However, without an additional rate limiting
                     // mechanism, we would spin on every socket that has yet to discover its
@@ -1062,6 +1067,7 @@ impl InterfaceInner {
         self.neighbor_cache.flush()
     }
 
+    #[allow(unused_mut, unused_variables)]
     fn dispatch_ip<Tx: TxToken>(
         &mut self,
         // NOTE(unused_mut): tx_token isn't always mutated, depending on
@@ -1277,9 +1283,11 @@ impl InterfaceInner {
 enum DispatchError {
     /// No route to dispatch this packet. Retrying won't help unless
     /// configuration is changed.
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     NoRoute,
     /// We do have a route to dispatch this packet, but we haven't discovered
     /// the neighbor for it yet. Discovery has been initiated, dispatch
     /// should be retried later.
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     NeighborPending,
 }

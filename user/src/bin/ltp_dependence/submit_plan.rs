@@ -300,7 +300,7 @@ const RISCV_LTP_GLIBC_ONLY_GROUPS: &[LtpGroup] = &[
     // &super::MMAP_MPROTECT_CORE_TASKS,
     // &super::MM_MMAP_MADVISE_TASKS,
 
-    
+
     // &super::SIGNAL_GLIBC_ONLY_TASKS,
     // &super::EPOLL_GLIBC_ONLY_TASKS,
     // Default musl exposes NGROUPS=32 in setgroups03, but Linux kernel

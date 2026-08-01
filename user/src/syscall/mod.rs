@@ -143,7 +143,7 @@ pub fn sleep(period_ms: usize) {
 
 fn sys_fork() -> isize {
     // Linux-style fork is implemented via clone(SIGCHLD, ...).
-    syscall(220, [17, 0, 0, 0, 0, 0])
+    syscall(SYSCALL_FORK, [17, 0, 0, 0, 0, 0])
 }
 pub fn fork() -> isize {
     sys_fork()

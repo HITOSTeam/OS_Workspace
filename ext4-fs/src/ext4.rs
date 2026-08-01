@@ -159,18 +159,6 @@ impl Ext4FileSystem {
         }
     }
 
-    fn find_and_alloc_bit(bytes: &mut [u8], total_bits: usize) -> Option<usize> {
-        for bit in 0..total_bits {
-            let byte_pos = bit / 8;
-            let bit_in_byte = bit % 8;
-            if (bytes[byte_pos] & (1u8 << bit_in_byte)) == 0 {
-                Self::set_bitmap_bit(bytes, bit, true);
-                return Some(bit);
-            }
-        }
-        None
-    }
-
     fn find_and_alloc_bit_from(
         bytes: &mut [u8],
         start_bit: usize,

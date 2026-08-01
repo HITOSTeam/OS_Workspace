@@ -28,10 +28,10 @@ struct Args {
     #[arg(short = 'b', long = "base-image")]
     base_image: Option<PathBuf>,
 
-    /// Build the evaluation bootstrap disk only: copy init_proc.bin and
-    /// 0final_init.bin to /user, plus the two root-level evaluation scripts.
-    /// This deliberately skips normal rootfs overlays so their libc/loader
-    /// files cannot be mixed with the official evaluation image.
+    /// Build the evaluation bootstrap disk only: copy locally built test and
+    /// bootstrap binaries to /user. This deliberately skips normal rootfs
+    /// overlays and evaluation scripts so libc, loaders, scripts and workload
+    /// binaries always come from the official evaluation image.
     #[arg(long = "minimal-eval-root")]
     minimal_eval_root: bool,
 
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&staging_user)?;
 
     if args.minimal_eval_root {
-        copy_minimal_eval_root(&args.user_dir, args.extra_dir.as_ref(), &staging_dir)?;
+        copy_minimal_eval_root(&args.user_dir, &staging_dir)?;
     } else {
         // Create standard runtime directories expected by many Unix userland programs.
         // In particular, iperf3 uses `mkstemp("/tmp/iperf3.XXXXXX")` per stream.
@@ -180,8 +180,7 @@ fn main() -> anyhow::Result<()> {
     println!("Image created: {}", image_path.display());
     println!("Contents:");
     if args.minimal_eval_root {
-        println!("  /user/init_proc.bin and /user/0final_init.bin");
-        println!("  /buildstorm_testcode.sh and /cagent_testcode.sh");
+        println!("  /user  - local bootstrap and test binaries");
     } else {
         println!("  /user  - user binaries");
     }
@@ -195,59 +194,43 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Populate the disk used beside an official evaluation rootfs.
+/// Populate the local disk used beside an official evaluation rootfs.
 ///
-/// Keep this allow-list intentionally small.  In particular, do not copy
-/// `rootfs/lib`, `rootfs/usr`, or architecture overlays: those can contain a
-/// different dynamic loader or libc than the official disk.
-fn copy_minimal_eval_root(
-    user_dir: &PathBuf,
-    extra_dir: Option<&PathBuf>,
-    staging_dir: &PathBuf,
-) -> anyhow::Result<()> {
+/// Only locally built bare-metal user binaries belong here. In particular, do
+/// not copy rootfs overlays, evaluation scripts, dynamic loaders or libc files:
+/// those must resolve from the official disk.
+fn copy_minimal_eval_root(user_dir: &PathBuf, staging_dir: &PathBuf) -> anyhow::Result<()> {
     println!("Building minimal evaluation bootstrap disk...");
     create_minimal_eval_dirs(staging_dir)?;
     let staging_user = staging_dir.join("user");
-    for name in ["init_proc.bin", "0final_init.bin"] {
-        copy_required_file(&user_dir.join(name), &staging_user.join(name))?;
-    }
-
-    let extra_dir = extra_dir.context("--minimal-eval-root requires --extra for test scripts")?;
-    let scripts = extra_dir.join("rootfs");
-    for name in ["buildstorm_testcode.sh", "cagent_testcode.sh"] {
-        copy_required_file(&scripts.join(name), &staging_dir.join(name))?;
-    }
+    copy_dir_contents(user_dir, &staging_user)?;
+    require_bootstrap_binary(&staging_user, "init_proc.bin")?;
+    require_bootstrap_binary(&staging_user, "0final_init.bin")?;
     Ok(())
 }
 
-/// Directories required by the two evaluation scripts, without importing any
-/// executable or runtime-library file from the local overlay.  `/work` is
-/// intentionally omitted: it must continue to resolve to the official image
-/// that contains the BuildStorm workload.
+/// Minimal writable/runtime directories for the local helper disk. `/home` is
+/// intentionally absent: the kernel uses it as the complete-rootfs marker, so
+/// the attached official image becomes the primary filesystem. `/work`,
+/// `/glibc`, `/bin`, `/lib` and `/usr` must all resolve from that official disk.
 fn create_minimal_eval_dirs(staging_root: &PathBuf) -> anyhow::Result<()> {
     let tmp_dir = staging_root.join("tmp");
     fs::create_dir_all(&tmp_dir)?;
     fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o1777))?;
-    // `/home` is the rootfs marker used by the kernel when selecting disk0 or
-    // disk1 as the primary filesystem.  It is deliberately empty here.
-    for name in ["proc", "sys", "dev", "home"] {
+    for name in ["proc", "sys", "dev"] {
         fs::create_dir_all(staging_root.join(name))?;
     }
     Ok(())
 }
 
-fn copy_required_file(src: &PathBuf, dst: &PathBuf) -> anyhow::Result<()> {
-    if !src.is_file() {
-        anyhow::bail!("required minimal-eval file '{}' is missing", src.display());
+fn require_bootstrap_binary(user_dir: &PathBuf, name: &str) -> anyhow::Result<()> {
+    let path = user_dir.join(name);
+    if !path.is_file() {
+        anyhow::bail!(
+            "required minimal-eval bootstrap binary '{}' is missing",
+            path.display()
+        );
     }
-    let parent = dst
-        .parent()
-        .context("minimal-eval destination must have a parent directory")?;
-    fs::create_dir_all(parent)?;
-    fs::copy(src, dst).with_context(|| {
-        format!("copy required minimal-eval file '{}' to '{}'", src.display(), dst.display())
-    })?;
-    println!("  -> {}", dst.display());
     Ok(())
 }
 

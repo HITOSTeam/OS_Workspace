@@ -3,12 +3,13 @@
 use super::error::{Ext4Error, Result};
 use super::ext4::Ext4FileSystem;
 use super::layout::*;
-use super::{BLOCK_SZ, BlockDevice, get_block_cache};
+use super::{BLOCK_SZ, BlockDevice, get_block_cache, get_block_cache_readahead};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::max;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use spin::Mutex;
 
@@ -17,6 +18,10 @@ fn align4(n: usize) -> usize {
 }
 
 type DirIndex = BTreeMap<String, (u32, u8)>;
+
+/// 连续 fault 预读 32 KiB；调用者本来就请求多块时最多合并为 128 KiB I/O。
+const SEQUENTIAL_READ_AHEAD_BLOCKS: usize = 8;
+const MAX_FILE_READ_BATCH_BLOCKS: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct InodeCacheKey {
@@ -128,6 +133,8 @@ pub struct Inode {
     block_device: Arc<dyn BlockDevice>,
     /// Cached block size (avoid locking fs repeatedly)
     block_size: usize,
+    /// 记录下一次期望读取的逻辑块，用于识别连续访问；跳跃访问不会触发预读。
+    next_read_block: AtomicUsize,
 }
 
 #[derive(Clone, Copy)]
@@ -237,6 +244,7 @@ impl Inode {
             fs,
             block_device,
             block_size,
+            next_read_block: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -256,6 +264,7 @@ impl Inode {
             fs,
             block_device,
             block_size,
+            next_read_block: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -597,7 +606,23 @@ impl Inode {
         let block_size = self.block_size; // Use cached block size
 
         if uses_extents {
-            self.read_extents(offset, &mut buf[..read_len], block_size)
+            let start_lblock = offset / block_size;
+            let next_lblock = offset
+                .saturating_add(read_len)
+                .saturating_add(block_size - 1)
+                / block_size;
+            let expected = self.next_read_block.swap(next_lblock, Ordering::Relaxed);
+            let speculative_readahead = if expected == start_lblock {
+                SEQUENTIAL_READ_AHEAD_BLOCKS
+            } else {
+                1
+            };
+            self.read_extents(
+                offset,
+                &mut buf[..read_len],
+                block_size,
+                speculative_readahead,
+            )
         } else {
             // Ensure holes (sparse blocks) read back as zeros.
             buf[..read_len].fill(0);
@@ -606,7 +631,13 @@ impl Inode {
     }
 
     /// Read data using extent tree
-    fn read_extents(&self, offset: usize, buf: &mut [u8], block_size: usize) -> usize {
+    fn read_extents(
+        &self,
+        offset: usize,
+        buf: &mut [u8],
+        block_size: usize,
+        speculative_readahead: usize,
+    ) -> usize {
         let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
             cached
         } else {
@@ -619,7 +650,7 @@ impl Inode {
             debug_assert_extents_ordered(&extents);
             extents_cache_put(self.inode_num, &self.block_device, extents)
         };
-        self.read_from_extents(&extents, offset, buf, block_size)
+        self.read_from_extents(&extents, offset, buf, block_size, speculative_readahead)
     }
 
     /// Parse the extent tree from inode block data
@@ -732,6 +763,7 @@ impl Inode {
         offset: usize,
         buf: &mut [u8],
         block_size: usize,
+        speculative_readahead: usize,
     ) -> usize {
         let file_start = offset;
         let file_end = offset.saturating_add(buf.len());
@@ -777,9 +809,26 @@ impl Inode {
             let offset_in_extent = copy_start - extent_start;
             let mut cur_block = extent.start_block() as usize + offset_in_extent / block_size;
             let mut phys_off = offset_in_extent % block_size;
+            let extent_end_block =
+                (extent.start_block() as usize).saturating_add(extent.len() as usize);
 
             while remaining > 0 {
-                let cache = get_block_cache(cur_block, Arc::clone(&self.block_device));
+                // 大块 read 合并调用者明确需要的数据；单页 lazy fault 只有在同一
+                // inode 连续访问时才做小窗口预读，避免随机代码页造成缓存污染。
+                let requested_blocks = phys_off
+                    .saturating_add(remaining)
+                    .saturating_add(block_size - 1)
+                    / block_size;
+                let readahead_blocks = extent_end_block
+                    .saturating_sub(cur_block)
+                    .min(requested_blocks.max(speculative_readahead))
+                    .min(MAX_FILE_READ_BATCH_BLOCKS)
+                    .max(1);
+                let cache = get_block_cache_readahead(
+                    cur_block,
+                    Arc::clone(&self.block_device),
+                    readahead_blocks,
+                );
                 let to_read = remaining.min(block_size - phys_off);
 
                 {
@@ -947,15 +996,6 @@ impl Inode {
         });
         let extents = self.parse_extent_tree(&inode_data, self.block_size);
         Ok(extents)
-    }
-
-    fn extent_tree_depth(inode: &Ext4Inode) -> Option<u16> {
-        let header_ptr = inode.i_block.as_ptr() as *const Ext4ExtentHeader;
-        let header = unsafe { &*header_ptr };
-        if !header.is_valid() || header.eh_depth > EXTENT_TREE_MAX_DEPTH {
-            return None;
-        }
-        Some(header.eh_depth)
     }
 
     fn collect_extent_tree_block(
@@ -1187,6 +1227,11 @@ impl Inode {
         inode.i_flags |= EXT4_EXTENTS_FL;
         let (old_leaf_blocks, old_index_blocks) =
             Self::extent_tree_blocks(inode, &self.block_device);
+        let old_depth = {
+            let header_ptr = inode.i_block.as_ptr() as *const Ext4ExtentHeader;
+            let header = unsafe { &*header_ptr };
+            header.is_valid().then_some(header.eh_depth)
+        };
 
         // If the extents fit in the inode, store as a depth-0 leaf.
         if extents.len() <= EXTENTS_IN_INODE {
@@ -1205,6 +1250,41 @@ impl Inode {
             if need_index > EXTENTS_IN_INODE {
                 return Err(Ext4Error::Unsupported);
             }
+        }
+
+        // 常见的编译输出会分批追加数据。depth-1 树已有足够叶节点时直接
+        // 原地重写，容量增长时也只补分配缺少的叶节点。旧实现每次 flush
+        // 都重建整棵树并释放旧叶，既产生平方级元数据写入，也让顺序分配
+        // 游标不断越过刚释放的块，最终把链接产物切成大量碎片。
+        if old_depth == Some(1) && need_leaf <= EXTENTS_IN_INODE {
+            let reused = core::cmp::min(old_leaf_blocks.len(), need_leaf);
+            let mut leaf_blocks = old_leaf_blocks[..reused].to_vec();
+            let new_leaf_blocks =
+                Self::alloc_extent_metadata_blocks(fs, need_leaf.saturating_sub(reused))?;
+            leaf_blocks.extend_from_slice(&new_leaf_blocks);
+
+            for (i, pblock) in leaf_blocks.iter().copied().enumerate() {
+                let start = i * EXTENTS_PER_NODE;
+                let end = core::cmp::min(extents.len(), start + EXTENTS_PER_NODE);
+                if let Err(e) =
+                    Self::write_extent_leaf_block(&self.block_device, pblock, &extents[start..end])
+                {
+                    Self::dealloc_extent_metadata_blocks(fs, &new_leaf_blocks);
+                    return Err(e);
+                }
+            }
+
+            Self::write_extent_root_index_in_inode(
+                inode,
+                &leaf_blocks,
+                extents,
+                1,
+                EXTENTS_PER_NODE,
+            );
+            Self::dealloc_extent_metadata_blocks(fs, &old_leaf_blocks[reused..]);
+            Self::dealloc_extent_metadata_blocks(fs, &old_index_blocks);
+            extents_cache_invalidate(self.inode_num, &self.block_device);
+            return Ok(());
         }
 
         let leaf_blocks = Self::alloc_extent_metadata_blocks(fs, need_leaf)?;

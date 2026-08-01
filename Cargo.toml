@@ -1,2 +1,12 @@
 [workspace]
-members = ["os", "user", "easy-fs", "easy-fs-fuse", "ext4-fs", "ext4-fs-packer"]
+members = ["os", "user", "ext4-fs", "ext4-fs-packer"]
+resolver = "1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+debug = 2
+opt-level = 3
+overflow-checks = false

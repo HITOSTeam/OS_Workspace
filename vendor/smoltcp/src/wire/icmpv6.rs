@@ -217,9 +217,13 @@ pub(super) mod field {
 
     // NDISC: See https://tools.ietf.org/html/rfc4861
     // Router Advertisement message offsets
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     pub const CUR_HOP_LIMIT: usize = 4;
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     pub const ROUTER_FLAGS: usize = 5;
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     pub const ROUTER_LT: Field = 6..8;
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     pub const REACHABLE_TM: Field = 8..12;
     pub const RETRANS_TM: Field = 12..16;
 
@@ -227,6 +231,7 @@ pub(super) mod field {
     pub const TARGET_ADDR: Field = 8..24;
 
     // Neighbor Advertisement message offsets
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     pub const NEIGH_FLAGS: usize = 4;
 
     // Redirected Header message offsets

@@ -32,19 +32,6 @@ pub fn cache_stats() -> (u64, u64) {
 }
 
 impl BlockCache {
-    /// Load a new BlockCache from disk
-    pub fn new(block_id: usize, block_device: Arc<dyn BlockDevice>) -> Self {
-        // Allocate buffer on heap to avoid stack overflow
-        let mut cache = vec![0u8; BLOCK_SZ];
-        block_device.read_block(block_id, &mut cache);
-        Self {
-            cache,
-            block_id,
-            block_device,
-            modified: false,
-        }
-    }
-
     /// Create a BlockCache from caller-provided block data.
     pub fn new_with_data(block_id: usize, block_device: Arc<dyn BlockDevice>, data: &[u8]) -> Self {
         assert_eq!(data.len(), BLOCK_SZ);
@@ -138,14 +125,11 @@ impl Drop for BlockCache {
     }
 }
 
-/// Block cache size.
-///
-/// Use a larger cache on LoongArch to reduce cold-start IO for glibc assets.
-const BLOCK_CACHE_SIZE: usize = if cfg!(target_arch = "loongarch64") {
-    2048
-} else {
-    512
-};
+/// 块缓存需要同时覆盖 rustc、sysroot 和链接产物的活跃工作集。容量过小时，
+/// file-backed fault 会反复淘汰并重新读取工具链页面，新分配的脏块也可能在
+/// 用户数据复制完成前被写回。32768 个 4 KiB 块约占 128 MiB，仍在当前
+/// 512 MiB 内核堆预算内，并能显著减少 BuildStorm 的同步 VirtIO 请求。
+const BLOCK_CACHE_SIZE: usize = 32768;
 
 /// Read-ahead blocks on cache miss.
 const READ_AHEAD_BLOCKS: usize = if cfg!(target_arch = "loongarch64") {
@@ -291,6 +275,16 @@ impl BlockCacheManager {
         block_id: usize,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<BlockCache>> {
+        self.get_block_cache_readahead(block_id, block_device, READ_AHEAD_BLOCKS)
+    }
+
+    /// 读取连续文件数据时允许调用者指定预读窗口；普通元数据路径仍使用较小窗口。
+    pub fn get_block_cache_readahead(
+        &mut self,
+        block_id: usize,
+        block_device: Arc<dyn BlockDevice>,
+        count: usize,
+    ) -> Arc<Mutex<BlockCache>> {
         let key = cache_key(block_id, &block_device);
         if let Some(entry) = self.entries.get(&key) {
             let cache_clone = Arc::clone(&entry.cache);
@@ -299,7 +293,7 @@ impl BlockCacheManager {
             return cache_clone;
         }
         CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-        self.load_block_range(block_device, block_id, READ_AHEAD_BLOCKS)
+        self.load_block_range(block_device, block_id, count.clamp(1, BLOCK_CACHE_SIZE))
     }
 
     /// Get block cache for given block id without reading old disk contents when absent.
@@ -340,6 +334,16 @@ pub fn get_block_cache(
 ) -> Arc<Mutex<BlockCache>> {
     let mut manager = BLOCK_CACHE_MANAGER.lock();
     manager.get_block_cache(block_id, block_device)
+}
+
+/// 为物理连续的文件数据执行批量预读。
+pub fn get_block_cache_readahead(
+    block_id: usize,
+    block_device: Arc<dyn BlockDevice>,
+    count: usize,
+) -> Arc<Mutex<BlockCache>> {
+    let mut manager = BLOCK_CACHE_MANAGER.lock();
+    manager.get_block_cache_readahead(block_id, block_device, count)
 }
 
 /// Get a zero-initialized block cache for a freshly allocated block.
