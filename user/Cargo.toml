@@ -15,3 +15,11 @@ riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
 [features]
 submit = []
 bash-shell = []
+
+[[bin]]
+name = "tlb_shootdown_smp_smoke"
+path = "src/bin/smoke_archive/tlb_shootdown_smp_smoke.rs"
+
+[[bin]]
+name = "riscv_icache_smp_smoke"
+path = "src/bin/smoke_archive/riscv_icache_smp_smoke.rs"
