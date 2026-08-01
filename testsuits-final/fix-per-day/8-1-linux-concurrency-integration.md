@@ -1,5 +1,10 @@
 # 8-1 Linux 并发优化筛选与主线集成
 
+> 更新说明：第 1--9 节保留截至内核 `eb4b543` 的初始候选筛选和失败现场。
+> 后续继续追踪了其中记录的 8-hart 卡顿，并在 `ac12c47`--`d21154e` 完成修复。
+> 第 10 节是最终结论；它取代第 1、5、7.4、7.5 节中“TTY 暂不合入”和
+> “残余 SMP 卡顿尚未解决”的阶段性结论。
+
 ## 1. 结论
 
 本批次审查了 `final-perf-concurrency` 工作树中的并发优化，并以 Linux 的用户
@@ -24,9 +29,10 @@
 - central buddy + per-hart magazine：首个完成的 5-sample workload 中位数由
   核心组合的 64.17 秒变为 75.60 秒，回退约 17.8%，超过预设 5% 上限；同时
   当前 per-hart cache 没有完整实现 Linux 的 migration/IRQ-safe fast path。
-- TTY write 串行化：先后试验 scheduler-aware mutex 和 spin lock；前者没有通过
-  8-hart CAgent，后者还会把用户页翻译/写串口包在不可睡眠临界区内。`3523361`
-  移除了这项行为，最终代码没有 stdout 全局锁。
+- TTY write 串行化：初始筛选先后试验 scheduler-aware mutex 和 spin lock；前者
+  被当时尚未定位的 fput/mm 卡顿干扰，后者会把用户页翻译和串口输出包在不可
+  睡眠临界区内，因此 `3523361` 先移除了它。后续修复根因后，`d21154e` 按
+  Linux `tty_write_lock()` 的边界重新实现并通过标准 CAgent，详见第 10 节。
 
 另有一次 `5db1332` 将 IRQ block completion 的协作让出改成纯轮询，用来验证
 “持有 ext4 锁时调度”假设。源码确认 ext4 已使用可睡眠 `KernelRwSemaphore`，
@@ -53,7 +59,7 @@ fc02acf6ac0ccde0c805c2daa9148683cdd01ba8
 | COW/lazy fault 在 mm 锁内分配、复制或读文件 | `mm/memory.c` 的 `do_cow_fault()`、`finish_fault()` | prepare → lockless work → PTE/VMA recheck and commit。 |
 | COW 后向所有核做粗粒度处理 | `arch/riscv/mm/tlbflush.c` 的 `mm_cpumask(mm)` | 只对实际可能使用该 mm 的在线远端 hart 做页粒度 shootdown。 |
 | fd 表锁内执行最终 close/drop | `fs/file.c` 的 `file_close_fd_locked()`、`filp_close()` | 锁内摘除 fd，锁外执行可能递归取锁或释放重对象的 close。 |
-| 并发 stdout write 字符级交错 | `drivers/tty/tty_io.c` 的 `tty_write_lock()` | Linux 原则成立，但本地候选无法满足睡眠/用户页生命周期边界，因此本批次拒绝。 |
+| 并发 stdout write 字符级交错 | `drivers/tty/tty_io.c` 的 `tty_write_lock()` | 初始 spin 版本不满足边界；后续改为翻译用户页之前取得可睡眠 mutex，并实现 nonblock `EAGAIN`。 |
 
 ## 3. 内存管理：缩短页错误临界区
 
@@ -129,7 +135,7 @@ close、close_range、exec 的 CLOEXEC、dup/replace、socket/pipe 安装回滚�
 socket wakeup、fanotify、mount pin 释放或其他内存分配，也不会递归占用
 `FilesLock`。
 
-## 5. TTY 候选：审查后移除
+## 5. TTY 候选：初始审查后移除
 
 Linux `tty_write_lock()` 说明一次 userspace write 应作为 TTY 串行单位，但本地
 实现不能只增加一把全局锁：
@@ -140,10 +146,12 @@ Linux `tty_write_lock()` 说明一次 userspace write 应作为 TTY 串行单位
   不可睡眠临界区；
 - scheduler-aware mutex 版和 spin 版均未给出稳定的 8-hart CAgent 证据。
 
-因此 `33fcb6b`/`717ff5e` 仅作为审查实验保留在提交历史中，`3523361` 移除了
-stdout 串行行为。最终代码继续使用原输出路径。若后续要实现 Linux 风格 TTY，
-应先建立可 pin/可重试的用户缓冲区以及独立 tty write buffer，再在 tty 对象上
-使用可中断的 per-tty mutex，而不是在 syscall 层放置全局锁。
+因此 `33fcb6b`/`717ff5e` 仅作为审查实验保留在提交历史中，`3523361` 在初始
+筛选阶段移除了 stdout 串行行为。若后续要实现 Linux 风格 TTY，
+应先保证等待发生在用户页翻译之前，再用可睡眠锁覆盖单次 write。后续
+`d21154e` 采用了这一较小边界：先取得 console write mutex，再翻译用户页并完成
+整次输出；当前只有一个 console 对象，因此暂不引入完整 per-tty 层。最终验证见
+第 10 节。
 
 ## 6. 候选筛选证据
 
@@ -205,7 +213,9 @@ regression:                 17.81%
 
 ### 7.1 资产
 
-- kernel main HEAD：`eb4b54391daf8c1053f30756871d628b95e66f3a`
+- 初始筛选 kernel HEAD：`eb4b54391daf8c1053f30756871d628b95e66f3a`
+- 后续修复 kernel HEAD：
+  `d21154e86fb50798f8413b4abd37e2835d2168b3`
 - final test source：本地 `final-2026`，
   `1eac61d3becaa592c8ef12a7535f0ec6bb9e3e36`
 - 先前只读检查到 remote `final-2026` 为
@@ -248,7 +258,7 @@ TTY 候选随后被移除；最终 HEAD 相对已经单独验证过的 `9b8059d`
 .tmp/concurrency-runs/core-final-regression-retry.log
 ```
 
-### 7.4 IOZone
+### 7.4 IOZone（初始诊断，最终结果见 10.6）
 
 为了区分顺序阶段和容易卡住的随机阶段，工具增加
 `IOZONE_WORKLOAD=sequential|mixed`。顺序模式执行：
@@ -289,7 +299,7 @@ mixed 模式还执行 `-i 0 -i 2`。`5a3d3e2` 在随机阶段超过 288 秒没�
 .tmp/iozone/final-head-sequential.log
 ```
 
-### 7.5 CAgent
+### 7.5 CAgent（初始诊断，最终结果见 10.5）
 
 获得用户授权清理遗留 QEMU 后重新隔离，结果仍然显示 8-hart 非确定性卡顿：
 
@@ -363,3 +373,146 @@ AI 用于：比较候选 diff、检索本地 Linux 参考树、推导锁与对�
 聚焦测试工具、执行静态/运行态验证并整理报告。所有保留或拒绝结论均基于本地
 源码、可复现日志和实际命令；没有生成伪造 benchmark、硬编码测试名返回值、
 修改评分脚本或篡改 `/proc/uptime`。
+
+## 10. 后续 P0 卡顿诊断与最终修复
+
+### 10.1 卡顿根因不是单一的块设备等待
+
+初始筛选结束后，8-hart CAgent 和 mixed IOZone 仍会非确定性停滞。为避免继续
+猜测 VirtIO 或 scheduler，使用 QEMU HMP 读取所有 vCPU 的内核栈和锁对象：
+
+- 7 个 hart 同时停在 `KernelRwSemaphore::write()`，调用者是
+  `OSInode::drop()`；
+- 该 inode rwsem 当时有 2 个 reader 和 7 个 writer waiter；
+- 卡住对象的 inode 号是 16243，宿主只读 `debugfs ncheck` 映射为
+  `/usr/lib/riscv64-linux-gnu/libc.so.6`；
+- reader 是文件映射缺页路径，持有 inode read side 等待块 I/O；退出清理在 idle
+  上析构只读 `OSInode`，旧 `Drop` 却无条件请求同一 inode 的 write side。
+
+因此现场是“只读 fput 人为制造 inode writer 队列，并与睡眠中的 file fault
+reader 相互阻塞”，而不是 VirtIO 请求没有提交或没有完成。
+
+同时还发现第二条锁顺序问题：若调用者持有 PCB ticket lock 再等待
+`MemorySet`，procfs 的全进程扫描又按相反方向取得 PCB/mm，容易让真正的 mm
+owner 无法继续运行。旧 `/proc/meminfo` 每次读取 `Committed_AS` 还会遍历所有
+进程和 VMA，把这条高风险锁边放大成全局热点。
+
+最后，内核实际完成的 10 个 CAgent 子项曾只被 judge 识别 5 个。串口日志表明
+多进程 stdout 在字节级交错，破坏了 `testcase ... pass` 行；这不是测试失败，
+而是缺少 Linux TTY 的单次 write 原子边界。
+
+### 10.2 Linux 源码对照
+
+参考树仍是 `exampleOs/linux` 的
+`fc02acf6ac0ccde0c805c2daa9148683cdd01ba8`：
+
+| 问题 | Linux 代码 | 本地采用的语义 |
+| --- | --- | --- |
+| PCB 锁和 mm 锁嵌套 | `kernel/fork.c:get_task_mm()`、`include/linux/mmap_lock.h` | task lock 只用于 pin mm；后续独立等待可睡眠的 mm lock。 |
+| `/proc/meminfo` 扫描全部 mm | `mm/util.c:vm_memory_committed()`、`include/linux/mman.h:vm_acct_memory()` | 在 VMA mutation 时计账，读取全局计数，不在 procfs 读取时扫描进程。 |
+| 最后一个 file 引用的释放 | `fs/file_table.c:__fput()` | 可能睡眠的 release 工作必须运行在可睡眠上下文，不能依赖 idle 析构。 |
+| ext4 只读 close 争抢写锁 | `fs/ext4/file.c:ext4_release_file()` | 只在最后 writer 的特殊清理需要 write-side 数据同步；只读 release 不取 inode write lock。 |
+| stdout 行字节交错 | `drivers/tty/tty_io.c:tty_write_lock()`、`iterate_tty_write()` | 一个 userspace write 作为串行单位；阻塞锁可睡眠，`O_NONBLOCK` 竞争返回 `EAGAIN`。 |
+| allocator spinlock 被中断重入 | `mm/page_alloc.c:rmqueue_buddy()`、`mm/slub.c` | 元数据 spinlock 使用 irq-save；页清零等耗时初始化继续留在 free-list 锁外。 |
+
+这里复用 Linux 的可观察语义和锁边界，没有复制完整 task-work、percpu counter、
+VMA maple tree 或 TTY line discipline。
+
+### 10.3 分类别提交
+
+后续内核修改已拆成四个可独立审查的提交：
+
+| 提交 | 类别 | 内容 |
+| --- | --- | --- |
+| `ac12c47` | allocator | frame free-list 和 heap shard 的元数据锁增加 local irq-save；清页仍在锁外。 |
+| `c58f935` | mm/procfs | `MmRef` 改用可睡眠 `KernelMutex`；PCB 只短暂 pin `MmRef`；VMA 内缓存匿名私有可写字节，`Committed_AS` 改为 O(1) 全局计数；mmap、procfs、exec 和 mmap 镜像路径统一锁顺序。 |
+| `f169acc` | ext4/fput | 最后 writable fd 在 close 语义阶段刷新写缓冲；只读 `OSInode::drop()` 不再取得 inode write semaphore。 |
+| `d21154e` | TTY | 在用户页翻译前取得可睡眠 stdout write mutex，并覆盖整次 write；nonblock 竞争返回 `EAGAIN`。 |
+
+### 10.4 正确性边界
+
+`MmRef` 的全局提交量由 `MmState` 生命周期维护：创建 mm 时增加，VMA/brk
+变更后的 guard drop 只提交增量，最后一个引用销毁时扣除。所有 VMA map 的直接
+`insert/remove` 已收敛到带计账的两个入口；无变化的 mm guard 不再写全局原子
+变量。Relaxed ordering 足以提供 Linux 同样允许近似读取的统计值，不参与资源
+所有权判定。
+
+本地 `MemorySet` 当前仍是 exclusive sleeping mutex，而不是 Linux 可并发 reader
+的 `mmap_lock` rwsem；这牺牲一部分读并行度，但修复了“持有会睡眠/I/O 的 mm
+路径却使用 spin lock”的正确性问题。完整 delayed-fput/task-work 尚未实现；本次
+把实际会产生写 I/O 的最后 writable close 前移到语义 close，上述 libc 只读
+析构路径则完全不再请求 write side。
+
+stdout 锁目前是唯一 console 对象的全局锁，不等价于完整 per-tty mutex；当前
+ABI 下 stdin/stdout/stderr 指向同一 console，因此这一范围与可观察对象一致。
+
+### 10.5 最终 CAgent
+
+精确最终代码 `d21154e` 使用标准入口运行：
+
+```sh
+ARCH=riscv64 SMP=8 MEM=8G IMAGE_MODE=snapshot ./run.sh cagent
+```
+
+环境与结果：
+
+- final test source：`1eac61d3becaa592c8ef12a7535f0ec6bb9e3e36`；
+- RISC-V 镜像 SHA-256：
+  `d899fe43d333d1d17ad8a5f8a8b74b68117b8c1ceacfc3843bfeadb1ca705bd1`；
+- QEMU 11.0.3，8 hart，8 GiB，snapshot；本次 OpenSBI 从非 0 的 hart 5 启动；
+- 10/10 子项通过，judge 退出成功；单项耗时 1566--3715 ms；
+- judge JSON 的现行权重合计 199.1；本报告记录 10/10，不把它四舍五入伪报为
+  200；
+- 日志和 JSON：
+  `.tmp/final-runs/20260801-223907-riscv64-cagent/`。
+
+最终串口仍有 `remove_from_pid2process: ... already reaped?` 警告，但没有导致
+子项失败或停滞；它是独立的重复 reap 诊断，不在本批锁修复范围内。
+
+### 10.6 mixed IOZone
+
+按用户要求不运行 BuildStorm，改用现有四进程文件 I/O 聚焦组。配置为 RISC-V
+8 hart、2 GiB、snapshot、4 MiB/worker、1 KiB record；每轮先执行顺序
+write/read，再执行 random read/write：
+
+```sh
+IOZONE_RUNS=3 IOZONE_WORKLOAD=mixed \
+  bash tools/run_iozone_focus.sh \
+  /Users/bytedance/projects/OS_Workspace \
+  .tmp/iozone/iozone-root.img \
+  .tmp/iozone/linux-mm-fput-tty-final.log
+```
+
+| 轮次 | guest uptime 区间 | 耗时 | 顺序 rc | 随机 rc |
+| --- | --- | ---: | ---: | ---: |
+| 1 | 0.44--63.02 | 62.58 s | 0 | 0 |
+| 2 | 63.02--129.88 | 66.86 s | 0 | 0 |
+| 3 | 129.88--200.26 | 70.38 s | 0 | 0 |
+
+三轮均出现 `IOZONE_FOCUSED_DONE rc=0`，中位数 66.86 秒。与 7.31 在同一聚焦
+工作负载记录的稳定 ext4/IRQ 基线中位数 76.23 秒相比，缩短 9.37 秒，即
+12.29%；与更早全局 `EXT4_LOCK` 的 81.13 秒相比缩短 17.59%。后一个数字跨越
+多批修改，只作累计背景，不归因给单个提交。由于 QEMU 宿主调度会有波动，
+12.29% 也只作为集成态测量；比绝对吞吐更强的证据是旧最终 HEAD 会在 mixed
+随机阶段非确定性停滞，而本次 3/3 完整结束。
+
+### 10.7 静态检查与未覆盖项
+
+最终 `d21154e` 的以下检查均以退出码 0 完成：
+
+```sh
+cargo check --offline --locked --manifest-path ../os/Cargo.toml \
+  --target riscv64gc-unknown-none-elf
+cargo check --offline --locked --manifest-path ../os/Cargo.toml \
+  --target loongarch64-unknown-none-softfloat
+rustfmt --edition 2024 --check <本批 13 个 Rust 文件>
+git -C ../os diff --check
+```
+
+仓库级 `cargo fmt --check` 仍会报告四个本批未修改的既有格式差异：两个架构
+`mod.rs`、`main.rs` 和 `syscall/filesystem/perm_utils.rs`；没有为了让本批提交看似
+全绿而混入这些无关改动。
+
+未运行项目：完整 BuildStorm（遵守用户要求）、LoongArch QEMU 运行态、完整
+IOZone 套件、unixbench 和 libcbench。LoongArch 只记录为 softfloat 静态构建
+通过，不伪造运行态结论。
