@@ -4,13 +4,15 @@
 
 本批次审查了 `final-perf-concurrency` 工作树中的并发优化，并以 Linux 的用户
 可观察语义、锁边界和对象生命周期作为标准，将通过静态检查与聚焦回归的修改
-按职责拆分后集成到主 `os/dev_final`。最终保留三组修改：
+按职责拆分后集成到主 `os/dev_final`。最终从候选工作树保留两组修改：
 
 | 主线提交 | 范围 | 结论 |
 | --- | --- | --- |
 | `72ee89b` | frame allocation、COW/lazy fault、RISC-V active-mm TLB shootdown | 保留；耗时页初始化和文件读取移出 mm 全局锁，提交时重验 PTE/VMA。 |
 | `9b8059d` | fd close/install/replace 生命周期 | 保留；表锁内只摘除，通知、mount ref 释放和对象析构在锁外完成。 |
-| `33fcb6b` | userspace terminal write 串行边界 | 保留；一次 write 不再逐字符交错，阻塞锁在翻译未 pin 的用户页之前取得。 |
+
+主线原有的 `1ed50a2` IRQ-driven 多请求 VirtIO 和 `5a3d3e2` ext4 inode
+读写锁保持不变，不属于本次从候选工作树移植的内容。
 
 以下候选没有进入主线：
 
@@ -22,6 +24,14 @@
 - central buddy + per-hart magazine：首个完成的 5-sample workload 中位数由
   核心组合的 64.17 秒变为 75.60 秒，回退约 17.8%，超过预设 5% 上限；同时
   当前 per-hart cache 没有完整实现 Linux 的 migration/IRQ-safe fast path。
+- TTY write 串行化：先后试验 scheduler-aware mutex 和 spin lock；前者没有通过
+  8-hart CAgent，后者还会把用户页翻译/写串口包在不可睡眠临界区内。`3523361`
+  移除了这项行为，最终代码没有 stdout 全局锁。
+
+另有一次 `5db1332` 将 IRQ block completion 的协作让出改成纯轮询，用来验证
+“持有 ext4 锁时调度”假设。源码确认 ext4 已使用可睡眠 `KernelRwSemaphore`，
+且运行态卡顿没有消失，因此 `eb4b543` 完整恢复原 IRQ 等待路径。该实验不属于
+最终实现。
 
 这次筛选坚持两条规则：一是“看起来像 Linux”不等于可合入；二是候选只要在
 并发正确性或独立性能门槛中失败，就不靠其他快项抵消风险。
@@ -43,7 +53,7 @@ fc02acf6ac0ccde0c805c2daa9148683cdd01ba8
 | COW/lazy fault 在 mm 锁内分配、复制或读文件 | `mm/memory.c` 的 `do_cow_fault()`、`finish_fault()` | prepare → lockless work → PTE/VMA recheck and commit。 |
 | COW 后向所有核做粗粒度处理 | `arch/riscv/mm/tlbflush.c` 的 `mm_cpumask(mm)` | 只对实际可能使用该 mm 的在线远端 hart 做页粒度 shootdown。 |
 | fd 表锁内执行最终 close/drop | `fs/file.c` 的 `file_close_fd_locked()`、`filp_close()` | 锁内摘除 fd，锁外执行可能递归取锁或释放重对象的 close。 |
-| 并发 stdout write 字符级交错 | `drivers/tty/tty_io.c` 的 `tty_write_lock()` | 一次 userspace write 是串行单位；`O_NONBLOCK` 竞争返回 `EAGAIN`。 |
+| 并发 stdout write 字符级交错 | `drivers/tty/tty_io.c` 的 `tty_write_lock()` | Linux 原则成立，但本地候选无法满足睡眠/用户页生命周期边界，因此本批次拒绝。 |
 
 ## 3. 内存管理：缩短页错误临界区
 
@@ -119,17 +129,21 @@ close、close_range、exec 的 CLOEXEC、dup/replace、socket/pipe 安装回滚�
 socket wakeup、fanotify、mount pin 释放或其他内存分配，也不会递归占用
 `FilesLock`。
 
-## 5. TTY：一次 userspace write 为串行单位
+## 5. TTY 候选：审查后移除
 
-`Stdout` 使用 scheduler-aware `KernelMutex<()>`。`syscall_write()` 识别真正的
-userspace stdout 后，在翻译用户页之前获取锁，并持有到完整 write 返回：
+Linux `tty_write_lock()` 说明一次 userspace write 应作为 TTY 串行单位，但本地
+实现不能只增加一把全局锁：
 
-- 阻塞 fd 等待锁；
-- `O_NONBLOCK` 在锁竞争时返回 `EAGAIN`；
-- 普通文件、pipe、socket、PTY 和其他伪文件不经过这把锁。
+- `UserBuffer` 保存未 pin 的用户页切片，翻译之后等待可睡眠 mutex 会跨调度保留
+  可能失效的裸切片；
+- 翻译之前取得 spin lock，又会把可能 fault、复制用户页和字符输出的长路径放进
+  不可睡眠临界区；
+- scheduler-aware mutex 版和 spin 版均未给出稳定的 8-hart CAgent 证据。
 
-“翻译前取锁”是必要的生命周期边界。当前 `UserBuffer` 内保存的是未 pin 的用户
-页切片；若翻译后再等待可睡眠 mutex，调度期间地址空间变化会让切片失效。
+因此 `33fcb6b`/`717ff5e` 仅作为审查实验保留在提交历史中，`3523361` 移除了
+stdout 串行行为。最终代码继续使用原输出路径。若后续要实现 Linux 风格 TTY，
+应先建立可 pin/可重试的用户缓冲区以及独立 tty write buffer，再在 tty 对象上
+使用可中断的 per-tty mutex，而不是在 syscall 层放置全局锁。
 
 ## 6. 候选筛选证据
 
@@ -145,7 +159,7 @@ lmbench:   lat_proc fork, -P 8 -W 1 -N 5
 
 ### 6.1 核心组合观测值
 
-`33fcb6b` 的 5 次 guest `/proc/uptime` 中位数为：
+筛选阶段 `33fcb6b` 的 5 次 guest `/proc/uptime` 中位数为：
 
 | workload | 中位数 |
 | --- | ---: |
@@ -155,7 +169,8 @@ lmbench:   lat_proc fork, -P 8 -W 1 -N 5
 | thread/pipe | 59.76 s |
 | lat_proc fork | 97.13 s |
 
-这些数字用于同一宿主现场下筛候选，不作为 Linux 或比赛机的绝对性能基线。
+这些数字只用于同一宿主现场下拒绝 scheduler/heap 候选，不代表最终保留 TTY
+修改，也不作为 Linux 或比赛机的绝对性能基线。
 
 ### 6.2 scheduler 拒绝原因
 
@@ -190,7 +205,7 @@ regression:                 17.81%
 
 ### 7.1 资产
 
-- kernel main HEAD：`33fcb6b72f90d56d8e99dc4d844d83bbf29a0e08`
+- kernel main HEAD：`eb4b54391daf8c1053f30756871d628b95e66f3a`
 - final test source：本地 `final-2026`，
   `1eac61d3becaa592c8ef12a7535f0ec6bb9e3e36`
 - 先前只读检查到 remote `final-2026` 为
@@ -201,7 +216,7 @@ regression:                 17.81%
 
 ### 7.2 静态检查
 
-主工作树以下两架构均通过；现有 warning 不计为本批次失败：
+主工作树最终 HEAD 的以下两架构均通过；现有 warning 不计为本批次失败：
 
 ```sh
 TMPDIR=$PWD/.tmp cargo check --offline --locked \
@@ -215,13 +230,17 @@ git -C ../os diff --check
 
 ### 7.3 并发压力与 LTP
 
-最终组合在 RISC-V 8 hart、2 GiB、snapshot 下完成：
+筛选组合 `33fcb6b` 在 RISC-V 8 hart、2 GiB、snapshot 下完成：
 
 - 400 process task hackbench，200 messages/sender：105.996 s，rc=0；
 - `fork03/04/05/07/08/09/10`：全部 rc=0；
 - `close01/02/close_range02`：全部 rc=0；
 - `close_range02` 的 11 个断言全部 TPASS；
 - 总结束标记：`CONCURRENCY_FOCUSED_DONE rc=0`。
+
+TTY 候选随后被移除；最终 HEAD 相对已经单独验证过的 `9b8059d` 只有一处 import
+的 `rustfmt` 换行，不存在额外运行态逻辑。上述日志可证明 MM/FD 修改通过这组
+回归，但不能冒充最终 HEAD 已重新完成同一轮 400-task 压力。
 
 日志：
 
@@ -231,60 +250,74 @@ git -C ../os diff --check
 
 ### 7.4 IOZone
 
-聚焦命令保持与 ext4/IRQ 批次一致：
+为了区分顺序阶段和容易卡住的随机阶段，工具增加
+`IOZONE_WORKLOAD=sequential|mixed`。顺序模式执行：
 
 ```sh
 iozone -t 4 -i 0 -i 1 -r 1k -s 4m
-iozone -t 4 -i 0 -i 2 -r 1k -s 4m
 ```
 
-历史同参数当前 ext4/IRQ 组合的三轮为 76.19、76.23、76.77 s，中位数
-76.23 s。本批次现场同时存在三个已运行超过一天、各使用 8 vCPU/8 GiB 且持续
-占用约 3.5--4.3 个宿主核的外部 QEMU。最终组合和精确基线 `5a3d3e2` 均在
-5 分钟内无法完成第一段，因此当前 A/B 无判别力：
+提交级隔离结果如下。时间来自 guest `/proc/uptime`，单位为秒：
 
-- 不把它写成 IOZone 功能通过；
-- 不把宿主争用写成内核回退；
-- 不声称本批次得到可信 IOZone 提升幅度。
+| kernel | 完成的 run | 结果 |
+| --- | --- | --- |
+| `5a3d3e2`（集成前） | 16.94 | 第 2 轮已打印表格但未输出结束标记，观察 120 秒后终止。 |
+| `72ee89b`（+MM） | 17.58、17.46 | 第 3 轮未完成，观察 120 秒后终止。 |
+| `9b8059d`（+FD） | 17.49、17.47、17.56 | 3/3 rc=0，中位数 17.49。 |
+| `33fcb6b`（TTY mutex 实验） | 17.44、17.98、17.59 | 3/3 rc=0，中位数 17.59。 |
+| `eb4b543`（最终 HEAD） | 无完整 run | 首轮 initial write 为 6714 KiB/s，随后读阶段无进展，短窗口后人工终止。 |
 
-对应现场日志：
+这组数据只支持两个保守结论：
+
+- `9b8059d` 的一次隔离运行解决了三轮 close/析构压力下的稳定完成问题，但最终
+  HEAD 仍复现非确定性卡顿，所以不能宣称 FD 修改已经修复全部 SMP/ext4 hang；
+- 集成前唯一完整轮次为 16.94 秒，`9b8059d` 中位数 17.49 秒，后者约慢 3.2%；
+  没有顺序吞吐提升证据。FD 修改的合入依据是锁边界正确性和聚焦回归，而不是
+  IOZone 跑分。
+
+mixed 模式还执行 `-i 0 -i 2`。`5a3d3e2` 在随机阶段超过 288 秒没有完整标记；
+`33fcb6b` 曾有单轮 42.85 秒完成，但后续三轮复测又在第一轮随机写收尾处超过
+5 分钟。它在同一代码上也不稳定，因此不计算“提升倍数”。
+
+对应日志：
 
 ```text
-.tmp/iozone/linux-concurrency-final.log
-.tmp/iozone/isolate-mm.log
-.tmp/iozone/isolate-base.log
+.tmp/iozone/clean-base-sequential.log
+.tmp/iozone/clean-mm-sequential.log
+.tmp/iozone/clean-files-sequential.log
+.tmp/iozone/clean-current-sequential.log
+.tmp/iozone/final-head-sequential.log
 ```
 
 ### 7.5 CAgent
 
-主 `33fcb6b` 使用官方 RISC-V image、8 hart、8 GiB、snapshot 启动成功并进入
-`cagent_testcode.sh`，但 600 秒内没有产生任何 `testcase cagent` 记录，外层按
-硬超时终止。judge 中显示的 10 个 0 分来自“没有可解析记录”，不是 10 个功能
-断言逐项执行后失败，不能写成 CAgent 0/10 的功能结论。
+获得用户授权清理遗留 QEMU 后重新隔离，结果仍然显示 8-hart 非确定性卡顿：
 
-现场同时有另一个 worktree 遗留的三组：
+- `9b8059d` 有一次官方 CAgent 完成 10/10、200/200，单项 1.273--2.347 秒；
+- 集成前 `5a3d3e2` 的 8-hart 精确基线只完成 factorial 一项（1649 ms），随后
+  120 秒硬超时，judge 为 1/10；
+- 移除 TTY 锁后的当前语义版本多次在 agent 启动后停滞；xtrace 显示进程已进入
+  fork/exec/wait/grep 一带，而不是启动脚本没有运行；
+- 同一版本改成单 hart 后很快完成 9/10，仅 fs-readwrite 未通过，进一步指向
+  SMP 并发路径而非动态链接器或整套 CAgent 不可运行。
 
-```text
-make PIDs: 33023, 37226, 43067
-QEMU PIDs: 33134, 37893, 43782
-```
+`5a3d3e2` 的对照证明该卡顿早于本次 MM/FD 集成，但最终分支仍会复现，所以不能
+把单次 200/200 写成“最终 8-hart 稳定通过”。本批次没有继续扩大范围去修复
+ext4/IRQ/scheduler 的残余死锁；这应作为后续独立 P0 诊断。
 
-三个 `make` 的 PPID 均为 1，命令带 `QEMU_TIMEOUT=0`；QEMU 均使用 `-snapshot`，
-已运行约 27--28 小时，每个配置 8 vCPU/8 GiB 并持续占用约 3.5--5.6 个宿主核。
-这与精确基线 IOZone 同样无法推进相互印证。由于这些进程属于另一个 worktree，
-安全策略拒绝在没有用户明确授权时终止它们。本轮 CAgent 因此记录为“环境阻塞、
-未完成”，待释放宿主资源后必须重跑，不能记为通过。
-
-日志：
+关键日志：
 
 ```text
-.tmp/final-runs/20260801-190454-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-195749-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-202517-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-201818-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-200911-riscv64-cagent/serial.log
 ```
 
 ### 7.6 未运行项目
 
-按用户要求没有运行完整 BuildStorm，也没有运行 unixbench、libcbench 或完整
-iozone 套件。没有把工具链检查、最小编译或高 CPU 运行状态冒充 BuildStorm
+按用户要求没有运行 BuildStorm，也没有运行 unixbench、libcbench 或完整
+IOZone 套件。没有把工具链检查、最小编译或高 CPU 运行状态冒充 BuildStorm
 成功。
 
 ## 8. 复现
@@ -303,10 +336,16 @@ CONCURRENCY_PHASE=regression CONCURRENCY_SAMPLES=1 \
 tools/analyze_concurrency_focus.py <baseline.log> <candidate.log>
 ```
 
-IOZone 工具的 `IOZONE_RUNS=1` 可用于提交级隔离，默认仍为三轮：
+IOZone 工具默认三轮 mixed；提交级隔离和顺序阶段可分别选择：
 
 ```sh
-IOZONE_RUNS=1 IOZONE_SKIP_BUILD=1 IOZONE_KERNEL_ELF=<kernel-elf> \
+IOZONE_RUNS=1 IOZONE_WORKLOAD=mixed \
+  IOZONE_SKIP_BUILD=1 IOZONE_KERNEL_ELF=<kernel-elf> \
+  tools/run_iozone_focus.sh <workspace> \
+  .tmp/iozone/iozone-root.img <iozone.log>
+
+IOZONE_RUNS=3 IOZONE_WORKLOAD=sequential \
+  IOZONE_SKIP_BUILD=1 IOZONE_KERNEL_ELF=<kernel-elf> \
   tools/run_iozone_focus.sh <workspace> \
   .tmp/iozone/iozone-root.img <iozone.log>
 ```
