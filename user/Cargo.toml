@@ -23,3 +23,11 @@ path = "src/bin/smoke_archive/tlb_shootdown_smp_smoke.rs"
 [[bin]]
 name = "riscv_icache_smp_smoke"
 path = "src/bin/smoke_archive/riscv_icache_smp_smoke.rs"
+
+[[bin]]
+name = "vfs_pathwalk_smoke"
+path = "src/bin/smoke_archive/vfs_pathwalk_smoke.rs"
+
+[[bin]]
+name = "cgroup_vfs_smoke"
+path = "src/bin/smoke_archive/cgroup_vfs_smoke.rs"

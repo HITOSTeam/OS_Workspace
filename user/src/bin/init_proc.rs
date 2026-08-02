@@ -42,6 +42,10 @@ fn main(_argc: usize, _argv: &[&usize]) -> usize {
         ("proc\0", "/proc\0", "proc\0"),
         ("sysfs\0", "/sys\0", "sysfs\0"),
         ("devtmpfs\0", "/dev\0", "devtmpfs\0"),
+        // Linux documents /dev/shm as a user-visible tmpfs mount used by
+        // glibc shm_open/shm_unlink. Keep it distinct from devtmpfs so POSIX
+        // shared-memory names are ordinary VFS dentries and inodes.
+        ("tmpfs\0", "/dev/shm\0", "tmpfs\0"),
     ] {
         let mkdir_rc = mkdirat(-100, target, 0o755);
         if mkdir_rc < 0 && mkdir_rc != -17 {

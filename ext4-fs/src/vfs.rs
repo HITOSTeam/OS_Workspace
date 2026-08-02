@@ -150,6 +150,23 @@ pub struct InodeStatSnapshot {
     pub special_rdev: u64,
 }
 
+/// Filesystem-wide counters needed by a VFS `statfs` implementation.
+///
+/// The snapshot is read from the filesystem handle owned by this inode, so a
+/// mounted secondary ext4 device never accidentally reports the root device's
+/// superblock.  The current allocator does not persistently maintain every
+/// free-space counter yet; callers therefore get the same best-effort on-disk
+/// values that the ext4 backend currently exposes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileSystemStatSnapshot {
+    pub block_size: u64,
+    pub blocks: u64,
+    pub blocks_free: u64,
+    pub blocks_available: u64,
+    pub files: u64,
+    pub files_free: u64,
+}
+
 impl InodeStatSnapshot {
     pub fn rdev_for_mode(&self) -> u64 {
         match self.mode & S_IFMT {
@@ -271,6 +288,26 @@ impl Inode {
     /// Get cached block size
     pub fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    /// Read filesystem-wide stat information from this inode's own ext4
+    /// superblock.  This mirrors Linux routing `statfs` through
+    /// `path.dentry->d_sb`, rather than consulting a process-global root disk.
+    pub fn filesystem_stat_snapshot(&self) -> FileSystemStatSnapshot {
+        let fs = self.fs.lock();
+        let sb = &fs.superblock;
+        let blocks_free =
+            ((sb.s_free_blocks_count_hi as u64) << 32) | sb.s_free_blocks_count_lo as u64;
+        let reserved_blocks =
+            ((sb.s_r_blocks_count_hi as u64) << 32) | sb.s_r_blocks_count_lo as u64;
+        FileSystemStatSnapshot {
+            block_size: sb.block_size() as u64,
+            blocks: sb.blocks_count(),
+            blocks_free,
+            blocks_available: blocks_free.saturating_sub(reserved_blocks),
+            files: sb.s_inodes_count as u64,
+            files_free: sb.s_free_inodes_count as u64,
+        }
     }
 
     /// Read stat-relevant inode metadata with one block-cache lookup.
