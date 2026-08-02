@@ -466,7 +466,7 @@ pub const PIDFD_PRCTL_TASKS: [&str; 19] = [
     "prctl10",
 ];
 
-pub const IOCTL_IOURING_OPEN_TASKS: [&str; 26] = [
+pub const IOCTL_IOURING_OPEN_TASKS: [&str; 23] = [
     "ioctl01",
     "ioctl02 -d /dev/tty",
     "ioctl03",
@@ -490,10 +490,13 @@ pub const IOCTL_IOURING_OPEN_TASKS: [&str; 26] = [
     "open14",
     "openat02",
     "openat04",
-    "openat201",
-    "openat202",
-    "openat203",
 ];
+
+/// Linux openat2(2) ABI and scoped path-resolution tests.
+///
+/// Keep this separate from the historical ioctl/io_uring/open batch so the
+/// resolver can be exercised without unrelated device and io_uring coverage.
+pub const OPENAT2_TASKS: [&str; 3] = ["openat201", "openat202", "openat203"];
 
 pub const NS_MOUNT_CORE_TASKS: [&str; 10] = [
     "mountns01",

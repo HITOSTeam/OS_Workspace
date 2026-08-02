@@ -108,6 +108,7 @@ const RISCV_LTP_GROUPS: &[LtpGroup] = &[
     // &super::TEE_VMSPLICE_FADVISE_TASKS,
     // &super::AIO_DIO_CORE_TASKS,
     // &super::IOCTL_IOURING_OPEN_TASKS,
+    // &super::OPENAT2_TASKS,
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
@@ -385,6 +386,7 @@ const LOONGARCH_LTP_GROUPS: &[LtpGroup] = &[
     // &super::TEE_VMSPLICE_FADVISE_TASKS,
     // &super::AIO_DIO_CORE_TASKS,
     // &super::IOCTL_IOURING_OPEN_TASKS,
+    // &super::OPENAT2_TASKS,
     //
     // mount / namespace / fanotify / proc-sysfs
     // &super::NS_MOUNT_CORE_TASKS,
