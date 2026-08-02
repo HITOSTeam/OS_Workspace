@@ -31,3 +31,7 @@ path = "src/bin/smoke_archive/vfs_pathwalk_smoke.rs"
 [[bin]]
 name = "cgroup_vfs_smoke"
 path = "src/bin/smoke_archive/cgroup_vfs_smoke.rs"
+
+[[bin]]
+name = "vfs_exit_fs_smoke"
+path = "src/bin/smoke_archive/vfs_exit_fs_smoke.rs"
