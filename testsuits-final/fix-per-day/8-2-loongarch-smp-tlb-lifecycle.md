@@ -14,12 +14,17 @@ shootdown、trap-context 映射发布、进程退出/回收以及 network namesp
 - 离线最小 Cargo 工程成功编译并运行 `Hello, world!`；
 - 单个 CAgent kernel agent 连续 20 轮为 20 pass / 0 fail；
 - 最终标准 CAgent 为 10/10，judge 权重合计 `199.10/200`；
+- 修复默认 overcommit 策略后，`tg-xtask` 聚焦构建越过了此前
+  `futures-core` 的 `pthread_create(EAGAIN)` 故障点，并继续创建 PID 40 之后的
+  rustc 子进程；
 - 最终串口日志中没有 panic、fatal trap 或重复 PID reap 警告；
 - LoongArch 与 RISC-V 两个 target 的 `cargo check` 均通过，`git diff --check`
   通过。
 
-本批次按用户要求**没有运行完整 BuildStorm**。没有编译 `/work/tgoskits`，也没有
-把工具链探针、最小 Cargo 或 CAgent 冒充 BuildStorm 成功。因此当前结论只能是：
+本批次按用户要求**没有运行完整 BuildStorm**。只在 `/work/tgoskits` 中聚焦执行
+`cargo build -p tg-xtask`，没有继续执行 arceos 主工作区编译。该聚焦构建运行
+60 分钟后仍未返回，按验证上限主动结束；没有把越过原故障点写成 `tg-xtask`
+完整通过。因此当前结论只能是：
 
 > LoongArch 已经通过 BuildStorm 之前的关键短链路门槛，但尚无证据证明完整
 > BuildStorm 可以通过，更没有完整编译耗时或性能分数据。
@@ -44,7 +49,8 @@ shootdown、trap-context 映射发布、进程退出/回收以及 network namesp
 
 本批修复已在独立分支形成提交。内核实现 commit 为
 `e699326f17e23e617a2eddbe5ed8103e572c4a3e`，内核验证文档 commit 为
-`1e6c19fb32e9fa81cc2a757b090a4973a34118b7`。顶层仓库通过独立提交固定
+`1e6c19fb32e9fa81cc2a757b090a4973a34118b7`，BuildStorm 前置 overcommit
+修复 commit 为 `90625864bb7d6c9de62a9b96538bc0e84a3c078e`。顶层仓库通过独立提交固定
 soft-float 构建目标并更新 `os/` 子模块指针；上表保留的是进入本批次前的基线，
 不能把它误写成修复后的版本。
 
@@ -137,6 +143,29 @@ exited queue；`wait4()` 可能在发布尚未完成时消费并删除 PID，随
 还是请求写入前失败。没有把它简单标成“外部抖动”；后续改用单个 kernel agent
 连续 20 轮，把进程退出、socket/netns 生命周期和首次连接作为聚焦回归。
 
+### 3.4 `tg-xtask` helper thread 创建失败
+
+首次聚焦运行：
+
+```text
+.tmp/final-runs/20260802-203851-loongarch64-shell/serial.log
+```
+
+`cargo build -p tg-xtask` 在 `futures-core` 阶段失败：
+
+```text
+thread 'rustc' (1245186) panicked at rustc_data_structures/src/jobserver.rs:124:
+failed to create helper thread: Os { code: 11, kind: WouldBlock,
+message: "Resource temporarily unavailable" }
+error: could not compile `futures-core` (lib)
+warning: build failed, waiting for other jobs to finish...
+```
+
+编码 TID `1245186` 对应 PID 38、线程槽 2，系统 PID 也只增长到约 50，因此它不符合
+PID/TID 耗尽。内核日志没有 `[mm] OOM` 或 `frame_alloc failed`。glibc 的
+`pthread_create()` 会把线程栈 `mmap()` 或 `clone()` 返回的 `ENOMEM` 转换为
+`EAGAIN`，所以用户态错误码不能直接证明线程数限制。
+
 ## 4. Linux 对照
 
 参考树：
@@ -157,6 +186,7 @@ fc02acf6ac0ccde0c805c2daa9148683cdd01ba8
 | setns 的准备/提交 | [`kernel/nsproxy.c`](../../exampleOs/linux/kernel/nsproxy.c) | 先准备并持有目标 namespace 引用，验证成功后再一次性切换，失败不暴露半完成状态。 |
 | namespace fd 生命周期 | [`fs/nsfs.c`](../../exampleOs/linux/fs/nsfs.c) | 打开的 namespace 文件本身持有 namespace 引用，最后关闭才释放。 |
 | netns ref 与异步清理 | [`net/core/net_namespace.c`](../../exampleOs/linux/net/core/net_namespace.c)、[`include/net/net_namespace.h`](../../exampleOs/linux/include/net/net_namespace.h) | `get_net/put_net` 统一对象引用；最后引用只排队 cleanup，在工作上下文中先从可发现集合摘除，再运行各协议 teardown。 |
+| 默认 overcommit 策略 | [`mm/util.c`](../../exampleOs/linux/mm/util.c) | mode 0 只拒绝单次大于 RAM+swap 的申请；全局 `Committed_AS` 与 `CommitLimit` 的硬比较只属于 mode 2。 |
 
 Linux 使用 `mm_cpumask()`、per-CPU context、通用 SMP call、`tasklist_lock`、引用
 计数对象和 workqueue。CongCore 当前规模更小，因此采用固定 hart mask、IPI
@@ -349,11 +379,47 @@ ID 不能在 teardown 完成后重新注册资源。
 在 registry 锁外执行 cleanup。`setns()` 与 exit/rollback 在 PCB 锁内串行 owner
 状态，atomic owner sentinel 保证 process ref 至多释放一次。
 
-## 8. 验证
+## 8. BuildStorm 前置 overcommit 修复
 
-### 8.1 静态检查
+旧实现把 `overcommit_memory=0` 近似成固定硬阈值：
 
-最终 netns gate 修复后执行：
+```text
+Committed_AS + additional > 1.5 * managed RAM -> ENOMEM
+```
+
+BuildStorm 同时运行多个 rustc。每个 fork 后的 COW 地址空间都会独立计入全局
+`Committed_AS`；当全局虚拟 commit 超过约 1.5 倍 RAM 后，即使还有可用物理页，
+glibc 新申请的少量 pthread 栈也会被拒绝。glibc 再把 `ENOMEM` 转成 `EAGAIN`，
+形成第 3.4 节的 rustc jobserver panic。
+
+Linux 当前三种策略的关键区别是：
+
+```text
+mode 0 / OVERCOMMIT_GUESS:
+    additional > RAM + swap 才拒绝
+mode 1 / OVERCOMMIT_ALWAYS:
+    commit accounting 不拒绝
+mode 2 / OVERCOMMIT_NEVER:
+    Committed_AS + additional > CommitLimit 时拒绝
+```
+
+本内核还没有 swap，因此 mode 0 使用 managed RAM 作为单次申请上限。修复同时：
+
+- 把三种策略抽成可单测的纯判定函数；
+- 覆盖 mode 0 忽略累计 commit、小申请边界、mode 1 放行以及 mode 2 严格限制；
+- 让 `mmap()` 与 `brk()` 共用同一判定；
+- 仅在实际拒绝时输出限频 `[mm-overcommit]`，包含操作、PID、mode、申请量、
+  `Committed_AS`、限制值和空闲页，避免下一次只看到 glibc 转换后的 `EAGAIN`。
+
+这项修改只修复错误的虚拟 commit 门槛。当前内核仍没有 swap、匿名页回收和完整
+OOM killer；mode 0 放行后，真正触碰物理内存上限仍可能在 fault 时 OOM，后续应以
+低水位回收和关键内核分配保留页增强，而不能重新引入全局虚拟内存硬阈值。
+
+## 9. 验证
+
+### 9.1 静态检查
+
+最终 netns gate 与 overcommit 修复后执行：
 
 ```sh
 TMPDIR=$PWD/.tmp ARCH=loongarch64 cargo check --quiet \
@@ -369,7 +435,13 @@ git diff --check
 Rust 文件已单独执行 `rustfmt --edition 2024`；仓库级 fmt 仍会命中本批之前存在的
 `src/syscall/filesystem/perm_utils.rs` 格式差异，没有为了全绿混入无关格式改动。
 
-### 8.2 工具链与最小 Cargo
+另尝试了 `cargo check --tests --target loongarch64-unknown-none-softfloat`，目标 sysroot
+不提供 Rust `test` crate，因此包括仓库既有 tmpfs/VFS 测试在内的所有 `#[test]`
+均报 `E0463: can't find crate for test`。本次新增的四个 policy 单元测试已保留，但
+不能把这次 target 基础设施失败写成“测试已运行通过”；实际可执行验证以 9.5 节
+guest 聚焦构建为准。
+
+### 9.2 工具链与最小 Cargo
 
 运行：
 
@@ -388,7 +460,7 @@ Rust 文件已单独执行 `rustfmt --edition 2024`；仓库级 fmt 仍会命中
 这个结果只证明动态 glibc Rust 工具链、进程/线程、文件系统和最小链接路径可用，
 不等价于数百 crate 的 BuildStorm。
 
-### 8.3 kernel agent 聚焦回归
+### 9.3 kernel agent 聚焦回归
 
 运行：
 
@@ -405,7 +477,7 @@ KERNEL_AGENT_SUMMARY pass=20 fail=0
 该回归覆盖了此前一次 513 ms reject 对应的短进程、shell、TCP 连接和 server 请求
 路径。
 
-### 8.4 最终标准 CAgent
+### 9.4 最终标准 CAgent
 
 当前最终代码在统一 netns lifetime/teardown gate 完成后运行：
 
@@ -440,7 +512,43 @@ ARCH=loongarch64 MEM=8G SMP=12 IMAGE_MODE=snapshot ./run.sh cagent
 - 没有 `remove_from_pid2process: ... already reaped`；
 - 没有 panic、fatal trap 或 failed hart。
 
-## 9. BuildStorm 就绪度
+### 9.5 `tg-xtask` 聚焦复验
+
+修复 commit `9062586` 后，以 LoongArch64、12 vCPU、8 GiB、snapshot 重新运行：
+
+```text
+.tmp/final-runs/20260802-223007-loongarch64-shell/serial.log
+```
+
+guest 起始状态：
+
+```text
+OVERCOMMIT_MODE=0
+MemTotal:       7597804 kB
+MemFree:        7567744 kB
+CommitLimit:    3797878 kB
+Committed_AS:   772 kB
+```
+
+结果：
+
+- 正常越过原来失败的 `futures-core`；
+- 继续编译 `bytes`、`lock_api`、`once_cell`、`pin-project-lite`、`thiserror` 和
+  `equivalent`；
+- 继续创建到 PID 40，Cargo 主进程保持 15 个线程；
+- 没有 `failed to create helper thread`、`Resource temporarily unavailable`、
+  rustc panic、`[mm-overcommit]`、`[mm] OOM` 或 `frame_alloc failed`；
+- QEMU 在约 14 分钟时约 401% CPU/5.3 GiB RSS，在约 52 分钟时约
+  320% CPU/3.1 GiB RSS，说明中途有子进程完成并释放内存；
+- 运行 60 分钟后仍没有 `TG_XTASK_RESULT`，最后一个新 crate 日志约在
+  46 分钟，随后保持高 CPU 但无串口进展，按聚焦验证上限用 QEMU `Ctrl-A x`
+  主动结束。
+
+因此本次验证确认了原 `EAGAIN` 故障已被修复，但不能把 `tg-xtask` 标为完整通过。
+剩余问题更像 LoongArch rustc 极慢或后续调度/futex 停滞，需要新的带进程状态采样
+聚焦测试区分；它不应与本次已确认的 overcommit 错误重新混为一个根因。
+
+## 10. BuildStorm 就绪度
 
 BuildStorm 脚本的主要阶段与当前证据如下：
 
@@ -450,24 +558,24 @@ BuildStorm 脚本的主要阶段与当前证据如下：
 | `/proc`、`/sys`、`/dev` 与基础命令 | 通过短链路 | CAgent 10/10 |
 | `rustc`/`cargo` 启动 | 通过 | 连续 12 轮，无 hang |
 | 最小离线 Cargo 工程 | 通过 | 1m33s，运行输出正确 |
-| `tg-xtask` 辅助工具 | 未单独验证 | 本批未进入该 BuildStorm 阶段 |
-| `/work/tgoskits` 数百 crate 编译 | 未运行 | 用户明确要求不运行完整 BuildStorm |
+| `tg-xtask` 辅助工具 | 原 EAGAIN 已修复，整体未完成 | 60 分钟聚焦构建越过 `futures-core`/PID 40，但没有退出码 |
+| `arceos-helloworld` 主工作区编译 | 未运行 | 用户明确要求不运行完整 BuildStorm |
 | BuildStorm judge 成功分 | 未知 | 没有完整串口日志，不能评分 |
 | BuildStorm 性能分 | 未知 | 没有完整编译时间 |
 
-因此“现在能否完整通过 BuildStorm”的严谨答案仍是**未知**。这次修复显著降低了
-最可能在完整编译前暴露的 SMP/TLB、fork/exit、socket 和文件生命周期风险，但
-不能替代实际全量编译。
+因此“现在能否完整通过 BuildStorm”的严谨答案仍是**未知**。这次修复已经移除
+一个可复现的前置 blocker，但 `tg-xtask` 自身尚未完成，并且速度/停滞仍不满足
+完整 BuildStorm 的就绪标准，不能替代实际全量编译。
 
-## 10. 尚未覆盖的边界
+## 11. 尚未覆盖的边界
 
-### 10.1 MM 回滚
+### 11.1 MM 回滚
 
 `MapArea::append_to()` 的 non-lazy 部分映射失败回滚仍使用本地逐页 unmap，并立即
 释放 frame。当前没有会安装 PTE 的外部调用者，因此不是本轮短链路 blocker；若
 以后启用，必须改成 batched rollback，在同步 ASID invalidation 后再释放 frame。
 
-### 10.2 netns 语义
+### 11.2 netns 语义
 
 - 部分 rtnetlink 请求仍通过 `current_process()` 选择 namespace，而不是始终使用
   socket 固定的 `net_ns_id`；setns 后旧 netlink fd 的完整 Linux 语义尚未实现；
@@ -477,10 +585,11 @@ BuildStorm 脚本的主要阶段与当前证据如下：
   简化为 PCB 级；若未来允许同一 PCB 多线程并发 `setns()`，应改为 per-task
   namespace，或让所有 in-flight 操作持有 RAII transient pin。
 
-### 10.3 验证范围
+### 11.3 验证范围
 
 - 没有运行完整 BuildStorm；
 - 没有运行完整初赛/LTP 回归；
+- `tg-xtask` 聚焦运行只确认越过原故障点，没有完成标记；
 - 没有运行 unixbench、libcbench 或完整 IOZone；
 - 没有 BuildStorm 前后性能对比；
 - 本地 final test source 不是最后一次已知的 remote HEAD。
@@ -488,24 +597,27 @@ BuildStorm 脚本的主要阶段与当前证据如下：
 正式进入完整 BuildStorm 前，应先重新核对 final suite HEAD、judge 的 LoongArch
 核数和镜像 checksum，再由用户明确授权长时间编译。
 
-## 11. 修改范围与提交记录
+## 12. 修改范围与提交记录
 
-最终 `os/` 实现提交涉及 70 个源码/构建文件，共 5372 行新增、2098 行删除。
+首个 `os/` 实现提交涉及 70 个源码/构建文件，共 5372 行新增、2098 行删除。
 LoongArch TLB、通用用户页 pin、fork/exit 和 netns teardown 共同修改 MM/TCB/PCB
-发布边界，且最终验证针对这组统一不变量完成，因此保留为一个内核实现提交；文档、
-顶层构建接入和子模块指针分别提交，避免把证据与构建配置混入内核实现。
+发布边界，因此保留为一个内核实现提交。后续 overcommit 根因明确且只修改两个 MM
+文件，单独形成 `9062586`；文档、顶层构建接入和子模块指针继续分别提交，避免把
+证据与实现混在一起。
 
 | 仓库 | commit | 内容 |
 | --- | --- | --- |
 | `os/` | `e699326f17e23e617a2eddbe5ed8103e572c4a3e` | `fix(loongarch): harden SMP execution and teardown` |
 | `os/` | `1e6c19fb32e9fa81cc2a757b090a4973a34118b7` | `docs(final): record LoongArch short-path validation` |
+| `os/` | `90625864bb7d6c9de62a9b96538bc0e84a3c078e` | `mm: fix default overcommit heuristic` |
 | 顶层 | `2ce9a82410aa8cbeba36362d10c54d5b43c4c2b5` | `build(loongarch): use the soft-float kernel target` |
 | 顶层 | `afef9ef51a8ccf874e485951ab7c5666829c269e` | `chore(os): update the LoongArch kernel revision` |
+| 顶层 | `af86d2afc950845844d71c285abcb7a94a938c06` | `chore(os): update overcommit kernel revision` |
 
 提交前已确认 vendored smoltcp 的差异只是 rustfmt 副作用，已恢复且没有进入任何
 提交。本日报作为独立的顶层文档提交保存。
 
-## 12. 复现
+## 13. 复现
 
 静态检查：
 
@@ -525,11 +637,19 @@ cd testsuits-final
 ARCH=loongarch64 MEM=8G SMP=12 IMAGE_MODE=snapshot ./run.sh cagent
 ```
 
+`tg-xtask` 聚焦复验需要进入 snapshot shell，只执行：
+
+```sh
+cd /work/tgoskits
+export RUSTUP_TOOLCHAIN=nightly-2026-05-28 CARGO_NET_OFFLINE=true
+cargo build -p tg-xtask
+```
+
 本报告不提供或执行完整 BuildStorm 命令，避免误触发长时间编译。需要正式验证时，
 应先确认测试源码和镜像，再按用户授权单独运行并保留完整串口、score JSON、QEMU
 版本、kernel commit 和宿主负载信息。
 
-## 13. AI 使用说明
+## 14. AI 使用说明
 
 AI 用于：只读审查本地 Linux 参考树、分析 QEMU CSR/串口失败现场、推导
 LoongArch paired-TLB 与跨 hart shootdown 竞态、实现和复审进程/netns 生命周期、
