@@ -21,6 +21,10 @@ name = "tlb_shootdown_smp_smoke"
 path = "src/bin/smoke_archive/tlb_shootdown_smp_smoke.rs"
 
 [[bin]]
+name = "lazy_fault_local_tlb_smoke"
+path = "src/bin/smoke_archive/lazy_fault_local_tlb_smoke.rs"
+
+[[bin]]
 name = "riscv_icache_smp_smoke"
 path = "src/bin/smoke_archive/riscv_icache_smp_smoke.rs"
 
