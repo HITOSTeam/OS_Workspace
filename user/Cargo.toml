@@ -93,5 +93,9 @@ name = "epoll_ctl_wakeup_smoke"
 path = "src/bin/smoke_archive/epoll_ctl_wakeup_smoke.rs"
 
 [[bin]]
+name = "exec_epoll_thread_smoke"
+path = "src/bin/smoke_archive/exec_epoll_thread_smoke.rs"
+
+[[bin]]
 name = "timerfd_epoll_smoke"
 path = "src/bin/smoke_archive/timerfd_epoll_smoke.rs"
