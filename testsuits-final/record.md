@@ -456,98 +456,226 @@ BYTES=0
 <!-- - 编译耗时是综合指标，不能仅凭总时间判断具体瓶颈，优化前必须用日志或性能 -->
 <!--   数据定位。 -->
 
-## 2026-07-30：最小类 Linux 虚拟文件系统挂载语义
+## 2026-07-31：参考 Linux 拆除 ext4/块 I/O 全局串行路径
 
-- 内核基线：`e78c5e16441b6cef297baaf5f483270f24fca0f5`（含未提交工作区修改）。
-- final 测试源码：`1eac61d3becaa592c8ef12a7535f0ec6bb9e3e36`。
-- RISC-V 镜像：
-  `d899fe43d333d1d17ad8a5f8a8b74b68117b8c1ceacfc3843bfeadb1ca705bd1`。
-- QEMU：11.0.3；RISC-V64，8 vCPU，8 GiB，snapshot 模式。
+本批次只处理 P0 的 ext4、VirtIO 块 I/O 和与硬中断唤醒直接相关的调度并发；
+完整 VFS 节点化和挂载图迁移不在本批次内。按要求未运行 BuildStorm。
 
-实现结果：
+### 基线、源码和测试资产
 
-- `procfs`、`sysfs`、`devtmpfs` 由 mount record 的后端类型驱动，不再根据
-  `/proc`、`/sys`、`/dev` 路径前缀无条件启用。
-- 支持挂载到任意已有目录、同一 target 的 overmount 和逐层 `umount`。
-- procfs 实例记录挂载时的 PID namespace；PID 目录和 `self` 使用该视图。
-- FD 表记录打开时的挂载身份，供 `fstatfs` 和普通 `umount` busy 判断使用。
-- PID 1 创建缺失挂载点并挂载 `/proc`、`/sys`、`/dev`；失败时停止启动。
+- 父仓库 HEAD：`38e32c422eafa4e92c4252832dfce9a500532be3`，含本批次未提交修改。
+- 当前 OS HEAD：`7dd9c5c875a9f9b037de82eae492e7dbff75a86a`，含本批次未提交修改。
+- 对照基线 OS HEAD：
+  `/Users/bytedance/projects/OS_Workspace-ext4-fix/os` 的
+  `e78c5e16441b6cef297baaf5f483270f24fca0f5`。
+- final 测试源码：`final-2026`，
+  `1eac61d3becaa592c8ef12a7535f0ec6bb9e3e36`。
+- 本地 Linux 参考树：`exampleOs/linux`，
+  `fc02acf6ac0ccde0c805c2daa9148683cdd01ba8`。
+- QEMU：11.0.3；RISC-V64，8 vCPU，2 GiB，snapshot 模式。
+- IOZone 根镜像：
+  `.tmp/iozone/iozone-root.img`，4 GiB，
+  SHA-256 `c0cb4e209e0aa243af72c599c3e34a679ff1f195ac46789e054b77eac3bf453d`。
+  这是只用于聚焦测试、加入了 `/glibc/iozone` 的临时镜像，不是 14 GiB
+  决赛基准镜像。
+- 当前 `/user` 镜像 SHA-256：
+  `076d153dc2db1736c09ce9d97948afc9d1b26c3863436eb80cb9ab6c2aa2ab40`。
+- 基线工作树 `/user` 镜像 SHA-256：
+  `fc7eccd2ddc5e87c2c70116bd3f63dcf14e9ffd38b6d96b37e756f7c6441890e`。
+  两个工作树必须使用各自构建的 `/user` 镜像才能启动对应内核；IOZone
+  数据文件都位于同一个临时根镜像的 `/glibc`。
+- 两次 A/B 均在宿主机已有其他 QEMU 负载时顺序执行，因此只比较这组同负载数据；
+  更早、宿主负载不同的 70.38 秒历史结果不纳入加速比。
+- 官方 14 GiB RISC-V/LoongArch 基准镜像未被写入或替换。
 
-验证：
+### Linux 对照和本项目实现
 
-- RISC-V 内核与 user workspace `cargo check` 通过。
-- `ARCH=riscv64 ./run.sh shell` 启动通过。验证了：
-  - `/proc/uptime` 可读，`/proc/self` 可解析；
-  - `/proc` 的 statfs magic 为 `0x9fa0`；
-  - procfs 可挂载到 `/tmp/p1`；
-  - procfs 上叠加 sysfs 后 magic 为 `0x62656572`；
-  - 第一次卸载显露下层 procfs，第二次卸载显露原 ext4 目录；
-  - 打开下层 procfs FD 时普通卸载返回 `EBUSY`，关闭 FD 后成功；
-  - 对当前顶层重复相同 source、filesystem type 和 target 的挂载返回
-    `EBUSY`；使用不同 source/backend 时仍可 overmount 并逐层卸载。
-- 运行日志：
-  `.tmp/final-runs/20260730-134710-riscv64-shell/serial.log`。
-- CAgent 回归得到 7/10 通过；`fs-create`、`fs-directory`、`fs-search` 未在脚本
-  声明的超时后结束，手动终止。本结果不是完整 CAgent 通过，需单独诊断现有并发
-  文件系统/timeout 路径。
-- LoongArch 静态检查未执行成功：本机缺少
-  `loongarch64-unknown-none` core/target。
-- busybox `unshare -pf` 被现有参数校验以 `EINVAL` 拒绝，因此 PID namespace
-  运行态还需使用 LTP `pidns03` 或补齐对应 unshare/clone 接线后验证。
+没有逐行移植 Linux，而是保留 CongCore 架构并复用 Linux 已验证的锁域、IRQ
+语义、内存序和对象生命周期：
 
-### RISC-V LTP 聚焦回归
+| 本项目机制 | 本地 Linux 对照 | 落地方式 |
+| --- | --- | --- |
+| VirtIO 提交/完成串行化 | `drivers/block/virtio_blk.c` 的 `virtio_queue_rq()`、`virtblk_done()` | 提交和硬中断完成共用 irq-save 队列锁；请求元数据由驱动持有到 used ring 返回 |
+| VirtQueue 回调和 kick | `drivers/virtio/virtio_ring.c` 的 callback suppression、`virtqueue_kick_prepare()` | IRQ 与有界轮询共用完成函数；轮询消费完成后再确认中断；保留既有 LoongArch 强制 kick 兼容边界 |
+| 有界块轮询 | `block/blk-mq.c` 的 `blk_hctx_poll()` | 最多 64 次短轮询，遇到 reschedule 或预算耗尽后无信号地协作让出，再继续等待 DMA 完成 |
+| 块请求生命周期 | Linux `bio`/request 在完成前 pin 页面 | 同步调用者在完成前不能返回；请求表持有 `Arc`，数据直接使用调用者稳定缓冲区，删除每个 4 KiB 请求的二次分配和复制 |
+| waitqueue | `kernel/sched/wait.c` 的 prepare/recheck/wake 顺序 | 条件检查、入队和唤醒使用 irq-save 元数据锁，阻止“检查后、睡眠前”丢唤醒 |
+| SMP 唤醒交接 | `kernel/sched/core.c::try_to_wake_up()` | 每任务 transition lock 对应 `p->pi_lock`，用 acquire/release 的 `on_cpu` 交接决定立即入队或延迟唤醒 |
+| inode 锁粒度 | Linux `inode::i_rwsem`、`s_vfs_rename_mutex`、`lock_two_nondirectories()` | `(device_id, inode_num)` 对应稳定读写信号量；多 inode 按稳定键排序；跨目录 rename 另取保守的 topology mutex |
+| page-cache 缺页合并 | `mm/filemap.c` 的同页缺页协调 | block cache 使用 `Loading/Ready` single-flight，同一冷块只提交一次 I/O |
+| 回写锁域 | Linux page cache/writeback 不在全局映射锁内等待设备 | 冷读、LRU 淘汰回写、`sync_all` 均移出全局 cache-manager 锁；generation 防止并发写被旧回写误标为干净 |
+| 有界预读 | `mm/readahead.c` | 只在已确认连续的 ext4 extent 内预读，单次最多 32 个 4 KiB 块，即 128 KiB |
 
-环境：
+实现边界：
 
-- 内核基线：`e78c5e16441b6cef297baaf5f483270f24fca0f5`，包含本节记录的未提交
-  mount 工作区修改。
-- 初赛 LTP 源码：`dev_final`，
-  `e63f2d0b42298acb2b4653dd53c8ccecae974c69`。
-- 初赛 RISC-V 测试镜像 SHA-256：
-  `284da8681f561a75f7023bfff09b6e3720894f894891885a9c4d8b4e92e4605a`。
-- QEMU 11.0.3；RISC-V64，8 vCPU，1 GiB。
-- 所有有效复跑均使用重新生成的 system ext4 和 QEMU `-snapshot`，避免 LTP
-  写入的 `/tmp`、临时 mount 和固定随机路径污染下一轮。
-- 临时设置 `RUN_NON_LTP_BASELINE=false`、`RUN_LTP_GROUPS=true`，只运行 LTP；
-  测试完成后已恢复默认值，`submit_plan.rs` 的聚焦分组也已全部恢复为注释。
+- CongCore 尚无完整 blk-mq timeout/reset/recovery；30 秒阈值只诊断，不能在 DMA
+  仍拥有缓冲区时伪造超时返回。
+- LoongArch vendor 原有同步路径已经强制 kick；本批次的非阻塞路径沿用该兼容行为。
+  Linux 无按架构强制 kick 的特判，后续应单独修正 vendor 的 event-index 判定并做
+  LoongArch 运行态回归，不能把这个兼容项称为 Linux 设计。
+- 当前 topology mutex 比 Linux 的 per-superblock `s_vfs_rename_mutex` 更保守，但
+  只覆盖跨目录 rename，不再串行化普通 lookup/read/write。
+- 本批次未实现 Linux RCU pathwalk、完整 page cache 或多硬件队列。
 
-首轮 `MOUNT_API_TASKS` 暴露出：同一个 source 在同一个 target 上直接重复挂载
-错误成功，导致 `mount02` 失败，并遗留一层挂载污染后续 `umount02`。对照 Linux
-`mount(2)` 后将判断收窄为：
+### 修改文件
 
-- 相同 source、filesystem type 和当前顶层 target：`EBUSY`；
-- target 相同但 source/backend 不同：允许 overmount；
-- `umount` 只弹出当前顶层，显露下层挂载。
+本批次共涉及 54 个文件；未计入用户原有的
+`fix-per-day/7.30-vfs-core.md` 删除、`.DS_Store` 和
+`fix-per-day/7.30-mutli-core-for-loongarhc.md`。
 
-修复后的干净快照结果：
+`ext4-fs/`（5）：
 
-- `MOUNT_API_TASKS`：
-  - glibc 的 `mount01-07`、`umount01-03`、`umount2_01-02`、
-    `mount_setattr01`、`fsconfig01-03`、`fsopen01` 全部通过；
-  - musl 除既有的 `mount03` setuid ELF 执行差异和 `mount07`
-    `realpath(nosymfollow)` 差异外，其余相同 mount/umount 用例通过；
-  - `fanotify21-23` 和 `fsconfig01` 中缺少的功能/工具按 LTP 报告预期
-    `TCONF`，没有新增内核失败。
-- `FSTATFS_TASKS + STATFS_TASKS`：
-  - musl/glibc 的 `fstatfs02`、`statfs02`、`statfs03` 全部通过；
-  - 无 `TFAIL`、`TBROK` 或 `TWARN`。
-- `NS_MOUNT_CORE_TASKS`：
-  - musl/glibc 的 `mountns01-04`、`setns01-02`、`unshare01-02` 全部通过；
-  - `timens01`、`pidns01` 因当前镜像内核配置不满足而预期 `TCONF`；
-  - 无 `TFAIL`、`TBROK` 或 `TWARN`。
-
-复现命令模板：
-
-```zsh
-make -C os run_ext4 ARCH=riscv64 SUBMIT=1 LOG=warn SMP=8 MEM=1G \
-  EXT4_REBUILD=0 EXT4_SIZE=4G QEMU_EXTRA_ARGS=-snapshot
+```text
+ext4-fs/src/block_cache.rs
+ext4-fs/src/block_dev.rs
+ext4-fs/src/ext4.rs
+ext4-fs/src/lib.rs
+ext4-fs/src/vfs.rs
 ```
 
-有效日志及 SHA-256：
+`vendor/virtio-drivers-pci/`（4）：
 
-- `.tmp/ltp-mount-api-riscv64-20260730-clean.log`：
-  `dce03f622a9f251620600c607afdcbb2dc8dfb554ef1cf8e511061e8002c4a6c`
-- `.tmp/ltp-statfs-riscv64-20260730.log`：
-  `184f17ff557f317a7371820f061e5ddbb0371e2fda02ed08746fe2ba4e401ef8`
-- `.tmp/ltp-mountns-riscv64-20260730.log`：
-  `32397c0460df9a432db6e7b1c81441e14e5645e4bbef61500489f08aecf77ee9`
+```text
+vendor/virtio-drivers-pci/src/device/blk.rs
+vendor/virtio-drivers-pci/src/lib.rs
+vendor/virtio-drivers-pci/src/queue.rs
+vendor/virtio-drivers-pci/src/transport/pci/bus.rs
+```
+
+`os/`（43，其中 4 个新文件）：
+
+```text
+os/src/arch/loongarch64/csr_defs.rs
+os/src/arch/loongarch64/irq.rs                         [new]
+os/src/arch/loongarch64/mod.rs
+os/src/arch/loongarch64/trap/handler.rs
+os/src/arch/riscv64/irq.rs                             [new]
+os/src/arch/riscv64/mod.rs
+os/src/arch/riscv64/trap/handler.rs
+os/src/config.rs
+os/src/drivers/block/async_queue.rs                    [new]
+os/src/drivers/block/mod.rs
+os/src/drivers/block/virtio_blk.rs
+os/src/fs/ext4/mod.rs
+os/src/fs/fanotify.rs
+os/src/fs/inode.rs
+os/src/fs/mod.rs
+os/src/fs/procfs/magic_link.rs
+os/src/lib.rs
+os/src/main.rs
+os/src/sync.rs                                         [new]
+os/src/syscall/filesystem/ctl.rs
+os/src/syscall/filesystem/ctx_utils.rs
+os/src/syscall/filesystem/dir.rs
+os/src/syscall/filesystem/fanotify.rs
+os/src/syscall/filesystem/fd_utils.rs
+os/src/syscall/filesystem/inode_utils.rs
+os/src/syscall/filesystem/io.rs
+os/src/syscall/filesystem/mod.rs
+os/src/syscall/filesystem/mount_utils.rs
+os/src/syscall/filesystem/open_close.rs
+os/src/syscall/filesystem/path_utils.rs
+os/src/syscall/filesystem/perm_utils.rs
+os/src/syscall/filesystem/stat.rs
+os/src/syscall/filesystem/stat_utils.rs
+os/src/syscall/memory/mmap.rs
+os/src/syscall/memory/mod.rs
+os/src/syscall/misc/module.rs
+os/src/syscall/net/unix.rs
+os/src/syscall/process/exec.rs
+os/src/syscall/process/mod.rs
+os/src/task/manager.rs
+os/src/task/manager/fair.rs
+os/src/task/processor.rs
+os/src/task/task_block.rs
+```
+
+聚焦测试资产和记录（2）：
+
+```text
+testsuits-final/tools/run_iozone_focus.sh
+testsuits-final/record.md
+```
+
+### IOZone A/B 结果
+
+工作负载每轮依次执行：
+
+```sh
+iozone -t 4 -i 0 -i 1 -r 1k -s 4m
+iozone -t 4 -i 0 -i 2 -r 1k -s 4m
+```
+
+连续三轮的 guest `/proc/uptime`：
+
+| 实现 | 第 1 轮 | 第 2 轮 | 第 3 轮 | 中位数 |
+| --- | ---: | ---: | ---: | ---: |
+| 基线：全局 `EXT4_LOCK` | 75.72 s | 81.13 s | 81.88 s | 81.13 s |
+| 当前：inode 锁 + Linux 风格块完成 + zero-copy | 76.19 s | 76.23 s | 76.77 s | 76.23 s |
+
+当前中位耗时缩短 4.90 秒，即 6.04%。三轮 sequential/random 命令均返回 0。
+基线虽然 IOZone 总返回码为 0，但三个阶段出现 `Min xfer = 0`；当前全部 worker
+的 `Min xfer` 非零。
+
+各轮 `Children see throughput` 的中位数：
+
+| 四 worker 阶段 | 基线 kB/s | 当前 kB/s | 变化 |
+| --- | ---: | ---: | ---: |
+| sequential initial writers | 2389.42 | 1948.13 | -18.47% |
+| sequential rewriters | 3433.32 | 5174.99 | +50.73% |
+| sequential readers | 5223.11 | 7431.32 | +42.28% |
+| sequential re-readers | 5316.99 | 8363.10 | +57.29% |
+| random initial writers | 2338.48 | 1952.75 | -16.49% |
+| random rewriters | 2880.76 | 5246.59 | +82.13% |
+| random readers | 1795.68 | 1841.51 | +2.55% |
+| random writers | 1629.26 | 1978.59 | +21.44% |
+
+因此当前收益主要来自重写、命中读取和并发完成；首次创建写仍回退约 16–18%。
+后续应继续分析 ext4 位图/目录元数据分配和请求对象分配，不能用本次总耗时改善掩盖
+该局部回退。
+
+复现模板：
+
+```zsh
+# 当前工作树
+bash tools/run_iozone_focus.sh \
+  /Users/bytedance/projects/OS_Workspace \
+  .tmp/iozone/iozone-root.img \
+  .tmp/iozone/linux-lock-zero-copy.log
+
+# 对照工作树；先构建对应内核，再使用它自己的 /user 镜像
+IOZONE_SKIP_BUILD=1 \
+IOZONE_USER_IMG=/Users/bytedance/projects/OS_Workspace-ext4-fix/ext4-fs-packer/target/user.ext4 \
+bash tools/run_iozone_focus.sh \
+  /Users/bytedance/projects/OS_Workspace-ext4-fix \
+  .tmp/iozone/iozone-root.img \
+  .tmp/iozone/ext4-lock-concurrent-host-baseline-correct-image.log
+```
+
+日志和脚本 SHA-256：
+
+- `.tmp/iozone/ext4-lock-concurrent-host-baseline-correct-image.log`：
+  `b0d1f53fcf6b38293d02ac53acf6cbbb14752a11846f42f845712fa55a0128b1`
+- `.tmp/iozone/linux-lock-zero-copy.log`：
+  `0e4868b705d31c4982562789db98fe70d5319c46f5258a4018d581d274c2d46d`
+- `tools/run_iozone_focus.sh`：
+  `7f8ed8247335966bc17ae74c7ed1613a96d141ab5f53b8ba3d50a52e98cfdc85`
+
+### 构建和单元验证
+
+- RISC-V：
+  `cargo check --manifest-path ../os/Cargo.toml
+  --target riscv64gc-unknown-none-elf --offline` 通过。
+- LoongArch：
+  `cargo check --manifest-path ../os/Cargo.toml
+  --target loongarch64-unknown-none-softfloat --offline` 通过。
+- ext4：8/8 单元测试通过，包括 single-flight、管理器锁外冷读/回写、
+  generation 并发写保护、LRU 淘汰和有界预读。
+- VirtIO：24/24 单元测试、8/8 文档测试通过。vendor 测试专用
+  `transport/fake.rs` 与仓库既有 `deny(missing_docs)` 冲突，测试命令使用
+  `RUSTFLAGS=--cap-lints=warn`；OS 的普通静态构建未降低 lint。
+- 本批次修改文件的 `rustfmt --check` 通过。
+- `bash -n tools/run_iozone_focus.sh` 通过。
+- 父仓库与 OS 子仓库 `git diff --check` 通过。
+- 当前 IOZone 日志无 VirtIO stall/error、panic 或 deadlock 诊断。
+- 未运行 BuildStorm、unixbench、libcbench 或完整 CAgent。
