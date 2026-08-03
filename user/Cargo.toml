@@ -33,6 +33,10 @@ name = "private_file_page_cache_smoke"
 path = "src/bin/smoke_archive/private_file_page_cache_smoke.rs"
 
 [[bin]]
+name = "concurrent_pread_smoke"
+path = "src/bin/smoke_archive/concurrent_pread_smoke.rs"
+
+[[bin]]
 name = "private_file_madvise_dontneed_smoke"
 path = "src/bin/smoke_archive/private_file_madvise_dontneed_smoke.rs"
 
