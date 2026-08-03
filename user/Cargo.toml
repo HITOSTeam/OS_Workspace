@@ -97,5 +97,9 @@ name = "exec_epoll_thread_smoke"
 path = "src/bin/smoke_archive/exec_epoll_thread_smoke.rs"
 
 [[bin]]
+name = "fork_thread_group_perf_smoke"
+path = "src/bin/smoke_archive/fork_thread_group_perf_smoke.rs"
+
+[[bin]]
 name = "timerfd_epoll_smoke"
 path = "src/bin/smoke_archive/timerfd_epoll_smoke.rs"
