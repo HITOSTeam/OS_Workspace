@@ -29,7 +29,7 @@ endif
 
 RISC_TARGET := riscv64gc-unknown-none-elf
 RISC_ELF := $(OS_DIR)/target/$(RISC_TARGET)/$(MODE)/os
-LOONGARCH_ELF ?= $(OS_DIR)/target/loongarch64-unknown-none/$(MODE)/os
+LOONGARCH_ELF ?= $(OS_DIR)/target/loongarch64-unknown-none-softfloat/$(MODE)/os
 
 KERNEL_RV := kernel-rv
 KERNEL_LA := kernel-la

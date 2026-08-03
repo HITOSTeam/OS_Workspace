@@ -21,8 +21,24 @@ name = "tlb_shootdown_smp_smoke"
 path = "src/bin/smoke_archive/tlb_shootdown_smp_smoke.rs"
 
 [[bin]]
+name = "lazy_fault_local_tlb_smoke"
+path = "src/bin/smoke_archive/lazy_fault_local_tlb_smoke.rs"
+
+[[bin]]
 name = "riscv_icache_smp_smoke"
 path = "src/bin/smoke_archive/riscv_icache_smp_smoke.rs"
+
+[[bin]]
+name = "private_file_page_cache_smoke"
+path = "src/bin/smoke_archive/private_file_page_cache_smoke.rs"
+
+[[bin]]
+name = "private_file_madvise_dontneed_smoke"
+path = "src/bin/smoke_archive/private_file_madvise_dontneed_smoke.rs"
+
+[[bin]]
+name = "shared_file_alias_smoke"
+path = "src/bin/smoke_archive/shared_file_alias_smoke.rs"
 
 [[bin]]
 name = "vfs_pathwalk_smoke"
