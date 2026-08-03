@@ -41,6 +41,22 @@ name = "shared_file_alias_smoke"
 path = "src/bin/smoke_archive/shared_file_alias_smoke.rs"
 
 [[bin]]
+name = "shared_file_cross_mm_smoke"
+path = "src/bin/smoke_archive/shared_file_cross_mm_smoke.rs"
+
+[[bin]]
+name = "shared_file_truncate_cache_smoke"
+path = "src/bin/smoke_archive/shared_file_truncate_cache_smoke.rs"
+
+[[bin]]
+name = "shared_file_kernel_write_smoke"
+path = "src/bin/smoke_archive/shared_file_kernel_write_smoke.rs"
+
+[[bin]]
+name = "file_mmap_lazy_fault_smoke"
+path = "src/bin/smoke_archive/file_mmap_lazy_fault_smoke.rs"
+
+[[bin]]
 name = "vfs_pathwalk_smoke"
 path = "src/bin/smoke_archive/vfs_pathwalk_smoke.rs"
 
@@ -55,3 +71,27 @@ path = "src/bin/smoke_archive/vfs_exit_fs_smoke.rs"
 [[bin]]
 name = "unix_vfs_path_smoke"
 path = "src/bin/smoke_archive/unix_vfs_path_smoke.rs"
+
+[[bin]]
+name = "wait_wakeup_race_smoke"
+path = "src/bin/smoke_archive/wait_wakeup_race_smoke.rs"
+
+[[bin]]
+name = "open_unlink_lifetime_smoke"
+path = "src/bin/smoke_archive/open_unlink_lifetime_smoke.rs"
+
+[[bin]]
+name = "poll_wakeup_race_smoke"
+path = "src/bin/smoke_archive/poll_wakeup_race_smoke.rs"
+
+[[bin]]
+name = "eventfd_epoll_smoke"
+path = "src/bin/smoke_archive/eventfd_epoll_smoke.rs"
+
+[[bin]]
+name = "epoll_ctl_wakeup_smoke"
+path = "src/bin/smoke_archive/epoll_ctl_wakeup_smoke.rs"
+
+[[bin]]
+name = "timerfd_epoll_smoke"
+path = "src/bin/smoke_archive/timerfd_epoll_smoke.rs"
