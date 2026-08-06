@@ -1,5 +1,73 @@
 # 7-31 多核内存与调度优化
 
+## 问题概述
+
+并行编译和频繁 `fork()/exit()` 会同时放大三个全局路径：内核堆只有一把锁，物理页
+引用计数存放在全局 `BTreeMap`，新任务又倾向留在创建它的处理器核心。除此之外，
+写时复制（Copy-on-Write，COW）页表被一个核心替换后，其他核心可能继续使用转换检测
+缓冲区（Translation Lookaside Buffer，TLB）中的旧映射。
+
+## 如何发现
+
+本批主要依据源码锁域审查，而不是完整 BuildStorm 性能采样。原记录只保存了主机测试
+和静态构建结果，没有保存可用于计算加速比的运行日志。可用下列命令复核实现差异：
+
+```sh
+git -C os show --stat 43a786f
+git -C os show 43a786f -- \
+  src/mm/heap_allocator.rs src/mm/frame_allocator.rs \
+  src/mm/memory_set/fault.rs src/task/manager/run_queue.rs src/sbi/mod.rs
+TMPDIR=$PWD/.tmp ARCH=riscv64 cargo check --manifest-path os/Cargo.toml \
+  --target riscv64gc-unknown-none-elf
+```
+
+旧代码中所有内核对象分配进入一个 `LockedHeap`；每次 `FrameTracker::clone/drop` 都
+修改全局树；公平任务初始放置主要选择当前核心；写时复制只更新页表，缺少针对正在
+运行同一地址空间的远端核心的页粒度失效。这些都是从代码直接确认的共享状态，不需要
+用单个测试卡顿反推。
+
+## 怎么解决
+
+内核堆按 `MAX_HARTS` 划分成地址互不重叠的 arena：分配优先锁当前核心对应的 arena，
+空间不足时再尝试其他 arena；释放根据指针地址回到原 arena，避免任务迁移后放错。
+物理页所有权则从手工树计数改为：
+
+```rust
+struct FrameTracker {
+    owner: Arc<FrameOwner>,
+}
+
+impl Drop for FrameOwner {
+    fn drop(&mut self) {
+        frame_dealloc(self.ppn);
+    }
+}
+```
+
+因此克隆只增加 `Arc` 强引用，最后一个 owner 才归还物理页。任务初始放置把 ready
+queue 和当前运行任务都计入负载，同时继续检查处理器亲和性。RISC-V 写时复制提交后，
+只向实际使用该地址空间的在线核心发送页粒度 `remote_sfence_vma()`。
+
+Linux 的每处理器页缓存、伙伴分配器、`struct page` 引用计数、调度域和
+`mm_cpumask()` 比本项目完整得多。本批只实现能由当前数据结构支持的最小对应：分散
+锁竞争、用对象所有权代替全局树、改进初始放置、按活动地址空间集合发送失效。固定
+arena 仍可能产生分片，后续必须用真实空闲分布和性能数据决定是否改成共享大块来源。
+
+## 对应提交
+
+- 内核实现：`43a786f perf(mm): improve multicore allocation and scheduling`。
+- 顶层内核指针更新：`f02e26f1`。
+- 文档提交：`38e32c422eafa4e92c4252832dfce9a500532be3`。
+
+## 对比提升
+
+VFS 主机测试 14/14、RISC-V 静态构建和差异格式检查通过。该批没有保留同环境运行
+前后计时，因此不能填写加速百分比；主要可验证提升是消除全局页引用树，并补齐多核
+写时复制的远端地址转换缓存一致性。后续运行若出现回退，应分别验证固定堆分片、任务
+放置和远端失效，不能把三项合并成一个不可解释的数字。
+
+---
+
 本批次针对并行编译、频繁 `fork/exit` 和多线程内存分配路径，减少全局锁竞争，
 改善任务在多个 hart 之间的分布，并补齐 COW 页在多核并发下的 TLB 一致性。
 对应内核提交为：

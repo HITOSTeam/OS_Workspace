@@ -1,5 +1,96 @@
 # 8-1 Linux 并发优化筛选与主线集成
 
+## 问题概述
+
+候选工作树同时修改了页分配、写时复制（Copy-on-Write，COW）缺页、文件描述符关闭、
+任务调度、内核堆和终端输出。问题不是“改动越多越快”，而是其中有些修复缩短了全局
+锁临界区，有些实验却造成停顿或明显退化。后续 8 核 CAgent 和混合文件输入输出测试
+仍会非确定性停顿，最终又定位出内存空间锁序、只读文件关闭争抢 inode 写锁、分配器
+中断重入和终端写入交错四个独立问题。
+
+## 如何发现
+
+候选筛选使用 hackbench 四种进程/线程通信组合和 lmbench `lat_proc fork`，由
+`tools/analyze_concurrency_focus.py` 计算五次中位数；任一单项退化超过 5% 就拒绝。
+运行态复核使用：
+
+```sh
+ARCH=riscv64 SMP=8 MEM=8G IMAGE_MODE=snapshot \
+  BOOT_TIMEOUT=900 TEST_TIMEOUT=600 LOG=error ./run.sh cagent
+IOZONE_RUNS=3 IOZONE_WORKLOAD=mixed \
+  bash tools/run_iozone_focus.sh \
+  /home/shiyicong/temp/CongCore \
+  .tmp/iozone/iozone-root.img .tmp/iozone/linux-mm-fput-tty-final.log
+```
+
+关键日志为：
+
+```text
+.tmp/concurrency-runs/core-final-regression-retry.log
+.tmp/final-runs/20260801-195749-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-202517-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-201818-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-200911-riscv64-cagent/serial.log
+.tmp/final-runs/20260801-223907-riscv64-cagent/
+.tmp/iozone/linux-mm-fput-tty-final.log
+```
+
+QEMU 监视器读取所有虚拟处理器现场后，7 个核心都在等待同一个 inode 写信号量；该
+inode 通过 `debugfs ncheck` 对应只读 `libc.so.6`。读侧文件缺页正在等待块输入输出，
+退出清理中的 `OSInode::drop()` 却无条件排队写锁。另一路径中，进程控制块锁与内存
+空间锁存在相反取得顺序；`/proc/meminfo` 的 `Committed_AS` 又扫描所有进程和虚拟
+内存区域，放大了该锁边。串口还显示 10 个测试都完成，但多进程输出按字节交错，使
+judge 只能识别 5 个完整结果行。
+
+## 怎么解决
+
+保留的第一阶段修改采用“准备、锁外工作、重新验证并提交”：
+
+```text
+内存空间锁内：快照 VMA、PTE、旧 frame，并固定旧对象
+锁外：分配、清零、复制或读取文件
+重新加锁：确认 VMA/PTE/来源页未变化，再安装；否则丢弃并重试
+```
+
+其中 VMA 是虚拟内存区域（Virtual Memory Area），PTE 是页表项（Page Table
+Entry）。物理页分配器只在锁内从 free-list 取页号，4 KiB 清零和 `Arc<FrameOwner>`
+构造在锁外；RISC-V 只向确实运行该地址空间的远端核心发送页粒度地址转换缓存失效。
+
+文件描述符表引入 `DetachedFd` 和 `RejectedFd`：表锁内只摘除或拒绝安装，通知、
+mount 引用释放和最后一个 `Arc<File>` 析构在锁外完成。后续最终修复又包括：
+
+- frame free-list 和 heap shard 的元数据锁保存并关闭本地中断，防止同一核心中断重入；
+- `MmRef` 改用可睡眠 `KernelMutex`，进程控制块锁只用于固定 `MmRef`；
+- 在虚拟内存区域变化时维护 O(1) 的全局 `Committed_AS`，读取 procfs 时不扫描进程；
+- 只有最后一个可写打开描述在 close 语义阶段刷新缓冲，只读 `OSInode::drop()` 不取
+  inode 写锁；
+- 在翻译用户页以前取得可睡眠 console 写互斥锁，一次用户 `write()` 完整串行；
+  非阻塞竞争返回 `EAGAIN`。
+
+Linux 对照包括 `do_cow_fault()/finish_fault()`、`file_close_fd_locked()/filp_close()`、
+`get_task_mm()`、`__fput()`、ext4 release 和 `tty_write_lock()`。CongCore 没有 Linux
+完整 task-work、每处理器计数器、可并发读的 `mmap_lock` 或终端行规程，因此只实现
+相同的锁边界和对象生命周期。调度原子快照、heap magazine 和早期终端自旋锁方案经
+停顿或性能门槛否决后均未保留。
+
+## 对应提交
+
+- 第一阶段：`72ee89b`（内存管理）、`9b8059d`（文件描述符生命周期）。
+- 最终锁序修复：`ac12c47`（分配器）、`c58f935`（内存空间与 procfs）、
+  `f169acc`（ext4 文件释放）、`d21154e86fb50798f8413b4abd37e2835d2168b3`
+  （终端写入）。
+- 顶层集成：`73b3d980`；最终专题文档提交：
+  `b766dae83e2a96af6b15cca10409d25948d95818`。
+
+## 对比提升
+
+最终 CAgent 在 RISC-V 8 核、8 GiB、快照模式下 10/10 完成，单项 1566--3715 ms；
+混合 IOZone 三轮中位数为 66.86 s。相对 7 月 31 日同工作负载的 76.23 s 集成基线
+缩短 12.29%，但该数字跨越多批修复，只能作为累计状态，不能归因给某一个提交。
+被拒绝的 heap magazine 把 64.17 s 中位数退化到 75.60 s（+17.81%），因此回滚。
+
+---
+
 > 更新说明：第 1--9 节保留截至内核 `eb4b543` 的初始候选筛选和失败现场。
 > 后续继续追踪了其中记录的 8-hart 卡顿，并在 `ac12c47`--`d21154e` 完成修复。
 > 第 10 节是最终结论；它取代第 1、5、7.4、7.5 节中“TTY 暂不合入”和
@@ -478,7 +569,7 @@ write/read，再执行 random read/write：
 ```sh
 IOZONE_RUNS=3 IOZONE_WORKLOAD=mixed \
   bash tools/run_iozone_focus.sh \
-  /Users/bytedance/projects/OS_Workspace \
+  /home/shiyicong/temp/CongCore \
   .tmp/iozone/iozone-root.img \
   .tmp/iozone/linux-mm-fput-tty-final.log
 ```

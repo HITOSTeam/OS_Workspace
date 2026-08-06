@@ -1,5 +1,80 @@
 # 8-3 Linux 式文件页缓存与 MAP_PRIVATE COW 修复
 
+## 问题概述
+
+普通文件私有映射没有复用 inode 文件页缓存。每个 rustc 进程都会为同一约 271 MiB
+动态共享对象（Dynamic Shared Object，DSO）`librustc_driver.so` 分配私有物理页并
+重新从 ext4 读取。12 路 rustc 相互驱逐块缓存，导致读取量远大于真正需要的数据量。
+
+## 如何发现
+
+基线日志和命令：
+
+```text
+testsuits-final/.tmp/final-runs/20260802-234242-loongarch64-shell/serial.log
+```
+
+```sh
+cd /work/tgoskits
+export RUSTUP_TOOLCHAIN=nightly-2026-05-28 CARGO_NET_OFFLINE=true
+timeout 600 cargo build -p tg-xtask
+```
+
+构建前 `/proc/perf` 的 `block_read_bytes` 为 6,176,768；约 180 秒后为
+3,311,640,576，新增 3,305,463,808 B。进程列表同时显示 12 个 rustc 编译不同 crate，
+但都加载相同工具链 DSO。源码检索：
+
+```sh
+rg -n 'MAP_PRIVATE|FilePageCache|mmap.*populate|commit_cow_fault' \
+  os/src/mm os/src/syscall/memory
+```
+
+显示共享文件映射使用缓存，而私有映射在 `mmap()` 内建立 Framed area 并急切读取全部
+映射；这解释了日志中的重复块读取，而不是仅凭串口无输出猜测死锁。
+
+## 怎么解决
+
+`backing.rs` 为每个 `(device_id, inode_num, file_page)` 建立：
+
+```rust
+enum FilePageCacheSlot {
+    Loading { frame: FrameTracker, state: Arc<LoadState> },
+    Ready(FrameTracker),
+}
+```
+
+第一个缺页者在缓存锁内发布 `Loading`，释放缓存锁和内存空间锁后执行整页
+`pread_at()`，再以 release 顺序发布 `Ready` 并唤醒等待者。其他缺页者等待同一状态，
+不会重复输入输出。
+
+私有映射把干净 cache frame 安装为只读且带写时复制标记的页表项（Page Table Entry，
+PTE）。第一次写 fault 在内存空间锁内快照映射和旧页，锁外分配复制，再加锁验证并替换
+为匿名页。`mmap()` 和 `mremap()` 只建立 lazy 区域，不读取未访问页。文件描述符写入
+更新 cache frame；已经写时复制的匿名私有页不再被旧虚拟地址镜像路径覆盖。truncate
+清零文件结尾页尾、移除越界页，并把并发 Loading 标为失效后唤醒等待者。
+
+Linux 的 `filemap_fault()`、locked folio、`do_read_fault()`、`do_cow_fault()` 和
+address-space truncate 具有相同语义。CongCore 用 `Loading/Ready + WaitQueue` 代替
+Linux folio/XArray；当前回收只删除没有页表或 MapArea 外部引用的干净 Ready 页，尚未
+实现完整冷热列表与后台写回。
+
+## 对应提交
+
+- 内核：`54d0a199878bd81e32a9aa5bb4382ce888b2a1cd`
+  `mm: share clean private file pages`。
+- 回归：`283321a1b200a705837f8ab529bc2fb1c681f147`。
+- 顶层内核指针：`c545b885632622f1e455025f6ee46fa4be2d5cd7`。
+- 文档提交：`7f391ea16e4a4bdd9aab39485328535014053ada`。
+
+## 对比提升
+
+旧 180 秒窗口新增约 3.305 GiB 块读取；新 600 秒诊断窗口新增 69,685,248 B，约为旧
+增量的 2.1%，但两个窗口编译进度不同，所以只作为读取放大消失的证据，不包装成严格
+加速比。三个私有/共享映射专项测试全部通过；`tg-xtask` 仍以 timeout 124 结束，完整
+BuildStorm 未运行。
+
+---
+
 ## 1. 结论
 
 本批次针对 LoongArch BuildStorm 的 `tg-xtask` 聚焦构建极慢问题，确认主要放大器
@@ -231,7 +306,7 @@ Invalidated。fault 随后重建 VMA/EOF 快照，而不是把过期页重新发
 make -C os run_final \
   ARCH=loongarch64 SUBMIT=0 BASH_SHELL=1 LOG=warn \
   SMP=12 MEM=8G EXT4_REBUILD=0 USER_EXT4_SIZE=256M \
-  FINAL_IMG=/Users/bytedance/projects/OS_Workspace/testsuits-final/sdcard-la-pub.img \
+  FINAL_IMG=/home/shiyicong/temp/CongCore/testsuits-final/sdcard-la-pub.img \
   QEMU_TIMEOUT=0 QEMU_EXTRA_ARGS=-snapshot
 ```
 

@@ -1,5 +1,77 @@
 # 8-4 BuildStorm PreparedWait 退出与性能实验复核
 
+## 问题概述
+
+`PreparedWait` 已经封闭普通事件在“最后检查”和“真正睡眠”之间的丢唤醒窗口，但它
+绕过了旧调度入口中对致命信号和 `execve()` 同线程组清理请求的检查。阻塞在
+`epoll_wait()` 的线程被 `exit_group()` 或另一个线程的 `execve()` 唤醒后，可能把这次
+退出请求当成普通事件，重新注册并再次睡眠，使进程退出或 exec 的 de-thread 阶段永久
+等待。
+
+## 如何发现
+
+前一轮 `tg-xtask` 超时后观察到编译子进程已经成为 zombie，而多线程父进程仍未完成
+等待；结合 `PreparedWait::sleep()` 与旧 `block_current_and_run_next_impl(true)` 的
+源码差异，确认新协议漏掉了 fatal teardown 检查。复核命令和最终日志：
+
+```sh
+rg -n 'PreparedWait|block_current_and_run_next_impl|exec.*exit|fatal' os/src/task
+ARCH=riscv64 SMP=8 MEM=8G ./run.sh shell
+/user/exec_epoll_thread_smoke.bin; echo PREPARED_WAIT_RC=$?
+```
+
+```text
+.tmp/final-runs/20260803-162551-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-013432-riscv64-shell/serial.log
+.tmp/iozone/8-4-heap-sharded-3run.log
+.tmp/iozone/8-4-heap-hybrid-3run.log
+```
+
+第一份日志是前序长构建现场；第二份是修复后的双场景退出回归；最后两份用于否决同时
+试验的小对象缓存方案，避免把无关性能实验混入退出修复。
+
+## 怎么解决
+
+`PreparedWait` 新增 `exit_for_fatal_teardown_if_requested()`，在三个边界调用：
+
+```text
+已经观察到 wakeup_pending，恢复 Running 之后
+尚未收到 wake，提交 scheduler block 之前
+远端唤醒并重新获得处理器，sleep() 返回之后
+```
+
+函数先检查 `TaskUserRes` 是否已被取走；若是，说明当前栈正在执行一次性退出清理，
+不能递归退出。否则先处理 task-local exec exit token，再处理默认动作会终止进程的
+pending signal。前者进入 `exit_current_and_run_next(0)`，后者记录原因并进入
+`exit_group_and_run_next()`。普通输入输出唤醒仍返回调用者重查条件。
+
+Linux 的 `prepare_to_wait_event()` 会在等待队列锁内根据
+`signal_pending_state()` 拒绝可中断或可杀死的睡眠；`do_group_exit()` 和
+`de_thread()` 分别发布进程组退出与 exec peer 清理。CongCore 用 task-local exec
+token 避免把退出请求反向广播给 exec owner，因此必须在 prepared-sleep 边界显式
+检查，不能只依赖普通信号扫描。
+
+本批同时试验了 64 桶 futex 等待队列和“分片伙伴分配器加每核心小对象缓存”。前者
+没有证明 BuildStorm 进度收益，后者缺少 Linux slab/page 分层、批量补充/排空和水位
+控制，并在 IOZone 中退化，均完整回滚。
+
+## 对应提交
+
+- 内核：`e625f82f3da80b315baf6cbe8627245e83bb218d`
+  `sched: honor fatal teardown in prepared waits`。
+- 回归：`190573fd5c08405fffad55288c11ad3e1eb3c38d`。
+- 顶层集成：`927328f62ecfb753c9c4cb0bd825088be304f48e`。
+- 文档提交：`1427fea2a8082558acb85777c70d5ec409c82b3f`。
+
+## 对比提升
+
+修复后测试输出 `EXIT_GROUP_PREPARED_WAIT_PASS`、exec 后新映像输出 `PASS`，返回码 0；
+它证明两种退出路径从“可能永久等待”变为可完成，但不是性能百分比。被否决的小对象
+缓存把 IOZone 三轮中位数 `19.15 s -> 19.90 s`（慢 3.9%），initial write 和 rewrite
+分别下降 8.1% 和 13.4%，所以没有进入提交。完整 BuildStorm 未运行。
+
+---
+
 ## 1. 结论
 
 本批次没有运行完整 BuildStorm。工作集中在前一轮 `tg-xtask` 卡顿现场暴露出的
@@ -140,7 +212,7 @@ PREPARED_WAIT_RC=0
 ```sh
 IOZONE_RUNS=3 IOZONE_WORKLOAD=sequential \
   bash tools/run_iozone_focus.sh \
-  /Users/bytedance/projects/OS_Workspace \
+  /home/shiyicong/temp/CongCore \
   .tmp/iozone/iozone-root.img \
   <log>
 ```

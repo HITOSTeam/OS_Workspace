@@ -1,5 +1,70 @@
 # 8-4 BuildStorm 多线程 fork 快路径
 
+## 问题概述
+
+多线程进程调用 `fork()` 时，旧实现先在进程控制块锁内克隆整个任务列表，再逐个取得
+任务控制块锁统计存活线程，并为正常的多线程 fork 打印警告。Cargo 主进程有 15 个
+线程，因此每次创建编译子进程都会产生与线程数成正比的锁、引用计数和串口输出成本。
+
+## 如何发现
+
+900 秒 `tg-xtask` 基线日志中有 239 条多线程 fork warning。源码审查命中
+`ProcessControlBlock::fork_with_task()` 对 `parent.tasks` 的复制和逐任务
+`TaskUserRes::is_some()` 检查。命令与日志：
+
+```sh
+rg -n 'fork_with_task|live_threads|TaskUserRes|multithread.*fork' os/src/task
+cd /work/tgoskits
+timeout 900 cargo build -p tg-xtask
+```
+
+```text
+.tmp/final-runs/20260804-014659-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-020444-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-022801-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-022549-loongarch64-shell/serial.log
+```
+
+前两份是固定窗口构建对照，后两份是 16 线程进程执行 128 次 fork/wait 的五轮微基准。
+微基准直接覆盖热点，避免仅凭 Cargo crate 顺序波动下结论。
+
+## 怎么解决
+
+项目已有 `live_threads: AtomicUsize`，并在 `TaskUserRes` 注册成功和
+`LiveThreadRetirement::retire()` 时精确增减。fork 快路径直接读取
+`live_thread_count()`：
+
+```text
+旧：PCB lock -> clone all TCB Arc -> unlock -> lock every TCB -> count
+新：live_threads.load(Acquire)
+```
+
+该计数仍决定多线程非 `CLONE_VM` fork 后是否只保留子进程主 trap context；文件表、
+信号、写时复制地址空间和进程标识符生命周期没有改变。正常 Linux 多线程 fork 是合法
+行为，因此删除无条件 warning，而不是限频隐藏。
+
+Linux `signal_struct::nr_threads` 在 `copy_process()` 和 `__exit_signal()` 生命周期
+边界维护，`get_nr_threads()` 只做 O(1) 读取。CongCore 没有 Linux 的 tasklist
+读-复制-更新机制和完整 signal lock，但已有原子计数与统一退休票据，直接复用比另建
+扫描快路径更可靠。
+
+## 对应提交
+
+- 内核：`d0679eb386789824b66f8bc7988e8699f85e9f9c`
+  `fork: use maintained live-thread count`。
+- 回归：`a5c2bda1912352632f4ee0818b923726a546da65`。
+- 顶层集成：`c20643ef3e2e9a888d65d104d494b90d2cc285dd`。
+- 文档提交：`b411e17941e0c183c95701c4ecf9469a568e7119`。
+
+## 对比提升
+
+128 次 fork/wait 的五轮中位数 `159927 us -> 139321 us`（-12.9%）。相同 900 秒
+构建窗口内，Cargo 行 `119 -> 130`（+9.2%），deps 文件 `334 -> 371`（+11.1%），
+warning `239 -> 0`。两次构建都以 timeout 124 结束，所以只证明热点减少，不代表
+`tg-xtask` 或 BuildStorm 完成。
+
+---
+
 ## 1. 结论
 
 本批次修复了 `tg-xtask` 编译现场中一个已量化的多线程 `fork()` 热路径：旧实现

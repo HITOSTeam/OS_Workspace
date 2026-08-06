@@ -1,5 +1,86 @@
 # 8-3 BuildStorm wait、inode 生命周期与文件缓存并发修复
 
+## 问题概述
+
+`tg-xtask` 前置构建依次暴露三个可复现问题：Cargo 使用进程文件描述符（pidfd）等待
+子进程时可能错过退出唤醒；每次 unlink 都扫描所有进程和文件描述符判断 inode 是否
+仍被打开；普通文件页和映射反向索引又由全局树及全进程扫描维护。前者会永久睡眠，
+后两者会随进程数、文件描述符数和映射数增长而放大全局锁竞争。
+
+## 如何发现
+
+单任务复现命令：
+
+```sh
+cd /work/tgoskits
+timeout 300 cargo build -p tg-xtask -j1
+```
+
+Cargo 的 rustc child 已成为 zombie，但 Cargo 没有 reap；手工发送 `SIGCHLD` 后立即
+继续，证明条件已成立但唤醒丢失。随后 QEMU 处理器现场解析到
+`defer_unlink_open_file()` 和 `has_open_inode_view()`。关键日志：
+
+```text
+.tmp/final-runs/20260803-current-tg-xtask-focus/metadata.md
+.tmp/final-runs/20260803-current-tg-xtask-focus/serial-j1.log
+.tmp/final-runs/20260803-152507-loongarch64-shell/serial.log
+.tmp/final-runs/20260803-162551-loongarch64-shell/serial.log
+```
+
+旧 unlink 路径是 `PID2PCB -> files_struct -> every fd`，复杂度为进程数乘每进程文件
+描述符数。源码继续显示普通文件 write/resize 会遍历全部进程的 `mm`，即使它们从未
+映射该 inode。复核命令可使用：
+
+```sh
+rg -n 'defer_unlink_open_file|has_open_inode_view|PID2PCB' os/src
+rg -n 'FILE_PAGE_MAPPINGS|FilePageCacheMapping|WeakMmRef' os/src/mm
+```
+
+## 怎么解决
+
+`PreparedWait` 把条件锁、任务状态和调度提交组成一次性协议：
+
+```text
+条件锁内注册 waiter
+  -> 关闭本地中断
+  -> transition lock 下 Running -> Blocked
+  -> 完成最后一次条件检查
+  -> 有 wakeup_pending 则恢复 Running，否则提交切换
+```
+
+因此唤醒者一定看到 wait entry 或 waiter 的最后检查，不再存在 check-to-sleep 缝隙。
+`wait4()/waitid()`、vfork、内核等待队列、`ppoll()`、`epoll_wait()` 和无文件描述符的
+无限 `pselect()` 都迁移到同一协议。
+
+inode 生命周期表以 `(device_id, inode_num)` 为键，记录打开描述数、unlink reservation
+和延迟 cleanup。计数对象是 `OSInode`（打开文件描述），不是 fd 槽：dup、fork、
+SCM_RIGHTS 和 epoll 引用都自然共享同一个 `Arc<File>`。unlink 先取得 reservation，
+锁外执行 ext4 rename，再提交 cleanup；最后 close 不会落在“决定延迟但尚未登记”的
+窗口。
+
+文件页缓存改成每 inode 一个 `FilePageCacheMapping`，mapping 内保存页树和
+`Vec<WeakMmRef>`。write/truncate 只遍历实际映射该 inode 的内存空间，并在升级弱引用
+后过滤对应虚拟内存区域。Linux 的 `prepare_to_wait()`、`struct file/__fput()` 和
+`address_space::{i_pages,i_mmap}` 提供相同边界。本项目没有 Linux 的 XArray、虚拟
+内存区域区间树或读-复制-更新无锁遍历，因此使用短锁和弱引用实现最小可验证版本。
+
+## 对应提交
+
+- `491ed4c sched: make condition waits wakeup-atomic`。
+- `1d3b44b mm: shard file mappings by inode`。
+- `04bf218 fs: track open inode lifetimes locally`。
+- 顶层回归与集成：`b3b4cce3`、`083fa837`。
+- 文档提交：`1c8f6670bf6767750bd893772f6c0eacc1a1e56a`。
+
+## 对比提升
+
+wait/pidfd 256 次、poll/epoll 128 次、open-unlinked 6×32 次及文件映射回归全部通过。
+旧并行构建约 11 个 crate 后停住；修复后的 1800 秒有限窗口记录 96 个不同
+`Compiling` 阶段并越过旧停点，但命令仍未返回，不能换算成端到端加速，也不能标记
+`tg-xtask` 或完整 BuildStorm 通过。
+
+---
+
 ## 1. 结论
 
 本批次没有运行完整 BuildStorm，只围绕其前置工具 `tg-xtask` 的真实停顿继续定位，

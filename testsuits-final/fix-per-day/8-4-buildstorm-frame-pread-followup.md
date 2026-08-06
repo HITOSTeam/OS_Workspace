@@ -1,5 +1,83 @@
 # 8-4 BuildStorm frame recycle 与 positional-read 并发跟进
 
+## 问题概述
+
+本批包含两个独立瓶颈。物理页分配器在全局、保存中断状态的自旋锁内维护
+`BTreeSet` 来检查重复释放；每次页回收都可能为树节点再次进入内核堆。另一方面，
+`pread64()` 虽然使用调用者提供的 offset，不需要共享文件位置，却仍取得
+`OSInodeInner` 自旋锁并在锁内等待 ext4/块输入输出；其他核心会围绕一个已经让出
+处理器的 owner 持续自旋。
+
+## 如何发现
+
+frame 路径由 fork 微基准与源码审查定位：最后一个 `FrameOwner`、写时复制、进程退出
+和 page-cache 回收都会在 allocator 锁内修改 `BTreeSet`。positional read 则由冷
+`rustc -vV` 和 `tg-xtask` 现场定位；旧日志 180 秒仍为 0 行/0 deps，调用链停在共享
+read buffer owner。命令和证据：
+
+```sh
+rg -n 'BTreeSet|StackFrameAllocator|recycle' os/src/mm/frame_allocator.rs
+rg -n 'pread_at|read_buf|OSInodeInner|try_lock' os/src/fs/inode.rs
+ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot ./run.sh shell
+ARCH=riscv64 SMP=8 MEM=8G IMAGE_MODE=snapshot ./run.sh shell
+```
+
+```text
+.tmp/final-runs/20260804-022549-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-024729-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-024923-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-040625-loongarch64-shell/serial.log
+.tmp/final-runs/20260804-043028-riscv64-shell/serial.log
+.tmp/iozone/8-4-heap-sharded-3run.log
+.tmp/iozone/8-4-frame-bitmap-only-3run.log
+```
+
+## 怎么解决
+
+frame allocator 保留后进先出 free stack，但把重复释放检查改为启动期预分配的一位/
+物理页号 bitmap：push 前检查并设置 bit，pop 时检查并清除 bit，不一致仍 panic。
+bitmap 只在 `init/add_range` 扩容，运行期 recycle 不分配堆内存。8 GiB guest 的绝对
+页号 bitmap 约 320 KiB。
+
+只读 positional read 的边界改为：
+
+```rust
+let _inode_read = inode.read_semaphore();
+if let Some(mut inner) = self.inner.try_lock() {
+    // 无竞争：继续使用已有 128 KiB 有界预读缓存
+    inner.pread_cached(offset, buf)
+} else {
+    // 缓存 owner 正在等待输入输出：从稳定 Arc<Inode> 直接读
+    self.inode.read_at(offset, buf)
+}
+```
+
+可写描述仍取得 inode 写信号量、刷新写缓冲并串行化，保持读写一致性。Linux
+`ksys_read()` 通过 `fdget_pos()` 串行化 `file->f_pos`，`ksys_pread64()` 则把私有
+offset 直接传入 `vfs_read()`；文件页协调在 address-space/page-cache 层完成，不用
+文件位置锁覆盖块输入输出。CongCore 尚未完全统一 inode page cache，因此保留原缓存
+作为无竞争快路，竞争时直读是最小正确过渡。
+
+整把 `OSInodeInner` 改可睡眠锁、所有 pread 永远直读、额外第二个 PreadCache 都经
+IOZone 或运行现场证明退化后回滚，没有进入提交。
+
+## 对应提交
+
+- `6641e0a mm: avoid heap allocation while recycling frames`。
+- `b0185b3 fs: avoid spinning on contended positional reads`。
+- 用户回归：`a2a4d1c7 test: cover concurrent positional reads`。
+- 顶层集成：`13140f63 kernel: integrate frame and positional-read fixes`。
+- 文档提交：`634f4546b44a25824f0b18c887d13938f33d1e63`。
+
+## 对比提升
+
+frame bitmap 使 fork 微基准中位数 `139321 -> 131397 us`（-5.7%）；RISC-V
+IOZone 中位总耗时 `19.15 -> 18.79 s`。最终冷 `rustc -vV` 为 1.09 s、rc=0；
+`tg-xtask` 在 803 秒达到 154 行/419 deps，超过旧 900 秒窗口后的 130/371，但仍超时。
+8 线程共享文件描述符的 `pread64` 回归校验 4 MiB，返回 0。完整 BuildStorm 未运行。
+
+---
+
 ## 1. 结论
 
 本批次没有运行完整 BuildStorm，也没有把超时的 `tg-xtask` 写成通过。最终保留两项

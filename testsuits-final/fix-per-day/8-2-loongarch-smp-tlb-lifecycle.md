@@ -1,5 +1,90 @@
 # 8-2 LoongArch SMP、TLB 与进程生命周期修复
 
+## 问题概述
+
+LoongArch 12 个处理器核心上线后，用户程序仍会遇到地址转换异常、重复回收进程、网络
+命名空间过早清理和 Rust 辅助线程创建失败。它们不是同一处错误：页表更新需要跨核心
+失效转换检测缓冲区（Translation Lookaside Buffer，TLB）；进程退出需要把重资源
+清理、僵尸状态发布和唯一回收者分开；网络命名空间需要由 socket、命名空间文件和
+进程统一持有引用；默认内存过量承诺策略又错误地把累计虚拟承诺当成严格硬上限。
+
+## 如何发现
+
+关键失败日志和命令如下：
+
+```text
+.tmp/final-runs/20260802-113053-loongarch64-shell/serial.log
+.tmp/final-runs/20260802-162552-loongarch64-cagent/serial.log
+.tmp/final-runs/20260802-203851-loongarch64-shell/serial.log
+.tmp/final-runs/20260802-174331-loongarch64-cagent/serial.log
+.tmp/final-runs/20260802-174331-loongarch64-cagent/score.json
+.tmp/final-runs/20260802-223007-loongarch64-shell/serial.log
+```
+
+```sh
+ARCH=loongarch64 MEM=8G SMP=12 IMAGE_MODE=snapshot ./run.sh cagent
+cd /work/tgoskits
+export RUSTUP_TOOLCHAIN=nightly-2026-05-28 CARGO_NET_OFFLINE=true
+cargo build -p tg-xtask
+```
+
+第一份日志包含用户地址异常，坏地址和 `TLBEHI` 落在同一个 8 KiB 成对 TLB 项；早期
+CAgent 日志出现重复 reap 警告；Rust 日志在 `futures-core` 阶段报告
+`pthread_create(EAGAIN)`。PID 只增长到约 50、没有物理页分配失败，而
+`Committed_AS` 已超过错误实现的 `1.5 * RAM` 门槛，说明用户态的 `EAGAIN` 实际由
+内核 `mmap()` 返回 `ENOMEM` 后经 glibc 转换而来。最终标准 CAgent 和评分 JSON 则
+用来确认修复没有只解决启动日志。
+
+## 怎么解决
+
+处理器启动从固件设备树读取 `/cpus`，次级核心完成独立栈、页表、异常、定时器和
+处理器间中断（Inter-Processor Interrupt，IPI）初始化后才发布 online bit。页表项
+写入后，地址空间对象按活动核心掩码发送失效请求；LoongArch 的 4 KiB 页按 8 KiB
+even/odd pair 对齐，接收核心执行指定地址空间标识符（Address Space Identifier，
+ASID）的 `invtlb`，回写完成序号；发送方观察全部确认后才释放旧物理页。
+
+进程生命周期改为：
+
+```text
+最后存活线程执行资源 teardown
+    -> 原子发布 waitable EXIT_ZOMBIE
+    -> waiter 以一次性 claim 做 EXIT_ZOMBIE -> EXIT_DEAD
+    -> 统计、PID 和 PCB 只释放一次
+```
+
+reparent、`CLONE_PARENT` 和失败回滚都沿用同一所有权票据。网络命名空间则使用统一
+lifetime 表：进程成员、socket 和 namespace fd 都增加同一个引用；最后一个引用只
+取得 teardown claim，先从可发现集合移除，再在可睡眠上下文清理协议状态。
+
+内存过量承诺按 Linux 三种模式区分：mode 0 只拒绝单次大于可管理内存加交换空间的
+申请；mode 1 总是允许；mode 2 才比较累计 `Committed_AS + additional` 与
+`CommitLimit`。本内核没有交换空间，因此 mode 0 用可管理物理内存作为单次申请上限。
+判定由 `mmap()` 和 `brk()` 共享，并只在真实拒绝时打印限频诊断。
+
+Linux 对照为 LoongArch `tlb.c/smp.c`、`kernel/exit.c`、`fs/nsfs.c`、
+`net/core/net_namespace.c` 和 `mm/util.c`。CongCore 使用固定 hart mask、mailbox 和
+锁保护表代替 Linux 通用跨处理器函数调用、工作队列及完整引用计数基础设施，但保持
+“先准备、一次提交、最后引用清理”和“失效确认后再复用页”的边界。
+
+## 对应提交
+
+- `os/`：`e699326f17e23e617a2eddbe5ed8103e572c4a3e`
+  `fix(loongarch): harden SMP execution and teardown`。
+- `os/`：`90625864bb7d6c9de62a9b96538bc0e84a3c078e`
+  `mm: fix default overcommit heuristic`。
+- 顶层构建/指针：`2ce9a824`、`afef9ef5`、`af86d2af`。
+- 报告提交：`5b9c454de00ec5f304dbc93f2b439f7153221192`，后续验证补充
+  `63352ce73ce7499b5747da4b7e592c47fb44814d`。
+
+## 对比提升
+
+12/12 核心上线，online mask 为 `0xfff`；工具链连续 12 轮完成，最小离线 Cargo
+工程约 1 分 33 秒编译并正确运行；kernel agent 20/20，通过标准 CAgent 10/10，权重
+199.10/200。`tg-xtask` 越过原 `futures-core` 的线程创建失败并继续到 PID 40，但
+60 分钟内仍未完成，所以本条证明阻塞错误消失，不提供完整 BuildStorm 加速比。
+
+---
+
 ## 1. 结论
 
 本批次在独立工作树 `loongarch-linux-fix` 中，以 Linux 的 LoongArch TLB 语义、

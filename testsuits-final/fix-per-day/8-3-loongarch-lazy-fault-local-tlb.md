@@ -1,5 +1,69 @@
 # 2026-08-03 LoongArch lazy fault 本地 TLB 发布修复
 
+## 问题概述
+
+文件映射改为按需缺页后，每个首次访问都要把无效页表项发布为有效页表项。旧 LoongArch
+实现把这种“原来没有有效映射”的变化也当成替换旧映射，对整个地址空间执行同步跨核
+转换检测缓冲区（Translation Lookaside Buffer，TLB）失效，产生大量处理器间中断
+（Inter-Processor Interrupt，IPI）和等待周期。
+
+## 如何发现
+
+前一批 120 秒 `tg-xtask` 诊断的 `/proc/perf` 记录约 313,135 个 page batch、5,047 个
+远端中断和 13,925,600 个失效等待周期。相关日志与本批复核日志：
+
+```text
+testsuits-final/.tmp/final-runs/20260803-lazy-local-tlb/serial.log
+testsuits-final/.tmp/final-runs/20260803-lazy-local-tlb-perf/serial.log
+```
+
+运行和检查命令：
+
+```sh
+ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot ./run.sh shell
+rg -n 'commit_lazy_fault|PageTableUpdateBatch|update_mmu_cache' \
+  os/src/mm os/src/arch/loongarch64
+```
+
+源码显示 `MemorySet::commit_lazy_fault()` 即使确认旧 PTE 无效，也进入地址空间
+invalidation sequence、扫描活动核心、发送 IPI 并等待确认。Linux `mm/memory.c` 的
+missing-PTE 路径则安装后调用本地 `update_mmu_cache_range()`，只有替换或降权旧映射
+才执行强制跨核 flush。
+
+## 怎么解决
+
+新增 `update_mmu_cache_for_new_pte()`：读取当前核心缓存的
+`(generation, address_space_identifier)`；如果存在有效上下文，先用 `dbar 0` 发布
+PTE store，再对 fault 地址所在的 8 KiB paired entry 执行当前核心、指定地址空间
+标识符（Address Space Identifier，ASID）的 `invtlb`，最后用屏障保证返回用户态前
+完成。该路径不进入地址空间失效序列、不扫描活动核心、不发送 IPI。
+
+另一个核心若缓存了同一 pair 的 invalid half，访问时会再次 fault；
+`prepare_lazy_fault()` 发现 PTE 已有效后返回 `Resolved`，并在该核心调用同一个本地
+更新函数后重试。以下路径仍保留同步跨核失效：写时复制替换物理页、`mprotect` 降权、
+`munmap`、旧页回收、内核 trap-context 页和共享内核页表更新。
+
+Linux LoongArch `__update_tlb()` 和 `local_flush_tlb_page()` 也是当前处理器局部操作，
+paired entry 按 `PAGE_SIZE << 1` 对齐。本项目没有硬件页表遍历器的所有 Linux 快路，
+所以没有把更新简化成空操作，而是保留本地 pair `invtlb` 以处理 QEMU 曾观察到的
+negative half。
+
+## 对应提交
+
+- 内核：`35bf4d34bd46ebde71ff8ddc4ae5358421db502b`。
+- 回归：`41e068a6ed32018180d7301a2b24240a988619cb`。
+- 顶层内核指针：`75e17fb4b67b5c22ace2dc57134a84eaa7b824c6`。
+- 文档提交：`6073c4b158807ebfa3ca2d6f5937dd827e55de3e`。
+
+## 对比提升
+
+专项测试包含 512 次首次文件 PTE 发布和 256 次跨核心 paired-invalid 恢复；修改后这些
+动作不再一页对应一个地址空间 page batch。测试与文件页缓存、强制跨核失效回归均
+通过。该批没有对旧内核运行相同专项测试做严格时间 A/B，也没有运行完整 BuildStorm，
+因此记录计数路径消除，不填写未经测量的耗时提升。
+
+---
+
 ## 1. 结论
 
 本批把 LoongArch lazy fault 的 `non-present -> present` PTE 发布从同步 mm 级
@@ -152,7 +216,7 @@ git -C os diff --check
 make -C os run_final \
   ARCH=loongarch64 SUBMIT=0 BASH_SHELL=1 LOG=warn \
   SMP=12 MEM=8G EXT4_REBUILD=0 USER_EXT4_SIZE=256M \
-  FINAL_IMG=/Users/bytedance/projects/OS_Workspace/testsuits-final/sdcard-la-pub.img \
+  FINAL_IMG=/home/shiyicong/temp/CongCore/testsuits-final/sdcard-la-pub.img \
   QEMU_TIMEOUT=0 QEMU_EXTRA_ARGS=-snapshot
 ```
 
