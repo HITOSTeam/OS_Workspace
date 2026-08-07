@@ -69,6 +69,10 @@ name = "vfs_pathwalk_smoke"
 path = "src/bin/smoke_archive/vfs_pathwalk_smoke.rs"
 
 [[bin]]
+name = "path_cache_invalidation_smoke"
+path = "src/bin/smoke_archive/path_cache_invalidation_smoke.rs"
+
+[[bin]]
 name = "cgroup_vfs_smoke"
 path = "src/bin/smoke_archive/cgroup_vfs_smoke.rs"
 
