@@ -198,6 +198,11 @@ fallback。原始串口日志：
 两个基线启动慢约 11%--13.5%。因此该候选没有进入本批；“Linux 方向合理”不能替代
 当前实现的稳定性和 workload A/B。
 
+后续工作已找到该初版停滞与当前 block completion hardirq 路径之间的边界：最终版本
+保留 PLIC 外部中断入口 guard，只删除 VirtIO 提交、poll 和驱动边界的切换，并重新
+完成 10/10 稳定性与独立 A/B 后作为单独批次合入。详见
+`8-8-linux-riscv-high-half-mmio.md`；这里保留的是当时拒绝初版的历史结论。
+
 ### 240 秒 RISC-V `tg-xtask` 风险闸门
 
 集成提交完成后，又从相同官方镜像分别创建全新 root/user qcow2 overlay，用精确最终
