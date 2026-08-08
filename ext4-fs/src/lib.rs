@@ -38,7 +38,9 @@ pub use error::{Ext4Error, Result};
 pub use ext4::{Ext4FileSystem, Ext4FileSystemHandle};
 pub use vfs::{FileSystemStatSnapshot, Inode, InodeStatSnapshot};
 
-pub use block_cache::{CacheDiagnostics, cache_diagnostics, cache_stats};
+pub use block_cache::{
+    CacheDiagnostics, cache_diagnostics, cache_stats, configure_block_cache_for_memory,
+};
 use block_cache::{block_cache_sync_all, get_block_cache};
 
 /// Flush all cached blocks to the underlying block device.
