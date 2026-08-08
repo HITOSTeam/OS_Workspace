@@ -173,7 +173,7 @@ fallback。原始串口日志：
 | 顶层分支 / 基线 | `dev_final` / `c948a92870b83a2df4fe483f6fc3f1cdea16e65c` |
 | `os/` 基线 | `a24b950e6013e6a3d6da26ddb72b676cccaf3052` |
 | `os/` 修复 | `da190f90640edc08de48f628da16f259fc5ca077`（`task: cache mapped kernel stacks`） |
-| 顶层集成 | 本报告所在提交（建议主题：`task: integrate mapped kernel stack cache`） |
+| 顶层集成 | `bbe72850a0194001142b5c0f6204cf712ff259c2`（`task: integrate mapped kernel stack cache`） |
 
 `os/` 修复只包含 `src/task/id.rs` 和 `src/perf.rs`。共享工作树中其他工作人员正在开发
 的 MMIO 高半区、ASID、slab、scheduler、file mmap 等改动均未加入该提交。
@@ -198,9 +198,50 @@ fallback。原始串口日志：
 两个基线启动慢约 11%--13.5%。因此该候选没有进入本批；“Linux 方向合理”不能替代
 当前实现的稳定性和 workload A/B。
 
-下一步仍应先用 240--360 秒 RISC-V `tg-xtask` gate 比较基线与当前提交，并同时观察
-guest 进度、host CPU/RSS/I/O 和探针延迟。只有短 gate 不回退才继续完整 BuildStorm；
-若进度明显落后或超过停滞上限，按约定及时停止并保留日志。
+### 240 秒 RISC-V `tg-xtask` 风险闸门
+
+集成提交完成后，又从相同官方镜像分别创建全新 root/user qcow2 overlay，用精确最终
+候选和 clean baseline 各跑一次 `timeout 240 cargo build -p tg-xtask`。候选先跑、
+基线后跑，因此 host page cache 若有跨轮影响，会偏向基线；两边都关闭 `DEBUG_PERF`
+和 QEMU `-perfmap`，并在 timeout 写出结果后的第一个探针主动结束 QEMU。
+
+原始日志：
+
+```text
+.tmp/ablate/20260808-kstack-tg-gate-candidate-2/probe-latency.csv
+.tmp/ablate/20260808-kstack-tg-gate-candidate-2/host-metrics.log
+.tmp/ablate/20260808-kstack-tg-gate-candidate-2/serial.log
+.tmp/ablate/20260808-kstack-tg-gate-baseline/probe-latency.csv
+.tmp/ablate/20260808-kstack-tg-gate-baseline/host-metrics.log
+.tmp/ablate/20260808-kstack-tg-gate-baseline/serial.log
+```
+
+| 240 秒结果 | 基线 | 最终候选 | 差异 |
+| --- | ---: | ---: | ---: |
+| Cargo 输出字节 | 858 | 1,049 | 归一化速率 **+22.06%** |
+| Cargo 输出行 | 28 | 34 | 归一化速率 **+21.23%** |
+| `target/debug/deps/*.d` | 27 | 29 | **+7.41%** |
+| QEMU CPU ticks | 154,520 | 146,477 | **-5.20%** |
+| QEMU peak RSS | 2,205,888 KiB | 2,062,204 KiB | **-6.51%** |
+| QEMU `read_bytes` | 38,699,008 | 30,060,544 | **-22.32%** |
+| probe latency 中位数 | 2,241.0 ms | 1,995.5 ms | **-10.95%** |
+| 结果 | `rc=124`，未生成 xtask | `rc=124`，未生成 xtask | 均按硬截止结束 |
+
+Cargo stdout 会受缓冲和 crate 完成顺序影响，单轮 host I/O 也会受 page cache 波动影响，
+所以上表只用于确认真实 workload 没有回退；本批的定量对因结论仍以前述 22+22 轮
+fork/thread 微基准为主。更稳健的 deps 计数只领先 7.41%，说明内核栈缓存有用，但不是
+RISC-V `tg-xtask` 整体慢数倍的唯一根因。两边输出和 deps 在每个探针都继续增长，QEMU
+RSS 有界、host swap 未耗尽，没有卡死或资源泄漏迹象。
+
+测试接线的第一次尝试漏设 Cargo PATH，在 guest uptime 1.13 秒以 `rc=127` 返回；该轮
+没有进入 rustc，已明确排除在 A/B 外。后续重启 overlay 读取 Cargo tail 时又发现停止
+QEMU 前没有 `sync`，只能看到部分已落盘输出，因此没有用不完整的 crate 名称补强结论。
+
+短 gate 已通过“不回退”条件，但候选 240 秒仍只生成 29 个 deps，离完整 `tg-xtask`
+很远。结合此前完整 RISC-V 长测在 3,229 秒仍未生成 xtask，本批不继续盲跑一小时；
+下一步应先隔离验证剩余的 RISC-V SATP/TLB 或文件系统候选，只有新的短 gate 出现量级
+改善后再进入完整 BuildStorm。若进度明显落后或超过停滞上限，仍按约定及时停止并
+保留日志。
 
 ## 验证与复现
 
@@ -231,6 +272,23 @@ timeout 60 /user/fork_thread_group_perf_smoke.bin
 
 并在 11 轮结束后主动退出 QEMU。任一轮超时、rc 非零、shell 丢失或 QEMU EOF 都会
 立刻结束，不会无限等待。
+
+`tg-xtask` gate runner：
+
+```text
+.tmp/ablate/run_tg_gate_expect.sh
+```
+
+两边分别执行：
+
+```sh
+timeout --signal=INT --kill-after=10s 360s \
+  bash .tmp/ablate/run_tg_gate_expect.sh LABEL KERNEL_ELF 240
+```
+
+runner 每约 30 秒记录 guest uptime、Cargo 输出字节/行数、deps 数量、xtask 大小和
+result，同时每 2 秒记录 QEMU CPU、RSS、I/O 以及 host MemAvailable/SwapFree；guest
+240 秒 timeout 之外还有 host 360 秒最终截止。
 
 | 资产 | 版本 |
 | --- | --- |
