@@ -18,10 +18,54 @@ pub struct Ext4FileSystem {
     pub group_descs: Vec<Ext4GroupDesc>,
     /// Whether 64-bit mode is enabled
     pub is_64bit: bool,
+    /// Mount-time inode-table geometry shared with lockless readers.
+    inode_layout: Arc<InodeTableLayout>,
     /// Next block to try allocating (simple sequential cursor).
     next_alloc_block: u64,
     /// Next inode to try allocating (simple sequential cursor).
     next_alloc_inode: u32,
+}
+
+/// Immutable inode-table geometry captured when the filesystem is mounted.
+///
+/// Inode-table locations and sizing fields cannot change during the lifetime
+/// of a mounted ext4 filesystem.  Keeping this read-only view outside the
+/// allocator lock lets ordinary pathname lookup resolve an inode number
+/// without serializing on unrelated block/inode allocation.
+struct InodeTableLayout {
+    block_size: usize,
+    inode_size: usize,
+    inodes_per_group: u32,
+    inode_table_blocks: Vec<u64>,
+}
+
+impl InodeTableLayout {
+    fn new(superblock: &Ext4SuperBlock, group_descs: &[Ext4GroupDesc], is_64bit: bool) -> Self {
+        Self {
+            block_size: superblock.block_size(),
+            inode_size: superblock.inode_size(),
+            inodes_per_group: superblock.s_inodes_per_group,
+            inode_table_blocks: group_descs
+                .iter()
+                .map(|desc| desc.inode_table(is_64bit))
+                .collect(),
+        }
+    }
+
+    fn inode_pos(&self, inode_num: u32) -> (usize, usize) {
+        // Inode numbers start at 1.
+        let inode_idx = inode_num - 1;
+        let group = inode_idx / self.inodes_per_group;
+        let local_idx = inode_idx % self.inodes_per_group;
+        let inodes_per_block = self.block_size / self.inode_size;
+        let block_offset = local_idx as usize / inodes_per_block;
+        let offset_in_block = (local_idx as usize % inodes_per_block) * self.inode_size;
+
+        (
+            self.inode_table_blocks[group as usize] as usize + block_offset,
+            offset_in_block,
+        )
+    }
 }
 
 /// Cooperative lock for filesystem-wide allocator metadata.
@@ -35,6 +79,7 @@ pub struct Ext4FileSystem {
 pub struct Ext4FileSystemHandle {
     inner: Mutex<Ext4FileSystem>,
     wait_device: Arc<dyn BlockDevice>,
+    inode_layout: Arc<InodeTableLayout>,
 }
 
 impl Ext4FileSystemHandle {
@@ -45,6 +90,14 @@ impl Ext4FileSystemHandle {
             }
             self.wait_device.io_relax();
         }
+    }
+
+    pub(crate) fn inode_pos(&self, inode_num: u32) -> (usize, usize) {
+        self.inode_layout.inode_pos(inode_num)
+    }
+
+    pub(crate) fn block_size(&self) -> usize {
+        self.inode_layout.block_size
     }
 }
 
@@ -107,16 +160,19 @@ impl Ext4FileSystem {
         }
 
         let wait_device = Arc::clone(&block_device);
+        let inode_layout = Arc::new(InodeTableLayout::new(&superblock, &group_descs, is_64bit));
         Ok(Arc::new(Ext4FileSystemHandle {
             inner: Mutex::new(Self {
                 block_device,
                 superblock,
                 group_descs,
                 is_64bit,
+                inode_layout: Arc::clone(&inode_layout),
                 next_alloc_block: superblock.s_first_data_block as u64,
                 next_alloc_inode: superblock.s_first_ino,
             }),
             wait_device,
+            inode_layout,
         }))
     }
 
@@ -138,19 +194,7 @@ impl Ext4FileSystem {
 
     /// Get the position of an inode (block id and offset within block)
     pub fn get_inode_pos(&self, inode_num: u32) -> (usize, usize) {
-        // Inode numbers start at 1
-        let inode_idx = inode_num - 1;
-        let group = inode_idx / self.superblock.s_inodes_per_group;
-        let local_idx = inode_idx % self.superblock.s_inodes_per_group;
-
-        let inode_size = self.superblock.inode_size();
-        let inodes_per_block = self.superblock.block_size() / inode_size;
-
-        let inode_table_block = self.group_descs[group as usize].inode_table(self.is_64bit);
-        let block_offset = local_idx as usize / inodes_per_block;
-        let offset_in_block = (local_idx as usize % inodes_per_block) * inode_size;
-
-        ((inode_table_block as usize + block_offset), offset_in_block)
+        self.inode_layout.inode_pos(inode_num)
     }
 
     /// Read an inode from disk
@@ -173,7 +217,7 @@ impl Ext4FileSystem {
 
     /// Get block size
     pub fn block_size(&self) -> usize {
-        self.superblock.block_size()
+        self.inode_layout.block_size
     }
 
     fn set_bitmap_bit(bytes: &mut [u8], bit: usize, value: bool) {

@@ -1,23 +1,77 @@
-# 8-6 Linux 式 newidle 平衡与 idle runnable 快路径
+# 8-6 空闲核心不再全域轮询，改用 newidle 拉取
 
 ## 问题概述
 
-空闲 hart 在清理循环中反复扫描所有 hart 的 99 个 RT 优先级桶和全部 runqueue；低并发
-阶段中，“其他 CPU 正在工作”反而让每个 idle CPU 持续执行全局轮询。
+空闲 hart 在清理循环中反复扫描所有 hart 的 99 个 RT 优先级桶和全部 runqueue。低并发阶段中，"其他 CPU 正在工作"反而让每个 idle CPU 持续执行全局轮询，把调度扫描本身变成主要 CPU 开销。
+
+Linux 的 `sched_balance_newidle()`（处理器刚进入 idle 时触发的负载均衡）会先检查 `this_rq->avg_idle`（该 CPU 历史空闲时间的指数加权平均），如果平均 idle 时间太短（代价判断），就直接跳过跨域迁移，避免拉取任务的开销超过实际空闲时长。本项目的旧实现没有这层代价判断，每次 idle 都做全量扫描。
+
+## 背景知识
+
+**为什么多核系统仍会出现空闲 CPU**
+
+multicore（多核）系统里，任务多并不代表每个 CPU 始终都有任务可运行。
+任务可能等待磁盘或网络 I/O，也可能主动 sleep（睡眠），还可能执行完毕并退出。
+这些任务阻塞后，会暂时离开 runqueue（运行队列），对应的 CPU 就可能进入 idle（空闲）状态。
+与此同时，另一个 CPU 的运行队列里可能恰好积压了 3～4 个可运行任务。
+这种不均衡是任务唤醒时机、亲和性和运行时间共同造成的自然现象，并不罕见。
+调度器需要把部分任务迁移到空闲 CPU，才能重新利用并行能力。
+
+**最直接但昂贵的办法：全局扫描**
+
+global scanning（全局扫描）是最容易想到的方案：每个空闲 CPU 查看所有其他 CPU 的队列。
+如果发现某个队列有多余任务，就把一个任务拉到本地运行。
+问题在于，查看队列通常需要 lock acquisition（获取锁），否则队列可能正被并发修改。
+假设系统有 12 个 CPU，其中 8 个处于空闲状态，每个空闲 CPU 一轮检查 12 个队列。
+那么一轮就会产生 8 × 12 = 96 次锁操作，而且很可能一次任务也没有找到。
+多个 CPU 还会反复争用相同的锁和 cache line（缓存行），进一步放大开销。
+最后，“寻找工作”花掉的 CPU 时间可能比真正执行工作还多。
+
+**Linux 如何用 `avg_idle` 判断值不值得找**
+
+Linux 在每个运行队列上记录 `this_rq->avg_idle`，表示该 CPU 每次连续空闲时长的历史平均。
+它采用 exponentially weighted average（指数加权平均），让近期样本比很久以前的样本权重更高。
+如果 `avg_idle` 很短，说明这个 CPU 通常很快就会在本地收到新任务。
+此时做昂贵的 cross-domain balancing（跨调度域负载均衡）往往得不偿失。
+因为扫描还没完成，本地任务可能已经到达，而扫描期间消耗的锁和 CPU 时间无法收回。
+所以 Linux 会比较预期空闲时间与均衡成本，太短时直接跳过昂贵的 newidle 拉取。
+只有历史空闲时间足够长、预计能摊平扫描成本时，才继续寻找可迁移任务。
+
+**负载均衡发生在什么时机**
+
+Linux 主要在三个时机调整 CPU 之间的负载。
+第一是 periodic rebalance（周期性再均衡），每隔几毫秒检查一次长期不均衡。
+第二是 newidle balance（新空闲均衡），CPU 刚刚发现本地没有任务时尝试拉取工作。
+第三是 fork/exec placement（创建或执行程序时的放置），在任务出现或更换程序时选择合适 CPU。
+三种时机能容忍的成本不同：周期检查要控制频率，任务放置要避免拖慢创建路径。
+就触发方式而言，newidle 是其中最便宜的一次性机会，因为每次进入 idle 只尝试一次。
+newidle 路径只在一次进入 idle 时触发一次，因此适合做一次受控、有限的拉取。
+它不应该在 idle 循环里无休止地重复全局扫描。
+
+**CongCore 旧实现的问题**
+
+旧 idle 清理循环反复调用 `has_ready_rt_any_at_or_above()` 和 `has_ready_tasks()`。
+前一个函数会跨所有 hart 扫描 99 个 RT（实时调度）优先级桶。
+后一个函数会获取每个 runqueue 的锁，再检查是否存在可运行任务。
+在低并发阶段，真正忙碌的 hart 可能只有一两个，其他 idle hart 却同时做相同搜索。
+这些搜索又发生在清理循环中，不是每次进入 idle 只做一次，因此成本会不断累积。
+结果是空闲核心消耗大量宿主 CPU，忙碌核心真正执行用户工作的占比反而下降。
+
+**`perf` 和 `-perfmap` 为什么能看出这个问题**
+
+`perf` 是 sampling profiler（采样分析器），它不记录每一次函数调用。
+它利用 PMU（Performance Monitoring Unit，性能监控单元）计数器溢出或定时器中断抽样。
+中断处理程序会记录当时的 PC（Program Counter，程序计数器）和 call stack（调用栈）。
+随后 `perf` 读取 symbol table（符号表），把采到的机器地址解析成函数名。
+QEMU 的 JIT（即时编译）翻译块在运行时才生成，普通静态符号表不知道这些地址的名字。
+`/tmp/perf-<pid>.map` 提供“地址范围 -> 符号名”的映射，让 guest 内核热点能够被识别。
+没有这份映射，报告或 flame graph（火焰图）里通常只会出现难以解释的十六进制地址。
+采样结果表示 CPU 时间落在哪些路径上的统计分布，不等于函数的精确调用次数。
+因此这里看重的是热点占比和修复前后分布变化，而不是把 sample 数当成绝对计数。
 
 ## 如何发现
 
-资源日志显示 QEMU RSS、host memory、swap 与块设备均正常，无法单靠日志区分真实编译
-和调度扫描。启用 QEMU `-perfmap` 后，固定样本约四成落在
-`has_ready_rt_count()`、`has_ready_rt_any_at_or_above()` 与 RT 带宽刷新。Linux 对照
-为 `pick_task_fair()`、`sched_balance_newidle()`、`can_migrate_task()` 和
-`detach_tasks()`。
-
-```text
-testsuits-final/.tmp/final-runs/20260806-buildstorm-futex-perfmap-diagnose-5/
-testsuits-final/.tmp/final-runs/20260806-buildstorm-newidle-perfmap-after-1/
-testsuits-final/.tmp/final-runs/20260806-minibuild-newidle-watchdog-1/
-```
+host 资源日志显示 QEMU RSS、内存、swap 与块设备均正常，无法单靠日志区分真实编译和调度扫描。按照前文所述的 `perf` 统计采样与 `-perfmap` 运行时符号映射原理，启用 QEMU `-perfmap` 后，固定样本约四成落在 `has_ready_rt_count()`、`has_ready_rt_any_at_or_above()` 与 RT 带宽刷新；这里的占比用于定位 CPU 时间分布，不是函数的精确调用次数。
 
 ```sh
 QEMU_EXTRA_ARGS=-perfmap ARCH=loongarch64 IMAGE_MODE=snapshot \
@@ -25,31 +79,43 @@ QEMU_EXTRA_ARGS=-perfmap ARCH=loongarch64 IMAGE_MODE=snapshot \
 perf record -F 99 -e cycles:u -g -p <qemu-pid> -o perf.data -- sleep 15
 ```
 
+证据目录：
+
+```text
+testsuits-final/.tmp/final-runs/20260806-buildstorm-futex-perfmap-diagnose-5/
+testsuits-final/.tmp/final-runs/20260806-buildstorm-newidle-perfmap-after-1/
+testsuits-final/.tmp/final-runs/20260806-minibuild-newidle-watchdog-1/
+```
+
 ## 怎么解决
 
-为每 hart 维护 O(1) runnable/RT 总数；本地 pick 确认无任务后才执行一次 newidle fair
-拉取。只迁移已排队 fair task，检查 affinity，不迁移 running/RT task，donor 至少保留
-一个 runnable，单次最多拉一个。更好的长期方案是根据真实 workload 逐步补齐 Linux
-sched-domain、PELT 与 cache-hotness，而不是伪造完整模型。
+**每 hart O(1) 计数**：为每个 hart 维护一个 RT 任务总数的原子变量 `READY_RT_TOTAL_COUNTS[hart]`，与实际 RT 入队/出队同步增减。idle 存在性判断只做一次 acquire load，不再扫 99 个优先级桶。
 
-实现把 `READY_RT_TOTAL_COUNTS[hart]` 与实时任务实际入队、出队同步增减；本地
-runnable 判断只读当前 hart 的原子总数。只有本地实时任务和公平任务选择均失败时才
-扫描 donor，并在 donor runqueue 锁内弹出一个已经排队的公平任务。
+**本地 pick 优先**：`fetch_task()` 先从本地 RT / fair 队列 pick。只有本地实时任务和公平任务选择都失败时，才扫描在线 donor 的轻量负载计数。
+
+**newidle fair pull**：候选 donor 至少需要两个 runnable 单位（`queued_fair + current > 1`），在 donor runqueue 锁内弹出一个已经排队的 fair task。只迁移已排队 fair task，不碰正在运行的 task 或 RT task，donor 至少保留一个 runnable，单次最多拉一个，严格检查 CPU affinity。
+
+Linux `sched_balance_newidle()` 还会根据 sched_domain 层级（LLC → NUMA → 全系统）逐级查找 busiest group，并用 `can_migrate_task()` 检查 affinity 和 cache-hotness。CongCore 没有 sched-domain / PELT / cache-hotness 模型，因此实现的是最小可验证子集：本地计数、保留一个 runnable、affinity、非 running、单任务拉取。复杂的周期性负载均衡留待实际证据需要时再加入。
 
 ## 对应提交
 
 - 状态：待提交，当前实现仍位于未提交工作树。
-- 基线：顶层 `21332ba37bf1ba0efe8229e7f80eeffa3b99a239`；`os/`
-  `b0185b3a4522c0ffc52599d73bd17b3d52320815`。
+- 基线：顶层 `21332ba37bf1ba0efe8229e7f80eeffa3b99a239`；`os/` `b0185b3a4522c0ffc52599d73bd17b3d52320815`。
 - 建议提交主题：`sched: add local runnable fast path and newidle pull`。
 
 ## 对比提升
 
-perf 中旧全局扫描热点从报告消失；相近 guest uptime 的 minibuild 文件数
-`17 -> 25`（+47.06%），前四次探针中位数 `594.5 -> 457.5 ms`（-23.04%）。
-这是带 `-perfmap` 的定位性 A/B，不等价于正式 BuildStorm 完成时间。
+perf 中旧全局扫描热点从报告消失（`has_ready_rt_count` 和 `has_ready_rt_any_at_or_above` 不再出现在 0.1% 以上的 flat report 中）。相近 guest uptime 的 minibuild 文件数 `17 -> 25`（+47.06%），前四次探针中位数 `594.5 -> 457.5 ms`（-23.04%）。
+
+这是带 `-perfmap` 的定位性 A/B，不等价于正式 BuildStorm 完成时间。优化后文件数达到 25 后连续三个周期未变化，完成固定 perf 样本后已主动终止 VM。完整 BuildStorm 未运行，不宣称已通过。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个问题是调度器 idle 路径的设计缺陷：idle 清理不加区分地扫描所有 hart 的所有 RT 优先级桶，在低并发阶段把 CPU 时间花在"寻找工作"而不是"做工作"上。以下保留完整的 perf 对照数据、per-hart 计数实现细节、LoongArch syscall restart 补齐、回归测试和性能 A/B。
 
 ## 1. 结论
 
@@ -62,7 +128,7 @@ has_ready_rt_any_at_or_above(RT_PRIO_MIN) || has_ready_tasks()
 ```
 
 前者扫描所有 hart 的 99 个 RT 优先级计数并刷新带宽，后者锁住并扫描全部 runqueue。
-这使“其他 CPU 正在运行任务”本身变成每个 idle CPU 的全局轮询工作。
+这使"其他 CPU 正在运行任务"本身变成每个 idle CPU 的全局轮询工作。
 
 参考本地 Linux `kernel/sched/fair.c` 的 `pick_task_fair()`、
 `sched_balance_newidle()`、`can_migrate_task()` 和 `detach_tasks()`，本次改为：

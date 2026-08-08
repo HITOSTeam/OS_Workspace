@@ -6,6 +6,74 @@
 COW/lazy 页时又需获取可睡眠 mm lock，与另一 hart 的 TLB shootdown、signal queue
 形成稳定锁环，导致 BuildStorm minibuild 间歇停顿。
 
+```text
+Hart A: [TCB spinlock] -> [写用户栈] -> [page fault] -> [等待 mm lock]
+            ^                                             |
+            |                                             v
+Hart B: [等待 TCB spinlock] <- [TLB shootdown/信号排队] <- [持有 mm lock]
+```
+
+## 背景知识
+
+进程平时在用户态运行，寄存器里保存着程序计数器、栈指针和通用寄存器等现场。
+当内核决定向进程投递 signal（信号）时，不能直接丢掉这份现场。
+否则 signal handler（信号处理函数）结束后，进程不知道应从哪里继续执行。
+
+内核会在用户栈上构造 signal frame（信号帧）。
+这个 frame 通常包含保存的寄存器、signal info（信号信息）、signal mask（信号屏蔽字）
+以及 handler 返回后进入内核的返回地址。
+内核随后把用户态寄存器改成 handler 的入口和新栈指针，让 handler 开始执行。
+handler 返回时，`sigreturn` 系统调用从 signal frame 读回现场，恢复原来的执行状态。
+
+关键点是：signal frame 写在“用户内存”中，而不是内核自己的固定内存中。
+用户内存使用虚拟地址，虚拟页是否已经有可写物理页，要由页表和 VMA 决定。
+VMA（virtual memory area，虚拟内存区域）只说明一段地址合法以及它的访问权限。
+它不保证这个地址此刻已经对应一个可写的物理页。
+
+第一种常见情况是 lazy allocation（延迟分配）。
+地址已经记录在 VMA 中，但程序第一次真正访问前，内核还没有分配物理页。
+第二种情况是 COW（copy-on-write，写时复制）。
+fork 后父子进程先共享只读物理页，第一次写入时才复制出当前进程自己的页面。
+第三种情况是页面被 swap out（换出）到磁盘，需要重新调入内存。
+所以，内核写用户栈本身也可能触发 page fault（缺页异常）。
+
+缺页处理不是一次简单的内存写入。
+它可能要分配物理页、复制 COW 页面、读回换出页，并修改页表和 VMA 状态。
+这些共享结构需要 memory management lock（内存管理锁，简称 mm lock）保护。
+Linux 中对应的核心锁通常称为 `mmap_lock`。
+mm lock 是 sleeping lock（可睡眠锁，例如 mutex 或 rwsem），等待它的线程可以阻塞，
+持有它的线程也可能被抢占；它不是只允许极短临界区的自旋锁。
+
+现在看一个具体的死锁过程。
+Hart A 为读取信号信息和修改任务状态，先取得 TCB 自旋锁。
+它没有放锁就开始向用户栈写 signal frame。
+目标栈页恰好是 COW 页，于是写操作触发 page fault，并进入 mm lock 的等待路径。
+此时 Hart B 正在执行 `mmap` 或 `munmap`，已经持有 mm lock。
+Hart B 修改页表后要做 TLB shootdown（跨核 TLB 失效），向 Hart A 发送 IPI（核间中断）。
+Hart A 却仍拿着 TCB 自旋锁，并在 mm lock 路径上等待或自旋，无法及时响应这个 IPI。
+另一条环是 Hart B 要向同一任务排队信号，因此还需要取得 TCB 自旋锁。
+这样两个 hart 各自占有对方需要的锁，谁也无法继续。
+
+```text
+Hart A: TCB spinlock -> write user stack -> page fault -> wait mm lock
+Hart B: mm lock -> TLB shootdown/signal queue -> wait TCB spinlock
+```
+
+这里必须遵守一条内核基本规则：持有 spinlock（自旋锁）时，绝不能执行可能睡眠、
+阻塞或缺页的操作。自旋锁用于不可睡眠、持锁时间很短的临界区；用户指针访问则
+可能随时进入缺页处理，因此两者不能重叠。
+
+Linux 的 signal 投递明确划分了这条边界。
+`get_signal()` 在锁内决定投递哪个信号并保存必要状态，然后释放 `sighand->siglock`；
+之后才调用架构相关的 `setup_rt_frame()`，由它向用户内存写 signal frame。
+也就是把“决定投递什么”和“构造用户 frame”拆成两个阶段。
+
+更一般的原则叫 lock ordering（锁顺序）：所有路径必须按同一顺序取得多个锁。
+如果路径一按 A -> B 加锁，而路径二按 B -> A 加锁，就存在形成环路的可能。
+这里 signal delivery 形成 TCB -> mm，而其他路径形成 mm -> TCB
+（或 mm -> 其他步骤 -> TCB），正是相反顺序。
+修复的核心不是调整等待时间，而是彻底避免在用户写入期间持有 TCB 自旋锁。
+
 ## 如何发现
 
 host 日志排除 CPU、内存、swap 和块设备耗尽；准确 QEMU PID 的 perf 显示三个固定
@@ -53,7 +121,14 @@ Linux `get_signal()` 在返回用户 handler 前释放 `sighand->siglock`，架�
 205.54 秒。修复前三个各约 9% 的锁 PC 全部从 1% flat report 消失；64 轮真实 lazy/COW
 altstack signal-frame 测试通过。完整 BuildStorm 仍需单独证明。
 
+以下是 AI 的具体分析，作为存档。
+
 ---
+
+## 历史分析背景
+
+以下编号 1–9 保留了当时从现场诊断、Linux 语义对照到聚焦回归的完整推理链。
+这份分析作为证据档案保留，方便后续贡献者复核测试环境、性能数据和修复边界。
 
 ## 1. 结论
 

@@ -168,6 +168,30 @@ pub struct FileSystemStatSnapshot {
 }
 
 impl InodeStatSnapshot {
+    pub fn is_dir(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFDIR
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFLNK
+    }
+
+    pub fn is_fifo(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFIFO
+    }
+
+    pub fn is_chrdev(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFCHR
+    }
+
+    pub fn is_blkdev(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFBLK
+    }
+
+    pub fn is_socket(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFSOCK
+    }
+
     pub fn rdev_for_mode(&self) -> u64 {
         match self.mode & S_IFMT {
             S_IFCHR | S_IFBLK => self.special_rdev,
@@ -247,7 +271,7 @@ impl Inode {
         cache.get(&key).unwrap().clone()
     }
 
-    /// Create a new inode reference (locks fs to get block_size)
+    /// Create a new inode reference.
     pub fn new(
         inode_num: u32,
         block_id: usize,
@@ -255,7 +279,7 @@ impl Inode {
         fs: Arc<Ext4FileSystemHandle>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Self {
-        let block_size = fs.lock().block_size();
+        let block_size = fs.block_size();
         Self {
             inode_num,
             block_id,
@@ -421,17 +445,22 @@ impl Inode {
 
     /// Find a file/directory by name in current directory
     pub fn find(&self, name: &str) -> Option<Arc<Inode>> {
-        if !self.is_dir() {
-            return None;
-        }
-
-        let idx = self.dir_index();
+        // A cached index can only have been built for this directory inode and
+        // is invalidated when that inode is removed or reused.  Trust it just
+        // as Linux trusts an instantiated directory dentry; cold lookup still
+        // validates the inode type before building the index.
+        let idx = if let Some(idx) = dir_index_cached(self.inode_num, &self.block_device) {
+            idx
+        } else {
+            if !self.is_dir() {
+                return None;
+            }
+            self.dir_index()
+        };
         let (inode_num, file_type) = { idx.lock().get(name).copied()? };
 
-        let fs = self.fs.lock();
-        let (block_id, offset) = fs.get_inode_pos(inode_num);
-        let block_size = fs.block_size();
-        drop(fs);
+        let (block_id, offset) = self.fs.inode_pos(inode_num);
+        let block_size = self.fs.block_size();
 
         let inode = Arc::new(Inode::new_with_block_size(
             inode_num,

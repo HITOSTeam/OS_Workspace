@@ -321,7 +321,14 @@ impl Repr {
     where
         T: AsRef<[u8]> + ?Sized,
     {
-        Self::parse_with_protocol(packet, src_addr, dst_addr, checksum_caps, IpProtocol::Udp, 0)
+        Self::parse_with_protocol(
+            packet,
+            src_addr,
+            dst_addr,
+            checksum_caps,
+            IpProtocol::Udp,
+            0,
+        )
     }
 
     /// Parse a UDP or UDP-Lite packet.

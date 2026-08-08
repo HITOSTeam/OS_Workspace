@@ -2,7 +2,7 @@
 
 use crate::hal::{BufferDirection, Dma, Hal, PhysAddr};
 use crate::transport::Transport;
-use crate::{Error, PAGE_SIZE, Result, align_up, nonnull_slice_from_raw_parts, pages};
+use crate::{align_up, nonnull_slice_from_raw_parts, pages, Error, Result, PAGE_SIZE};
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 use bitflags::bitflags;
@@ -14,7 +14,7 @@ use core::mem::{size_of, take};
 #[cfg(test)]
 use core::ptr;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU16, Ordering, fence};
+use core::sync::atomic::{fence, AtomicU16, Ordering};
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 /// Read-only progress snapshot for a virtqueue.
@@ -1014,9 +1014,9 @@ mod tests {
         device::common::Feature,
         hal::fake::FakeHal,
         transport::{
-            DeviceType,
             fake::{FakeTransport, QueueStatus, State},
-            mmio::{MODERN_VERSION, MmioTransport, VirtIOHeader},
+            mmio::{MmioTransport, VirtIOHeader, MODERN_VERSION},
+            DeviceType,
         },
     };
     use core::ptr::NonNull;

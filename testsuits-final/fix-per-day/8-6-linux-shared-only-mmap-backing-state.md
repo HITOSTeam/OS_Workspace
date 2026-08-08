@@ -1,15 +1,85 @@
-# 8-6 Linux 式 shared-only mmap backing 状态
+# 8-6 只为共享映射记录 mmap backing 状态
 
 ## 问题概述
 
-每个干净 `MAP_PRIVATE` 文件页除 inode page cache 与实际 PTE/MapArea 外，还在每个 mm
-的 `MmapBacking::resident_pages` 中保存一份派生 `BTreeMap`。fork 复制整棵树，典型
-BuildStorm child 紧接着 exec 并立即析构，产生纯 bookkeeping 成本。
+每个干净的 `MAP_PRIVATE` 文件页，除了在 inode page cache 里存一份、在页表里存一份，
+还在每个进程的 `MmapBacking::resident_pages` 里多存了一棵 `BTreeMap`。fork 时会整棵
+复制这棵树，但 BuildStorm 的典型 child 紧接着 exec 就把刚复制的树析构了——白干一场。
+
+```text
+进程 A 的地址空间           进程 B（fork 出来的）
+┌──────────────────┐       ┌──────────────────┐
+│ 页表：page → frame│       │ 页表：page → frame│  ← 已经有映射关系
+├──────────────────┤       ├──────────────────┤
+│ resident_pages   │       │ resident_pages   │  ← 又多一棵重复的树
+│  (BTreeMap 副本) │       │  (BTreeMap 副本) │     fork 后 exec 马上析构
+└──────────────────┘       └──────────────────┘
+          │                          │
+          └────────┐  ┌──────────────┘
+                   ▼  ▼
+           inode page cache           ← 真正的数据来源
+```
+
+对于私有映射的干净页，页表和 inode page cache 这两份已经够了——`resident_pages` 是
+纯粹多余的 bookkeeping（记账开销）。
+
+## 背景知识
+
+这一节给只上过操作系统课的读者铺路。已经熟悉 mmap 的可以跳过。
+
+**mmap 是什么**。`mmap()` 系统调用把一个文件（或者一段匿名内存）直接映射到进程的
+虚拟地址空间里。映射建立后，进程读写那段地址就等于在读写文件，不需要再调用
+`read()`/`write()`。操作系统利用页表（page table）把虚拟地址指向物理内存中缓存的
+文件页，缺页时再从磁盘读入——对进程来说完全透明。
+
+用一个类比：如果文件是仓库里的一本书，普通 `read()` 是"请图书管理员复印几页给我"，
+`mmap()` 则是"把书直接放在我桌上，我翻到哪就看哪"。省了复印（内核到用户的拷贝），
+但书放在桌上时别人也可能在翻。
+
+**MAP_SHARED 与 MAP_PRIVATE 的根本差别**。mmap 有两种模式：
+
+```text
+MAP_SHARED（共享映射）
+┌────────────────────────────────────────────────┐
+│ 写入会直接修改文件内容                          │
+│ 多个进程映射同一文件 → 互相可见对方的写入       │
+│ 脏页最终要写回磁盘（writeback）                 │
+│ 内核必须跟踪"哪些页被改过、什么时候该写回"     │
+└────────────────────────────────────────────────┘
+
+MAP_PRIVATE（私有映射）
+┌────────────────────────────────────────────────┐
+│ 写入不会改变文件                                │
+│ 第一次写时，内核复制一份独立副本（COW，写时复制）│
+│ 此后这页跟文件再无关系                          │
+│ 多个进程各写各的，互不干扰                      │
+│ 没写过的干净页仍共享 inode page cache 的那份    │
+└────────────────────────────────────────────────┘
+```
+
+所以：只有共享映射才需要记录"哪些页脏了、引用计数多少、要不要写回"这些信息。
+私有映射的干净页只是 inode page cache 的一个只读视图，写了就变成自己的匿名页，
+不需要额外的回写跟踪。
+
+**为什么多余的 BTreeMap 在 fork+exec 模式下特别贵**。BuildStorm 大量 fork 子进程，
+每次 fork 都要深拷贝父进程的 `resident_pages`。子进程拿到这棵树后立刻 exec 换成
+新程序——exec 会析构旧地址空间，包括刚复制的树。对一棵几千项的 BTreeMap 来说，
+clone + drop 全是纯 CPU 开销，产生的 cache miss 和分配/释放还会挤占真正有用的工作。
+
+**Linux 怎么做的**。Linux 内核里，`address_space::i_pages` 保存文件页缓存，
+`i_mmap` 用区间树（interval tree）关联所有映射了这个文件的 VMA。fork 时
+`copy_page_range()` 复制页表状态，不会为每个地址空间额外维护一棵干净私有页的
+索引。换句话说，Linux 认为"页表 + page cache"就是私有干净页的完整真相，不需要
+第三份记录。
+
+**本项目的历史原因**。早期为了简化 fault 路径的查找，给每个 `MmapBacking` 加了
+`resident_pages`，不区分 shared/private 一律记录。随着 inode page cache 和 COW
+逐步完善，这份多余记录变成了纯粹的性能负担。
 
 ## 如何发现
 
 BuildStorm perf 中 `BTreeMap<usize, MmapBackingPageState>::drop` 占总 period 1.87%，
-相邻热点包含树插入、MemorySet discard 与 frame-tree 析构。源码所有权审计确认 private
+相邻热点包含树插入、MemorySet discard 与 frame-tree 析构。源码审计确认 private
 页无需第三份索引。Linux 参考为 `address_space::i_pages/i_mmap`、`dup_mmap()` 与
 `copy_page_range()`：复制 VMA/PTE 状态，不为每个 mm 复制干净 private page 索引。
 
@@ -28,17 +98,21 @@ perf record -F 99 -e cycles:u -g -p <qemu-pid> -o perf.data -- sleep 15
 
 ## 怎么解决
 
-`resident_pages` 只跟踪 `MAP_SHARED`，继续承担 shared frame accounting、dirty/
-writeback 与 truncate 同步；干净 private 页仅由页表/MapArea 和 inode page cache
-表示。长期方案是继续统一 page-cache 与 VMA reverse mapping，并用明确 ownership
-不变量替代派生状态复制。
+**收窄 `resident_pages` 的适用范围**：只在 `MAP_SHARED` 时记录 frame、引用数和
+dirty 状态，继续用于 shared frame accounting、dirty/writeback 与 truncate 同步。
+`MAP_PRIVATE` 的干净页只存在于 inode page cache 与实际页表映射中，不再额外记录。
 
-代码把 file fault、页表重建和 invariant 检查统一加上 `region.shared` 条件；
-`MAP_SHARED` 仍记录 frame、引用数和 dirty 状态，`MAP_PRIVATE` 的干净页只存在于 inode
-page cache 与实际页表映射中。
-Linux 的 `address_space::i_pages` 保存文件页，`i_mmap` 关联虚拟内存区域，fork 复制
-需要的区域和页表状态，不为每个内存空间克隆一棵干净私有页树。本项目尚无 Linux
-区间反向映射，因此只删除可证明为派生数据的 private-page bookkeeping。
+具体改动四处：
+
+- **file fault**：只在 `region.shared` 时往 backing 里增加 resident ref；
+- **PTE 重建**：重建状态时只扫描 shared VMA；
+- **shared file page**：仍保存 frame 和 dirty 位，用于写回；
+- **debug invariant**：要求每个 resident entry 至少被一个 shared VMA 覆盖。
+
+Linux 的做法更彻底：它有完整的区间反向映射（reverse mapping），能从一个物理页找到
+所有映射它的 VMA。本项目还没有这套机制，因此只做了"把可证明为派生数据的
+private-page bookkeeping 删掉"这一步，不影响 page fault、COW、writeback、
+truncate 或 exec 的正确性。
 
 ## 对应提交
 
@@ -49,11 +123,25 @@ Linux 的 `address_space::i_pages` 保存文件页，`i_mmap` 关联虚拟内存
 
 ## 对比提升
 
-并发 rustc 测试的 guest 中位数 `627908 -> 479796 us`（-23.6%），host wall-time
-`2570 -> 2013 ms`（-21.7%），各轮 failures=0。较小 fork 对照仅约 1.6%，因此记录
-采用贴近 BuildStorm fork+exec 生命周期的强信号结果，不宣称完整 BuildStorm 通过。
+| 指标 | 旧（每 mm 跟踪 clean private） | 新（只跟踪 shared） | 变化 |
+| --- | ---: | ---: | ---: |
+| 并发 rustc guest 中位数 | 627908 us | 479796 us | **-23.6%** |
+| host wall-time 中位数 | 2570 ms | 2013 ms | **-21.7%** |
+| failures | 0 | 0 | — |
+
+较小的通用 fork 对照仅约 1.6%，信号不强，因此结论采用贴近 BuildStorm fork+exec
+生命周期的测试。没有运行完整 BuildStorm 或官方 judge。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个问题跨 mmap fault 路径、fork 的地址空间复制和 inode page cache 三个子系统。
+早期为了让 fault 路径快速查找已加载页而引入的 per-mm BTreeMap，在 COW 和 page cache
+完善后变成了纯粹的派生数据。下面保留完整的 perf 证据、Linux 对比、严格 A/B 和回归
+测试记录。
 
 ## 问题与 perf 证据
 

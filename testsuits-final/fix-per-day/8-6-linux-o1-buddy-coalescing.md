@@ -2,16 +2,104 @@
 
 ## 问题概述
 
-旧 `buddy_system_allocator` 在每个 order 合并时线性扫描单向 free list 查找 buddy；碎片
-增多后，释放成本随运行时间恶化，并让 guest shell 探针逐步饥饿。第一版 O(1) 替代又
-把最小块扩大到 32 bytes，完整冷启动随后证明该表示不可接受。
+旧 `buddy_system_allocator` crate 在释放内存时，要在每个 order 的单向链表里
+从头走到尾去找伙伴块。碎片越多链表越长，释放就越慢。跑到后期，一次 `dealloc`
+要占 31.9% 的 CPU 时间，shell 探针响应从几百毫秒恶化到 10 秒以上并被停机。
+
+```text
+释放一块 order-3 内存的旧流程：
+
+free_area[3]: [A] -> [B] -> [C] -> ... -> [buddy?]
+                 逐个比较地址，直到找到伙伴或走完
+```
+
+参考 Linux 的做法——用位图标记谁是空闲块头、双向链表让已知节点 O(1) 摘除——
+实现了项目内的 O(1) buddy。第一版证明了算法方向，但把最小块扩大到 32 bytes，
+冷启动约 908 秒 OOM，因此表示层后来必须继续压缩（见
+`8-6-linux-packed-buddy-links.md`）。
+
+## 背景知识
+
+这一节给只上过一门 OS 课的读者铺路。已经熟悉 buddy 分配器的可以跳过。
+
+**为什么内核要按 2 的幂分配物理内存**。操作系统管的物理内存是一大块连续的页
+（通常 4 KiB 一页）。如果用任意大小的空闲链表，释放时很难知道两块相邻的空闲
+内存能不能合并——你得扫描整个链表才能确定。Buddy 分配器规定：只分配 1 页、
+2 页、4 页、8 页……（2^order 页）大小的块。这样合并时只需要看"同一个父块
+拆出来的另一半"是不是也空闲，不用扫描。
+
+**free_area 数组：每级一个链表**。内核维护一个数组 `free_area[0..MAX_ORDER]`，
+`free_area[k]` 是一条双向链表，上面挂着所有大小为 2^k 页的空闲块：
+
+```text
+free_area[0]: 1页的空闲块链表     ──→ [页A] ⇄ [页B] ⇄ ...
+free_area[1]: 2页的空闲块链表     ──→ [块X] ⇄ [块Y] ⇄ ...
+free_area[2]: 4页的空闲块链表     ──→ [块M] ⇄ ...
+  ...
+free_area[10]: 1024页的空闲块链表 ──→ ...
+```
+
+需要 2^k 页时，从 `free_area[k]` 摘一个。如果 k 级空了，就从 k+1 级拿一块
+对半拆分，自己用一半，另一半挂回 `free_area[k]`。
+
+**分割（split）**。比如要 1 页但 `free_area[0]` 空了、`free_area[2]` 有块：
+
+```text
+                 4 页块（order 2）
+                /                \
+         2 页块 (order 1)    2 页块 (order 1)
+        /          \                  ↑ 挂回 free_area[1]
+   1 页(order 0)  1 页(order 0)
+        ↑ 返回给调用者    ↑ 挂回 free_area[0]
+```
+
+**合并（coalesce）**。释放一块 order-k 内存时，算出它的「伙伴块」地址，看伙伴
+是不是也空闲且同级：如果是，把两块合成一块 order-(k+1) 的更大块，挂到上一级
+链表，然后继续往上看能不能再合并。这样能把碎片重新拼回大块。
+
+**怎么算伙伴地址——pfn 异或 2^order**。每个物理页有一个编号叫 PFN
+（Page Frame Number，物理页序号，从 0 开始按页编号）。一块 order-k 的起始
+PFN 的伙伴就是：
+
+```text
+buddy_pfn = pfn XOR (1 << order)
+```
+
+举例：order=2（4 页）、pfn=8，则 buddy_pfn = 8 XOR 4 = 12。也就是说 pfn 8~11
+和 pfn 12~15 是一对伙伴，合并后得到 pfn 8~15（order=3）。
+
+XOR 的妙处在于：**算伙伴地址是一条指令，不需要遍历任何链表**。找到伙伴后，
+如果它也空闲，就从 `free_area[k]` 上把它摘掉，两块合在一起挂到
+`free_area[k+1]`。
+
+**O(1) 摘链的前提：双向链表 + 位图**。Linux 不是从链表头一个一个走去找伙伴，
+而是：
+1. 算出 buddy_pfn；
+2. 查位图确认它确实是空闲块头（`PageBuddy` 标志）且 order 匹配；
+3. 既然已经知道它在链表里的位置（通过 `struct page` 直接取得前驱后继），
+   O(1) 执行双向链表的 `list_del()` 摘除。
+
+所以整个合并过程是 O(order_max)——最多往上合并十几级，每级都是常数时间操作。
+
+**为什么 Linux 把链表指针放在页描述符里**。Linux 为每个物理页预分配了一个
+`struct page`（现在叫 folio），里面有 `lru` 字段可以当双向链表节点用。空闲块
+不需要自己内部存链表指针——指针在 `struct page` 里，而 `struct page` 数组在
+内核启动时就分配好了，不占用户能用的空间。
+
+CongCore 的内核堆没有独立的页描述符数组，所以只能把链表指针放在空闲块自身的
+头部。这就是为什么第一版用 32 bytes（prev + next + order）做最小块——链表元
+数据本身占了空间，导致小分配浪费严重。
+
+**旧 crate 的问题在哪**。旧 `buddy_system_allocator` 用的是单向链表，没有
+位图。释放时它不知道伙伴在不在链表里，只能从头遍历整条链表去找。空闲块越多，
+链表越长，每次释放就越慢——O(n) 而不是 O(1)。运行越久碎片越多，shell 就越卡。
 
 ## 如何发现
 
-BuildStorm 超过 20 秒的探针被及时停止后，准确 QEMU PID 的无 `-perfmap` perf 显示
-`ShardedHeap::dealloc` 占总 period 31.8996%。源码审计确认 crate 按 order 线性找
-buddy。设计参考 Linux `mm/page_alloc.c::__free_one_page()`、
-`__del_page_from_free_list()` 与 `PageBuddy` 的 O(1) membership/list removal。
+BuildStorm 在约 874 秒时探针延迟超过 20 秒被停机。用准确 QEMU PID 的
+`perf record`（不带 `-perfmap`，避免 JIT map 扰动计时）抓 15 秒采样，发现
+`ShardedHeap::dealloc` 占总 period 31.90%。源码审计确认旧 crate 按 order
+线性找 buddy。
 
 ```text
 .tmp/final-runs/20260806-buildstorm-shared-only-full-97/run/
@@ -29,17 +117,19 @@ timeout 300 cargo build -p tg-xtask
 
 ## 怎么解决
 
-项目内实现 free-head bitmap 与 intrusive doubly-linked list：用 XOR 得到 buddy，位图
-和 order 验证后 O(1) 摘链。第一版 32-byte 节点只用于证明算法，随后因内部碎片被
-packed 8-byte link 版本取代。长期应把 buddy 保留给页/大块，Rust 小对象进入 slab；
-不能靠扩大 heap 或吞掉分配失败掩盖问题。
+**free-head 位图 + 双向链表**。每 32 bytes（第一版）一个位图槽，空闲块头置位。
+释放时用 XOR 算出伙伴地址，查位图确认它是空闲块头且 order 匹配，然后 O(1)
+摘链合并。分配从第一个非空 order 向下拆分。
 
-free block 头保存 order 与双向链表 link；free-head bitmap 先验证 buddy 地址确实是空闲
-块头，再按已知节点 O(1) 摘链。分配从第一个非空 order 向下拆分，释放按异或运算计算
-伙伴并逐级合并。
-Linux 把 order、buddy 状态和链表节点放在预分配的 `struct page` 中；CongCore 的内核
-堆没有独立页元数据，所以第一版把 link 放入空闲块自身并用 bitmap 验证。算法边界
-相同，但 32-byte 最小节点造成额外内部碎片，因此表示层后来必须继续压缩。
+**和 Linux 的关系**。Linux 在 `mm/page_alloc.c` 的 `__free_one_page()` 里做
+同样的事：XOR 算伙伴、`PageBuddy` 判断是否空闲、`list_del()` O(1) 摘除。
+Linux 把 order、buddy 状态和链表节点放在预分配的 `struct page` 里；CongCore
+没有独立页元数据，所以第一版把 link 放入空闲块自身并用位图验证。算法边界
+相同，但 32-byte 最小节点造成额外内部碎片，完整冷启动约 908 秒 OOM，因此
+这个表示后来必须继续压缩。
+
+长期应像 Linux 那样 buddy 只管页/大块，小对象进 slab（按固定 size-class 管理
+的小块缓存）；不能靠扩大 heap 或吞掉分配失败掩盖问题。
 
 ## 对应提交
 
@@ -51,11 +141,27 @@ Linux 把 order、buddy 状态和链表节点放在预分配的 `struct page` �
 
 ## 对比提升
 
-相同失败磁盘状态的 300 秒 A/B 中，输出 `2012 -> 2639 bytes`（+31.16%），关键探针
-`9455 -> 586 ms`（-93.80%）；dealloc perf 占比 `31.8996% -> 0.5220%`
-（-98.36%）。但 32-byte 冷启动约 908 秒 OOM，因此算法收益成立，第一版表示不成立。
+相同失败磁盘状态的 300 秒 A/B：
+
+| 指标 | 旧 | 新 | 变化 |
+| --- | ---: | ---: | ---: |
+| 300 秒最终输出 | 2012 bytes | 2639 bytes | +31.16% |
+| 关键退化点探针延迟 | 9455 ms | 586 ms | -93.80% |
+| dealloc perf 占比 | 31.90% | 0.52% | -98.36% |
+
+但 32-byte 版本冷启动约 908 秒 OOM（`actual/user ≈ 1.45`），说明算法收益成立，
+第一版表示不成立。后续 packed 8-byte link 修复见
+`8-6-linux-packed-buddy-links.md`。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个问题跨越 allocator 表示层和分配策略两层。第一版 O(1) buddy 证明了算法方向
+（释放从线性扫描变为常数时间），但把最小块扩大到 32 bytes 是副作用。下面保留
+完整的 perf 定位、设计推导、A/B 数据、回归测试、冷启动否决证据和复现命令。
 
 ## 结论
 

@@ -3,7 +3,7 @@
 use crate::hal::Hal;
 use crate::queue::{VirtQueue, VirtQueueState};
 use crate::transport::Transport;
-use crate::volatile::{Volatile, volread};
+use crate::volatile::{volread, Volatile};
 use crate::{Error, Result};
 use bitflags::bitflags;
 use log::info;
@@ -564,8 +564,8 @@ mod tests {
     use crate::{
         hal::fake::FakeHal,
         transport::{
-            DeviceType,
             fake::{FakeTransport, QueueStatus, State},
+            DeviceType,
         },
     };
     use alloc::{sync::Arc, vec};

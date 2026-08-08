@@ -29,6 +29,7 @@ Environment:
   TEST_TIMEOUT=<seconds>    Automated test timeout (default: 300 for CAgent,
                             18000 for BuildStorm)
   FINAL_RUN_ROOT=<path>     Runtime images and logs directory
+  QEMU_EXTRA_ARGS=<args>    Additional QEMU options for diagnostics/profiling
 
 Examples:
   ARCH=riscv64 ./run.sh shell
@@ -216,12 +217,12 @@ if ! command -v debugfs >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
     fi
 fi
 
-QEMU_EXTRA_ARGS=""
+QEMU_EXTRA_ARGS="${QEMU_EXTRA_ARGS:-}"
 EXT4_REBUILD_VALUE="${EXT4_REBUILD:-0}"
 RUN_IMAGE="${FINAL_IMAGE}"
 
 if [[ "${IMAGE_MODE}" == "snapshot" ]]; then
-    QEMU_EXTRA_ARGS="-snapshot"
+    QEMU_EXTRA_ARGS="${QEMU_EXTRA_ARGS:+${QEMU_EXTRA_ARGS} }-snapshot"
 else
     WORKING_IMAGE_DIR="${RUN_ROOT}/images"
     WORKING_IMAGE="${WORKING_IMAGE_DIR}/sdcard-${ARCH}-working.img"

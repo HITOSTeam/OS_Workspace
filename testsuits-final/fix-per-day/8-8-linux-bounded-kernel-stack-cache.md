@@ -2,6 +2,189 @@
 
 ## 问题概述
 
+每个线程在内核态运行时需要一块自己的内核栈（32 KiB）。编译风暴中进程/线程不断
+创建和退出，旧实现每次都要建立页表映射 + 全机 TLB 刷新（TLB：页表缓存，缓存
+虚拟地址到物理地址的翻译结果），退出时又要删除映射 + 再刷一次。RISC-V 上远端
+TLB 刷新要走 SBI 核间调用，QEMU 还会因此丢掉已翻译的代码块缓存，非常贵。
+
+```text
+旧流程（每个短命线程都要走两遍）：
+
+fork/创建线程 → kstack_alloc() → 建映射 → 全机 TLB shootdown
+                                    ...线程执行...
+exit/退出    → KernelStack::drop() → 删映射 → 全机 TLB shootdown
+```
+
+参考 Linux 的 `CONFIG_VMAP_STACK` + `cached_stacks`，改为：退出时不删映射，
+把已映射的栈 ID 放进一个有上限的缓存；下次创建时从缓存取，清零后直接用，
+不碰页表也不刷 TLB。RISC-V 8-hart fork/thread 微基准 guest 中位耗时减少
+32.96%。
+
+## 背景知识
+
+这一节给只上过一门 OS 课的读者铺路。已经熟悉内核栈和 TLB shootdown 的可以跳过。
+
+**什么是内核栈**。每个线程有两个栈：用户态栈（在用户地址空间，程序自己用）和
+内核态栈（在内核地址空间，系统调用和中断处理时用）。内核栈一般比较小——Linux
+默认 16 KiB，本项目 release 配置 32 KiB——但每个线程必须有自己独立的一份，
+不能共用，因为中断可能嵌套、系统调用可能阻塞。
+
+```text
+线程 A:  [用户栈 A]  +  [内核栈 A, 32 KiB]
+线程 B:  [用户栈 B]  +  [内核栈 B, 32 KiB]
+线程 C:  [用户栈 C]  +  [内核栈 C, 32 KiB]
+```
+
+**频繁创建和退出线程的代价**。编译一个大项目时，rustc/cc/ld 会反复 fork 子进程、
+创建线程池里的工作线程、完成后 exit。每次 fork 或 clone 就要分配一块新的内核栈，
+每次 exit 就要释放。如果每次分配都要修改页表并通知所有 CPU 刷新 TLB，那就是：
+
+```text
+一个短命线程的开销 = 分配物理页 + 建页表映射 + 全机 TLB flush
+                   + ...执行几毫秒...
+                   + 删页表映射 + 全机 TLB flush + 释放物理页
+```
+
+TLB flush 是最贵的部分。本核刷自己的 TLB 只是一条指令（RISC-V 上是
+`sfence.vma`），但要通知其它核——RISC-V 没有硬件广播，必须走 SBI 发核间中断
+（IPI），等所有核确认才能继续。QEMU 模拟时，一次远端 flush 还会导致对应 vCPU
+的翻译块缓存失效，之后要重新翻译机器码，开销更大。
+
+**为什么用缓存来复用已映射的栈**。如果退出时不删映射，而是把这块栈留着，下一个
+线程创建时直接拿来用——省掉了建映射和删映射这两次 TLB flush。页表里仍然有这个
+栈的映射条目，物理页也还在，只是内容需要清零（防止新线程看到旧数据）。
+
+类比：就像图书馆的储物柜。旧做法是每个人走的时候把柜子拆了、新来的再装一个。
+缓存做法是：人走了柜子留着，下一个人来了打扫一下直接用，省掉安装和拆卸。
+
+**为什么缓存必须有上限**。如果无限缓存，系统跑完一次编译风暴后可能积攒几百个
+空闲栈映射，每个占 32 KiB 物理内存。这些内存别人用不了，就变成了内存泄漏。
+Linux 的做法是每个 CPU 最多缓存 2 个（`NR_CACHED_STACKS = 2`），8 核机器
+最多 16 个，即 256 KiB（Linux 16 KiB 栈）或 512 KiB（本项目 32 KiB 栈）。
+超出上限的栈在退出时正常走删映射 + flush 路径。
+
+**Linux 的具体实现**。在 `kernel/fork.c` 里：
+- `cached_stacks` 是 per-CPU 数组，每 CPU 两个 slot；
+- `alloc_thread_stack_node_from_cache()` 尝试从本 CPU 缓存取一个，命中后
+  调用 `clear_pages()` 清零再交给新线程；
+- `try_release_thread_stack_to_cache()` 在线程退出时尝试放进缓存，满了就走
+  正常的 `vfree()` 释放路径；
+- 没有启用 `CONFIG_VMAP_STACK` 时，内核栈来自线性映射的页，本来就不需要改
+  页表，所以这个优化只对 vmap stack 有意义。
+
+CongCore 的内核栈就是 vmap 到高半区的，所以和 Linux 开了 `CONFIG_VMAP_STACK`
+的情况一样，缓存映射能省掉 TLB flush。
+
+## 如何发现
+
+### 1. perf 指向反复 TLB/TB 冷启动
+
+RISC-V 长测的 QEMU perf 报告中，`helper_lookup_tb_ptr`、TB hash lookup、
+softmmu translation 和跨 vCPU mutex 路径占据主要 CPU。源码审计确认：
+
+- `os/src/task/id.rs` 的新栈映射后无条件调用 `flush_kernel_shared_tlb()`；
+- 栈析构调用 `MemorySet::remove_area()`，也会完成 shootdown；
+- RISC-V 的远端失效走 SBI RFENCE，要等其它在线 hart 确认。
+
+长测现场：
+
+```text
+testsuits-final/.tmp/final-runs/20260807-riscv-stall-repro-160/run/serial.log
+testsuits-final/.tmp/final-runs/20260807-riscv-stall-repro-160/run/host-metrics.log
+testsuits-final/.tmp/final-runs/20260807-riscv-stall-repro-160/run/probe-latency.csv
+testsuits-final/.tmp/final-runs/20260807-riscv-stall-repro-160/run/vcpu-pc-samples.txt
+```
+
+### 2. 其他工作人员的初始 A/B 给出同方向结果
+
+已有的 RISC-V `fork_thread_group_perf_smoke` A/B 各跑 11 轮，全部 `rc=0`：
+
+```text
+testsuits-final/.tmp/final-runs/20260807-riscv-kstack-cache-ab-166/baseline-retry/
+testsuits-final/.tmp/final-runs/20260807-riscv-kstack-cache-ab-166/optimized/
+```
+
+guest 中位数从 208,362 us 降到 170,929 us（-17.97%）。方向值得采用，但初稿
+缺少复用前清零和严格容量边界，所以本批审查收敛后重新独立测量。
+
+### 3. clean baseline 上的独立复测
+
+从顶层 `c948a928`、`os/` `a24b950` 建立隔离 worktree，只加入本批改动。两边
+使用相同 release 配置、官方 RISC-V 镜像、8 hart、8 GiB、独立 qcow2 overlay，
+各启动两次 QEMU，每次 11 轮，总计每边 22 轮。测试程序先建立 16 个线程的
+thread group，然后顺序执行 128 次 fork + exit + waitpid。
+
+主 A/B 原始数据：
+
+```text
+.tmp/ablate/20260808-kstack-refined-baseline-1/results.csv
+.tmp/ablate/20260808-kstack-refined-baseline-2/results.csv
+.tmp/ablate/20260808-kstack-refined-candidate-2/serial.log
+.tmp/ablate/20260808-kstack-refined-candidate-3/results.csv
+```
+
+## 怎么解决
+
+**有界保留映射和物理页**。`KSTACK_CACHE` 保存已退出任务的 stack ID，映射和
+backing frames 都留在 `KERNEL_SPACE`。RISC-V 8 hart 最多缓存 16 个（512 KiB），
+LoongArch 12 hart 最多缓存 24 个（768 KiB）。`KernelStack::drop()` 优先把 ID
+放进 cache；cache 已满或 `Vec::try_reserve()` 失败时，才走原来的删映射 +
+shootdown + ID 回收路径。
+
+**复用前清零，且不持全局锁触页**。`kstack_alloc()` 命中 cache 后取得该 ID
+的唯一所有权，释放 cache mutex，再清零整个 32 KiB 映射。清零与 Linux 的
+`clear_pages()` 目的相同：防止新任务看到旧栈数据或 stale pointer。清零后
+直接返回，不修改页表、不发本地 fence、不发远端 SBI RFENCE。
+
+**和 Linux 的对比**。Linux 用 per-CPU slot，本项目用总预算 `MAX_HARTS * 2`
+的共享小缓存，容量在机器总量上相同。全局锁只包围一次 `Vec::pop()` 或
+`Vec::push()`，清零在锁外；如果后续 perf 证明这把锁成为热点，再改成
+per-hart slot。
+
+## 对应提交
+
+| 项目 | 值 |
+| --- | --- |
+| 顶层分支 / 基线 | `dev_final` / `c948a92870b83a2df4fe483f6fc3f1cdea16e65c` |
+| `os/` 基线 | `a24b950e6013e6a3d6da26ddb72b676cccaf3052` |
+| `os/` 修复 | `da190f90640edc08de48f628da16f259fc5ca077`（`task: cache mapped kernel stacks`） |
+| 顶层集成 | `bbe72850a0194001142b5c0f6204cf712ff259c2`（`task: integrate mapped kernel stack cache`） |
+
+## 对比提升
+
+| 指标 | 基线（n=22） | 候选（n=22） | 改善 |
+| --- | ---: | ---: | ---: |
+| guest elapsed 中位数 | 201,315 us | 134,971.5 us | **-32.96%** |
+| 等价 guest 吞吐 | 1.00x | 1.4915x | **+49.15%** |
+| host elapsed 中位数 | 290 ms | 209 ms | **-27.93%** |
+| 成功轮次 | 22/22 | 22/22 | 无回归 |
+
+`/proc/perf` 诊断内核确认 128 次循环全部走缓存复用，steady-state 没有新的
+map/unmap：
+
+```text
+tlb_kstack_reuses: 128
+tlb_kstack_maps: 20
+tlb_kstack_unmaps: 2
+```
+
+当前不能声称完整 RISC-V BuildStorm 已因此通过。微基准百分比不能外推到整轮。
+240 秒 `tg-xtask` gate 测试候选比基线 Cargo 输出多 22%、deps 多 7.4%，确认
+没有回退，但也说明内核栈缓存不是 RISC-V 整体慢数倍的唯一根因。
+
+以下是 AI 的具体分析，作为存档。
+
+---
+
+## 历史分析背景
+
+这个问题涉及线程生命周期管理、TLB shootdown 代价和 QEMU TCG 翻译缓存失效三层。
+BuildStorm 的大量短命进程/线程放大了每次内核栈创建/销毁的 TLB flush 开销。下面
+保留完整的 perf 证据链、Linux 对照、clean baseline A/B 数据、gate 测试和复现命令。
+
+
+## 问题概述
+
 RISC-V BuildStorm 的依赖图收窄到单个 crate 后，host CPU 会从约 7.5 核逐步降到
 约 1 核。串口停滞期间 guest shell、uptime 探针和 QEMU 都仍然可响应，因此现场不是
 死锁；真正的问题之一是编译风暴的进程/线程 churn 让内核反复创建和销毁高半区内核栈

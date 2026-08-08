@@ -1,4 +1,99 @@
-# 8-8 RISC-V Linux 风格新建可执行 PTE 刷新
+# 8-8 RISC-V 新建可执行页只刷新本地地址转换
+
+## 问题概述
+
+RISC-V 为新建的可执行用户页安装有效 PTE 时，旧代码会让所有相关核刷新 TLB。
+这个地址以前没有有效映射，远端核没有旧地址转换可继续使用。真正需要跨核处理的是
+指令缓存。旧代码把两件事绑在同一个事务里，BuildStorm 每次可执行页缺页都要等待
+远端 TLB 刷新。修复后，TLB 只刷本核，指令缓存仍按原有规则同步。
+
+## 背景知识
+
+TLB 就是页表的缓存。页表像放在档案室的地址簿，TLB（Translation Lookaside
+Buffer，地址转换旁路缓存）像 CPU 手边的便签。CPU 先查便签，没找到才查页表。
+
+Sv39 是 RISC-V 的 39 位虚拟地址分页方案。一次转换最多查三级页表：
+
+```text
+虚拟地址低 39 位
++----------+----------+----------+-------------+
+| VPN[2]   | VPN[1]   | VPN[0]   | page offset |
+| 9 bit    | 9 bit    | 9 bit    | 12 bit      |
++-----+----+-----+----+-----+----+-------------+
+      |          |          |
+      v          v          v
+   一级页表 -> 二级页表 -> 三级页表 -> 4 KiB 物理页
+```
+
+VPN（Virtual Page Number，虚拟页号）是每级页表的索引。查询最后得到 PTE
+（Page Table Entry，页表项）。V 位表示有效。R、W、X 分别允许读、写、执行，
+U 表示用户态可访问，A、D 记录页面是否被访问和写入。
+
+CPU 也可能缓存“V=0，没有映射”这个结果。内核写好 PTE 后，用 `sfence.vma`
+（Supervisor Virtual Memory Fence，监管态虚拟内存屏障）清理地址转换缓存。
+常用的四种形式是：
+
+```text
+sfence.vma x0,   x0     刷本核全部地址、全部 ASID
+sfence.vma addr, x0     刷本核某个虚拟地址
+sfence.vma x0,   asid   刷本核某个 ASID 的全部地址
+sfence.vma addr, asid   刷本核某个 ASID 的某个地址
+```
+
+ASID（Address Space Identifier，地址空间标识符）是 TLB 项上的进程标签。
+有了它，不同进程的缓存可以同时留在 TLB 中。切换进程时不必每次全刷；只要加载
+新进程的 ASID 即可。编号复用时还要靠代际或一次完整刷新隔开新旧缓存。
+
+`sfence.vma` 只影响当前 hart（硬件线程，可近似看作一个 CPU 核）。RISC-V 没有
+硬件广播 TLB 刷新的指令。内核若要通知其他核，需要调用 SBI（Supervisor Binary
+Interface，监管态二进制接口）的 remote fence（远程屏障）服务。固件发送 IPI
+（Inter-Processor Interrupt，核间中断），目标核执行屏障并确认，发起核还要等待。
+
+无效 PTE 变成有效 PTE 时，远端核没有旧物理页和旧权限可误用，所以只刷发生缺页的
+本核。远端核若缓存了无效结果，最多再缺页一次，再自行刷新。有效 PTE 变成无效，
+或更换物理页、收紧权限时，旧转换可能继续工作，必须通知所有可能使用它的核。
+
+可执行页还要管 I-cache（Instruction Cache，指令缓存）。CPU 通过数据访问写入代码后，
+取指端不一定立刻看到新字节。`fence.i`（Fence Instruction，取指屏障）让本核重新
+取指；其他活跃核需要远程取指屏障，暂未运行该地址空间的核可以记录为待刷新。
+因此“新 PTE 只刷本地 TLB”不等于“省略 I-cache 同步”。两套缓存必须分别处理。
+
+## 如何发现
+
+先否决了 IRQ SATP guard 候选：冷读只快约 0.7%，300 秒编译反而后退。随后做 120 秒
+同源 A/B。候选完成更多依赖时，`tlb_remote_ipis` 从 1,105,800 降到 135,633，等待
+周期从 364,526,297 降到 39,202,585，最终定位到可执行新 PTE 的缺页分支。
+
+## 怎么解决
+
+发布带 X 权限的新 PTE 前，仍调用 `mark_icache_stale()` 完成跨核或延后取指同步。
+PTE 发布后调用 `update_mmu_cache_for_new_pte()`，只在缺页核执行
+`sfence.vma addr, asid`。替换、降权和解除映射仍走 SBI 远程 TLB 刷新。
+
+## 对应提交
+
+`os/` 基线是 `9f06a1d882ded0624188e5bcaf8b325bcb263d45`。修复提交是 `14bd76d`
+（`riscv64: avoid remote shootdown for executable new PTEs`）。顶层集成由本文所在提交
+完成。Linux 对照和生产内核 SHA-256 见历史记录。
+
+## 对比提升
+
+120 秒精确 A/B 中，依赖数从 23 增至 31，输出从 989 增至 1,245 bytes；远程 IPI 和
+等待周期分别下降 87.7% 和 89.2%。300 秒生产 gate 中，依赖数从 58 增至 68，输出从
+2,144 增至 2,527 bytes。7/7 项 RISC-V 回归通过。该轮没有完成完整 BuildStorm，
+也没有做 LoongArch64 运行时回归；80.3 MiB 的 peak RSS 增量不能仅按进度差解释掉。
+
+以下是 AI 的具体分析，作为存档。
+
+---
+
+## 历史分析背景
+
+这项修改同时涉及缺页处理、RISC-V TLB 维护、跨 hart I-cache 同步、SBI 远端 fence 和
+QEMU 性能分析，因此很难只改一处就证明安全。删错 fence 可能留下旧地址转换或旧指令，
+保留多余 fence 又会让 BuildStorm 为大量跨 hart 确认付费。调查因此分别验证页表更新、
+取指一致性和宿主 TCG 热点。
+
 
 ## 问题概述
 

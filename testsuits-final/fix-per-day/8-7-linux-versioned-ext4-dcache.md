@@ -1,4 +1,191 @@
-# 8-7 Linux 风格 ext4 可信 positive dcache
+# 8-7 用目录版本号让 ext4 dcache 命中时不再重复查磁盘
+
+## 问题概述
+
+有界 positive dcache 已经堵住了 OOM，但 ext4 每次 dcache 命中后仍然调用后端
+`Inode::find()` 重新在磁盘目录块里查一遍。BuildStorm run 116 的计数器：
+
+```text
+dcache_lookups          11,516,905
+dcache_backend_lookups  11,516,905   ← 100% 都去了后端
+dcache_hits             10,875,096
+```
+
+命中率 94.4%，但每次命中都白白做了一次 ext4 目录块搜索。根因是 ext4 返回
+`DentryCachePolicy::Revalidate`——把本地磁盘当成远程网络文件系统来对待。
+
+直接改成 `Stable`（无条件信任缓存）又不安全：当前内核里 object-VFS 和 legacy
+syscall adapter 并存，legacy 路径会绕过 dcache 直接调 ext4 的 `create`/`unlink`/
+`rename`，漏掉任何一处就会让 dcache 永久返回已删除的旧文件。
+
+解决办法：给每个目录加一个 generation（版本号），任何 namespace 变更先递增
+generation 再做修改。查缓存时比对 generation——没变就信任，变了就重新验证一次。
+
+## 背景知识
+
+**dentry 是什么**。操作系统课讲的"目录项缓存"就是 dentry cache（dcache）。
+打开 `/home/alice/code/main.c` 时，内核要逐级在磁盘上查目录：
+
+```text
+/          → 找 "home" 的 inode 号
+/home      → 找 "alice" 的 inode 号
+/home/alice → 找 "code" 的 inode 号
+...依此类推
+```
+
+每一级都要读磁盘目录块、遍历目录项。如果把"名字→inode"的结果缓存在内存里，
+下次再走同一路径就不用重复读盘了——这就是 dcache。缓存的每一条记录叫一个
+dentry（directory entry，目录项缓存条目）。
+
+**路径查找为什么开销大**。一条路径有 N 级目录就要查 N 次。每次查找要：
+1. 取得目录的 inode；
+2. 读目录数据块（可能不在缓存里，要走磁盘 I/O）；
+3. 在数据块里线性或 hash 查找目标名字。
+
+如果 N=5 且没有 dcache，一次 `stat()` 就要做 5 次目录搜索。BuildStorm 编译
+几千个文件，每个文件的每次 open/stat/exec 都走这条路——百万次量级。
+
+**Revalidate vs. Stable 策略**。网络文件系统（如 NFS）的服务端随时可能被别人
+改动，所以客户端每次命中 dcache 都要问一句"这条还有效吗？"——这就是
+Revalidate。但本地磁盘上的 ext4 只有本机内核自己会改，理论上不需要每次都去
+问。Linux 的做法是：本地 ext4 根本不注册 `d_revalidate` 回调，VFS 看到没有
+回调就直接信任 dcache 命中结果。
+
+**为什么不能无条件信任（直接 Stable）**。本项目还有一条 legacy adapter 路径，
+它绕过 VFS 直接调用 ext4 底层函数做 create/unlink/rename。如果 dcache 无条件
+信任，legacy 路径删了文件但 dcache 不知道，之后 `stat` 会继续返回已删除文件的
+信息——这是严重的正确性 bug。
+
+**版本号（generation）怎么解决这个问题**。思路很简单：
+
+```text
+目录 /home/alice/  generation = 5
+
+  查 "main.c" → dcache 记录：generation=5, inode=42
+  再查 "main.c" → generation 仍是 5 → 直接返回 inode 42，不碰磁盘
+
+  执行 unlink("main.c")
+  → 先把 generation 递增到 6，再删除磁盘目录项
+
+  再查 "main.c" → dcache 记录的 generation=5 ≠ 当前 6
+  → 不信任缓存，去磁盘查一次
+  → 磁盘说不存在 → 删掉缓存条目，返回 ENOENT
+```
+
+递增发生在修改之前，所以不会出现"已经改了但 generation 还没变"的窗口。
+失败的操作可能多递增一次，只造成一次多余的重新验证，不影响正确性。
+
+**Linux 的做法对比**。Linux 不用 generation 判断单条 dentry 是否有效，而是
+要求所有目录变更都通过 VFS 的 dentry 操作（`d_instantiate`、`d_delete`、
+`d_move`）来直接操作 dcache。因为 Linux 没有"legacy 绕过 VFS"的问题——所有
+路径都经过 VFS。本项目的 generation 是迁移过渡方案：等 legacy adapter 全部
+删除后，就可以像 Linux 一样切到 Stable + 精确失效。
+
+Linux 也有 `i_version`（inode 版本号），但它主要给 NFS 和 `statx` 用来检测
+文件内容/属性是否变过，不是用来做本地 dcache 验证的。本项目的目录 generation
+更接近 Linux dcache 里的 `d_seq`（seqcount），用于检测并发修改。
+
+## 如何发现
+
+对 BuildStorm run 116 解析 `/proc/perf` 计数器：`dcache_backend_lookups`
+等于 `dcache_lookups`，证明 100% 的缓存命中仍进入 ext4 后端。每次路径分量
+平均触发 8.75 次 ext4 block-cache lookup。设备忙碌时间只占 10.8%，浪费主要
+在 CPU 侧重复目录解析和 block-cache 锁竞争。
+
+源码确认 `os/src/fs/ext4/mod.rs` 返回 `Revalidate`。
+
+严格 A/B 对比——两个内核唯一区别是 ext4 policy：
+
+```text
+Revalidate kernel sha256:
+38d2a0b8c32bee6a6d0c76cbf69e4d376781926ef0cd842a87d23ca24840f7af
+
+Versioned kernel sha256:
+437d79c88198c5fea3191517cead678939d6888c8f3c1137701c45082d065605
+
+/user image sha256:
+588f8ef482b2a9018e7c0e2dd1b0500ecdf13ac7ff955b1c401a9110ff8239af
+```
+
+LoongArch64、12 hart、8 GiB、官方只读 raw 镜像 + QEMU `-snapshot`。21 轮
+`vfs_stat_smp_perf_smoke`（每轮 12 worker × 1,024 次 `newfstatat()`），首轮
+warm-up 不计入中位数。
+
+原始证据目录：
+
+```text
+testsuits-final/.tmp/final-runs/20260807-dcache-version-revalidate-debugperf-130/
+testsuits-final/.tmp/final-runs/20260807-dcache-version-versioned-debugperf-131/
+```
+
+## 怎么解决
+
+**目录版本号存储**：在稳定的 `(device_id, inode_num)` 锁表上增加
+`namespace_generation: AtomicUsize`。ext4 可能为同一磁盘 inode 构造多个 Rust
+对象，所以版本号绑定磁盘身份而不是对象地址。写侧先持 parent 写锁，再
+Release `fetch_add` 发布新 generation，最后做磁盘修改。
+
+**dcache 增加 Versioned 策略**：
+
+```rust
+enum DentryCachePolicy {
+    Revalidate,         // 每次都问后端
+    Stable,             // 无条件信任
+    Versioned(usize),   // generation 没变就信任
+}
+```
+
+缓存条目记录插入时的 parent generation。命中时比对：相同则直接返回；不同则
+调一次后端 lookup，根据结果更新或删除缓存条目。
+
+**覆盖全部 namespace mutation**：object-VFS 和 legacy adapter 的 create、
+mkdir、symlink、link、unlink、rmdir、rename、mknod、O_CREAT、O_TMPFILE 等
+全部在写锁内先调 `ext4_begin_namespace_mutation()` 递增 generation。
+
+**正确性测试**：`path_cache_invalidation_smoke` 验证 rename/unlink 后旧名字
+立即返回 ENOENT、新名字保持同一 inode。
+
+## 对应提交
+
+- `os/` 修复提交：`960fd0f`（`vfs: trust versioned ext4 dentries`）。
+- 顶层基线：`1b919700f0eb2e49c7f0e5043549f5d5cc716cde`。
+- `os/` 基线：`ff9c87df468a025dddc087bad28937032a22c80b`。
+
+## 对比提升
+
+21 轮 stat 微基准，丢弃首轮后 20 轮中位数：
+
+| 指标 | Revalidate | Versioned | 改善 |
+| --- | ---: | ---: | ---: |
+| backend lookups | 516,852 | 30 | **-99.994%** |
+| guest elapsed | 132,637 us | 114,284 us | **-13.84%** |
+| host wall time | 169,594 us | 152,455 us | **-10.11%** |
+| host cycles | 78.09 G | 65.70 G | **-15.86%** |
+| host instructions | 220.31 G | 190.91 G | **-13.35%** |
+
+block read 两边均为 29 次（相同），证明提升来自删除 CPU 侧重复目录搜索，不是
+少读盘。剩余 ext4 cache hit 来自 stat 读 inode metadata，不是 dcache 未生效。
+
+正确性回归 6/6 通过：`vfs_stat_smp_perf_smoke`、`path_cache_invalidation_smoke`、
+`open_unlink_lifetime_smoke`、`rename_over_mmap_lifetime_smoke`、
+`vfs_pathwalk_smoke`、`unix_vfs_path_smoke`。
+
+本批没有重跑完整 BuildStorm（约 1 小时）。下次 BuildStorm 应确认
+`dcache_backend_lookups / dcache_lookups` 比例降到接近 cold lookup + mutation
+后首次 lookup 的规模。
+
+以下是 AI 的具体分析，作为存档。
+
+---
+
+## 历史分析背景
+
+这个优化是 dcache 系列的第三步：先堵 OOM（有界 dcache + slab），再限制回收延迟
+（CLOCK 预算），最后让命中真正跳过后端（本文的 generation）。问题本身不难理解，
+但修改需要覆盖 object-VFS 和 legacy adapter 的所有 namespace mutation 路径，
+漏掉任何一处都会导致 stale positive——所以保留了完整的 mutation 覆盖清单和
+Linux 对照分析。
+
 
 ## 问题概述
 

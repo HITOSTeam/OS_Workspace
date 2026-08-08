@@ -1,35 +1,100 @@
-# 8-3 BuildStorm wait、inode 生命周期与文件缓存并发修复
+# 8-3 BuildStorm 子进程 wait 防丢唤醒与 inode/文件页并发扩展性修复
 
 ## 问题概述
 
-`tg-xtask` 前置构建依次暴露三个可复现问题：Cargo 使用进程文件描述符（pidfd）等待
-子进程时可能错过退出唤醒；每次 unlink 都扫描所有进程和文件描述符判断 inode 是否
-仍被打开；普通文件页和映射反向索引又由全局树及全进程扫描维护。前者会永久睡眠，
-后两者会随进程数、文件描述符数和映射数增长而放大全局锁竞争。
+`tg-xtask` 的停顿由一个正确性竞态和两个文件系统全局扫描共同造成：
+
+```text
+Cargo wait 子进程  --丢失唤醒--> 永久睡眠
+unlink             --扫描全局--> 进程数 × fd 数
+write / truncate   --扫描全局--> 进程数 × 映射数
+```
+
+前者让构建卡死，后两者在并行构建中放大全局锁竞争。
+
+## 背景知识
+
+先把父进程想成餐馆领班，子进程像被派去完成订单的厨师。
+厨师做完后不能只转身离开：领班还要知道订单是否成功、为何失败，
+并注销这名厨师占用的登记项。领班取走结果，整项工作才真正收尾。
+
+在 Unix/Linux 中，父进程通过 `wait()` 或 `waitpid()` 等待子进程状态变化。
+`wait()` 可以领取任意一个符合条件的子进程结果；`waitpid()` 还能按 PID 或进程组筛选，
+并可用 `WNOHANG` 表示“现在没有结果就立即返回”。
+
+这种“领取结果并注销登记项”叫 reap（收割，也就是回收子进程）。
+成功返回时，父进程至少得到子进程 PID 和编码后的状态，据此判断：
+
+- 子进程是否正常退出，以及退出码；
+- 是否被信号终止，以及对应信号；
+- 请求相关选项时，是否停止或继续执行。
+
+`wait4()` 等接口还可返回该子进程的资源使用统计。完成 reap 后，
+内核才能释放仅为保存退出结果而留下的最后一小部分进程记录。
+
+可以把退出结果看成寄存在前台的包裹：送件人已经离开，
+但包裹和领取凭证必须保留到收件人来取；否则收件人永远不知道结果。
+
+这个“人已退出、只留下结果记录”的状态叫 zombie（僵尸进程）。
+僵尸进程不会继续运行，也不占用普通用户内存，但仍占一个内核进程表项，
+其中保存 PID、退出状态和少量统计信息。父进程 wait 并 reap 后，它才彻底消失。
+因此僵尸状态不是多余残留，而是父子进程异步收尾时必需的“结果邮箱”。
+
+再把通知想成门铃：门铃只是在说“前台可能有你的包裹”，它不是包裹本身。
+即使门铃响过，收件人仍要到前台核对并领取；多件包裹也可能只响一次。
+
+子进程退出或发生相关状态变化时，内核通常向父进程发送 `SIGCHLD`
+（子进程状态变化信号）。它负责提示“请来检查”，而 `wait()`/`waitpid()`
+才负责查找并取走具体结果。因此稳健的处理方式通常是在收到通知后循环调用
+`waitpid(..., WNOHANG)`，直到当前没有更多可回收子进程。
+
+还有一种像“看完空柜台、刚戴上耳塞，快递员就送到”的竞态：
+检查结果与真正睡眠不是同一个原子动作，通知恰好落在两者之间。
+
+这叫 lost wakeup（丢失唤醒），经典时间线如下：
+
+```text
+时间      父进程 / waiter                   子进程 / waker
+T0        检查：没有已退出子进程
+T1                                           退出并保存状态
+T2                                           发送 SIGCHLD，发出唤醒
+T3        把自己标记为睡眠并调度出去
+T4        永久等待  <----------------------- 唤醒已经过去
+```
+
+修复的核心不是“多发一次信号”，而是建立 prepare-to-wait（准备等待）协议：
+先让唤醒者能够看见等待者，再做最后一次条件检查，最后才允许任务睡眠。
+这样，退出发生在任何时刻，要么被最后检查发现，要么能唤醒已登记的等待者。
+
+最后，把多核机器想成有多个独立工位的办公室：一名员工等电话时离开自己的工位，
+不会锁住整栋办公室，其他工位仍可接单、查档案和搬运文件。
+
+同理，父进程阻塞在 `wait()` 只会阻塞调用它的那个任务。
+调度器会让出该任务所在 CPU 的执行机会；其他 CPU、其他可运行任务，
+以及子进程仍可独立执行 `open()`、`read()`、`write()`、`unlink()` 等文件操作：
+
+```text
+CPU 0: 父进程 -> wait() -> 睡眠 -> 运行其他就绪任务
+CPU 1: 子进程/工作线程 -> open/write/unlink -> 继续推进
+CPU 2: 其他任务 -> 文件系统或计算工作 -> 继续推进
+```
+
+只有这些任务随后竞争同一把文件系统锁或同一资源时，才会相互等待。
+因此“父进程正在 wait”不能解释全机文件 I/O 停顿；若其他核也不推进，
+应继续排查全局锁、全局扫描、锁顺序或另一处丢失唤醒。
 
 ## 如何发现
 
-单任务复现命令：
+先用单任务构建稳定复现：
 
 ```sh
 cd /work/tgoskits
 timeout 300 cargo build -p tg-xtask -j1
 ```
 
-Cargo 的 rustc child 已成为 zombie，但 Cargo 没有 reap；手工发送 `SIGCHLD` 后立即
-继续，证明条件已成立但唤醒丢失。随后 QEMU 处理器现场解析到
-`defer_unlink_open_file()` 和 `has_open_inode_view()`。关键日志：
-
-```text
-.tmp/final-runs/20260803-current-tg-xtask-focus/metadata.md
-.tmp/final-runs/20260803-current-tg-xtask-focus/serial-j1.log
-.tmp/final-runs/20260803-152507-loongarch64-shell/serial.log
-.tmp/final-runs/20260803-162551-loongarch64-shell/serial.log
-```
-
-旧 unlink 路径是 `PID2PCB -> files_struct -> every fd`，复杂度为进程数乘每进程文件
-描述符数。源码继续显示普通文件 write/resize 会遍历全部进程的 `mm`，即使它们从未
-映射该 inode。复核命令可使用：
+卡住时 rustc 子进程已经成为僵尸，但 Cargo 没有 reap；手工发送 `SIGCHLD` 后构建立即
+继续，锁定 wait 的丢失唤醒。QEMU 现场与源码检索又定位到 unlink 的全局 fd 扫描，
+以及 write/resize 对全部进程 `mm` 的扫描：
 
 ```sh
 rg -n 'defer_unlink_open_file|has_open_inode_view|PID2PCB' os/src
@@ -38,48 +103,31 @@ rg -n 'FILE_PAGE_MAPPINGS|FilePageCacheMapping|WeakMmRef' os/src/mm
 
 ## 怎么解决
 
-`PreparedWait` 把条件锁、任务状态和调度提交组成一次性协议：
-
-```text
-条件锁内注册 waiter
-  -> 关闭本地中断
-  -> transition lock 下 Running -> Blocked
-  -> 完成最后一次条件检查
-  -> 有 wakeup_pending 则恢复 Running，否则提交切换
-```
-
-因此唤醒者一定看到 wait entry 或 waiter 的最后检查，不再存在 check-to-sleep 缝隙。
-`wait4()/waitid()`、vfork、内核等待队列、`ppoll()`、`epoll_wait()` 和无文件描述符的
-无限 `pselect()` 都迁移到同一协议。
-
-inode 生命周期表以 `(device_id, inode_num)` 为键，记录打开描述数、unlink reservation
-和延迟 cleanup。计数对象是 `OSInode`（打开文件描述），不是 fd 槽：dup、fork、
-SCM_RIGHTS 和 epoll 引用都自然共享同一个 `Arc<File>`。unlink 先取得 reservation，
-锁外执行 ext4 rename，再提交 cleanup；最后 close 不会落在“决定延迟但尚未登记”的
-窗口。
-
-文件页缓存改成每 inode 一个 `FilePageCacheMapping`，mapping 内保存页树和
-`Vec<WeakMmRef>`。write/truncate 只遍历实际映射该 inode 的内存空间，并在升级弱引用
-后过滤对应虚拟内存区域。Linux 的 `prepare_to_wait()`、`struct file/__fput()` 和
-`address_space::{i_pages,i_mmap}` 提供相同边界。本项目没有 Linux 的 XArray、虚拟
-内存区域区间树或读-复制-更新无锁遍历，因此使用短锁和弱引用实现最小可验证版本。
+- 用 `PreparedWait` 原子衔接“登记等待、最终复查、进入睡眠”，并统一迁移
+  `wait4()/waitid()`、vfork、等待队列、poll、epoll 与 pselect 路径。
+- 用 inode 级打开描述计数和 unlink reservation 取代全进程 fd 扫描，封闭最后一次
+  close 与延迟清理登记之间的竞态。
+- 为每个 inode 建立独立页树和弱 `mm` 反向索引，使 write/truncate 只访问真正映射
+  该文件的地址空间，不再扫描所有进程。
 
 ## 对应提交
 
-- `491ed4c sched: make condition waits wakeup-atomic`。
-- `1d3b44b mm: shard file mappings by inode`。
-- `04bf218 fs: track open inode lifetimes locally`。
-- 顶层回归与集成：`b3b4cce3`、`083fa837`。
-- 文档提交：`1c8f6670bf6767750bd893772f6c0eacc1a1e56a`。
+- 核心修复：`491ed4c`、`1d3b44b`、`04bf218`。
+- 回归与集成：`b3b4cce3`、`083fa837`；文档：`1c8f6670bf6767750bd893772f6c0eacc1a1e56a`。
 
 ## 对比提升
 
-wait/pidfd 256 次、poll/epoll 128 次、open-unlinked 6×32 次及文件映射回归全部通过。
-旧并行构建约 11 个 crate 后停住；修复后的 1800 秒有限窗口记录 96 个不同
-`Compiling` 阶段并越过旧停点，但命令仍未返回，不能换算成端到端加速，也不能标记
-`tg-xtask` 或完整 BuildStorm 通过。
+并发回归全部通过；并行构建从约 11 个 crate 后停住推进到 96 个不同 `Compiling`
+阶段。1800 秒内仍未完成，因此不宣称端到端加速或 BuildStorm 已通过。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+本批次涉及等待/唤醒原语、inode 引用计数和文件页缓存三个子系统，修改量大且与调度器和
+内存管理交叉。下面保留完整的设计推导、Linux 对照、回归测试命令和 tg-xtask 进度记录。
 
 ## 1. 结论
 

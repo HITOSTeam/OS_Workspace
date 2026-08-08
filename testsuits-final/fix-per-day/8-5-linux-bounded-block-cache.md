@@ -1,20 +1,91 @@
-# 8-5 Linux 式有界 block cache 回收与 BuildStorm 进度验证
+# 8-5 ext4 块缓存容量过大，回收算法改为有界 clean-first
 
 ## 问题概述
 
-ext4 全局 block cache 同时存在树索引、命中即追加 LRU 记录、锁内 I/O 和容量过大等
-问题。BuildStorm 并未卡在块请求上，却在 cache 元数据维护和集中回收中消耗了大量
-时间；简单扩大 cache 反而降低了真实编译进度。
+ext4 全局块缓存用 `BTreeMap` 做索引，每次命中都往 LRU 队列追加新记录，队列膨胀后
+还会在持锁状态下遍历整个 map 重建。缓存设得越大（31744 块），管理开销越重，
+BuildStorm 编译进度反而更慢。
+
+```text
+任务 A 读一个块
+       ↓
+  BLOCK_CACHE_MANAGER.lock()
+       ↓
+  BTreeMap 查找 O(log n)        ← n 越大越慢
+       ↓
+  命中 → 追加 LRU 记录          ← 热块被反复追加
+       ↓
+  队列超过 8× 容量 → 持锁重建全 map
+       ↓
+  其他任务全部等这把锁
+```
+
+问题不在磁盘 I/O 本身（hit rate 98%），而在缓存元数据管理的开销拖慢了前台编译。
+
+## 背景知识
+
+**块缓存是什么**。磁盘读写以扇区（通常 512 B）为最小单位，延迟是内存的几万倍。
+操作系统在内存里留一块区域，把最近读过的磁盘块存起来，下次要同一块就直接给内存里
+的副本——这就是块缓存（block cache）。课上讲的「buffer cache」就是它。
+
+可以类比成一个书桌：
+
+```text
+磁盘 = 图书馆（远，取一趟要好几分钟）
+块缓存 = 书桌上的几十本书（近，翻一下就有）
+容量上限 = 书桌面积有限，满了必须放回去一些
+```
+
+**为什么要限制容量**。内存总量有限，而且本项目的块缓存会为每个 4 KiB 块额外保存
+一份数据副本。如果不设上限，缓存会把内核堆吃光。但上限也不能太大——当前实现只有
+一把全局锁保护所有缓存项，条目越多，锁内做的事越多，别人等得越久。
+
+**LRU 是什么**。Least Recently Used，最近最少使用。把所有缓存块按"最后一次被访问
+的时间"排序，需要腾位置时先丢掉最久没人碰的那个。实现上通常是一个双向链表：每次
+命中把节点移到链表尾部，淘汰时从头部取。
+
+**LRU 和哈希表怎么配合**。哈希表负责"给一个块号，O(1) 找到对应缓存项"；LRU 链表
+负责"决定容量满时该丢谁"。两者分工：
+
+```text
+                       哈希表
+  block_id ──hash──► ┌────────┐
+                     │ slot 0 │──► CacheEntry ◄──── LRU 链表节点
+                     │ slot 1 │                     (最近访问的在尾部)
+                     │  ...   │
+                     └────────┘
+```
+
+旧实现用 `BTreeMap`（红黑树），查找是 O(log n)；改成 `HashMap` 后近似 O(1)。
+
+**dirty 和 writeback**。写入时不会立刻把数据落盘，而是先改内存副本并标记为
+dirty（脏）。等到淘汰或者 `sync` 时才真正写回磁盘，这个过程叫 writeback（回写）。
+好处是多次小写可以合并成一次磁盘 I/O；代价是回收脏块要先等一次磁盘写完成。
+所以回收时优先选 clean（干净）的块——它们可以直接丢弃，不花磁盘时间。
+
+**为什么旧实现的 LRU 会膨胀**。旧代码每次命中都往队列追加一条新记录（stamp），
+而不是把已有记录移到队尾。热块被反复追加，队列长度远超缓存容量。当队列超过容量的
+8 倍时，代码会在持锁状态下遍历整个 `BTreeMap` 重建队列——这期间别的任务连查缓存
+都进不去。
+
+**Linux 怎么做**。Linux 的 page cache 用 XArray（一种 radix tree）做索引，查找
+接近 O(1)；每个 folio（页面组）只有一个 `referenced` 标记位，命中时翻一下这个 bit
+就行，不追加队列记录。回收时一轮最多扫描 `SWAP_CLUSTER_MAX`（32）个候选，扫完就
+放锁，不会一直占着。这三个原则——常数时间查找、轻量访问标记、有界批量回收——正是
+本文要复制到 CongCore 的东西。
+
+**perf 是什么**。一个采样式性能分析器。它让 CPU 的硬件计数器每隔固定周期产生一次
+中断，在中断里记录当前的程序计数器（PC）和调用栈。跑一段时间后统计哪个地址出现
+次数最多，就知道时间花在哪。配合 QEMU `-perfmap` 可以把 guest 内核地址映射回函数
+名。注意：采样式工具只给统计分布，不给精确调用次数，能指出热点但不能证明因果。
 
 ## 如何发现
 
-先用串口、host 资源日志和 `/proc/perf` 排除了 host OOM、swap 抖动及块请求不完成；
-再用 `perf record` 与 QEMU `-perfmap` 定位候选热点，并以不带 `-perfmap` 的固定 300 秒
-BuildStorm A/B 决定是否保留修改。设计参考 Linux 的 `mm/filemap.c`、
-`folio_mark_accessed()`、folio batch、`SWAP_CLUSTER_MAX` 和 `mm/vmscan.c` 中的
-索引、访问标记、批量回收及 clean-first 原则。
+1. 用串口、host 资源日志和 `/proc/perf` 排除了 host OOM、swap 抖动和块请求不完成；
+2. 用 `perf record -F 99 -e cycles:u -g` 配合 QEMU `-perfmap` 定位候选热点；
+3. 用不带 `-perfmap` 的固定 300 秒 BuildStorm A/B 决定是否保留修改。
 
-代表性原始数据和复现命令：
+代表性原始数据：
 
 ```text
 testsuits-final/.tmp/final-runs/20260805-tg-xtask-profile-adaptive-cache-1/
@@ -22,6 +93,8 @@ testsuits-final/.tmp/final-runs/20260806-tg-xtask-profile-coalesced-lru-short-1/
 testsuits-final/.tmp/final-runs/20260805-tg-xtask-responsive-coalesced-lru-1/
 testsuits-final/.tmp/final-runs/20260806-tg-xtask-responsive-coalesced-lru-2k-1/
 ```
+
+复现命令：
 
 ```sh
 QEMU_EXTRA_ARGS=-perfmap ARCH=loongarch64 IMAGE_MODE=copy \
@@ -32,19 +105,30 @@ timeout 300 cargo build -p tg-xtask 2>&1 | tee /work/tg-xtask-responsive.out
 ```
 
 每个运行目录同时保存 `serial.log`、`host-metrics.log`、`probe-latency.csv` 和块缓存
-计数，便于区分“仍在做输入输出”与“卡在管理器锁”。
+计数，便于区分"仍在做 I/O"与"卡在管理器锁"。
 
 ## 怎么解决
 
-将索引改为 `HashMap`，保留 miss 的 single-flight；把读取、预读和回写移到 manager
-lock 外；命中只设置一次待晋升状态；每轮最多扫描 64 个候选并优先回收 clean entry。
-容量按当前单 manager、三层缓存的实际代价保守限制，8 GiB LoongArch 使用 2048 块。
-更完整的长期方案是像 Linux 一样统一 page cache，并引入分片索引、folio/LRU batch 和
-全局内存压力驱动的 shrinker，而不是继续放大全局 ext4 block cache。
+**索引改 HashMap**：`BTreeMap` 换成 `hashbrown::HashMap`，查找从 O(log n) 变为
+近似 O(1)。key 是 `(device_id, block_id)`，用确定性整数 mixer，不引入随机种子。
 
-代码上的关键边界是 manager 锁内只选择候选并取得票据，设备输入输出在锁外执行，
-最后重新加锁核对 stamp、指针身份和引用数后提交；这对应 Linux 在 folio/LRU 锁外
-进行阻塞输入输出的原则。
+**命中只标记一次待晋升**：热块第一次命中后设置 `promotion_pending`；后续命中不再
+追加队列记录，直到回收器扫描到它才清除标记。这样队列长度不会随命中次数一起增长。
+
+**有界 clean-first 回收**：每轮最多从 LRU 前端扫描 64 个记录：
+1. 过期记录（stamp 不匹配）直接丢弃；
+2. 优先选 clean 且无人引用的项——可以直接删除，不花磁盘时间；
+3. 窗口内没有 clean 候选，回退到最老的 dirty 项，在锁外做 writeback；
+4. 回写完成后重新加锁，用 stamp + 指针身份 + 引用计数三重校验再提交删除。
+
+**容量按内存缩放但保守**：公式 `RAM / 1024 / 4096`，LoongArch 最低 2048 块，
+RISC-V 最低 512 块，最高 32768 块。8 GiB 机器得到 2048 块 = 8 MiB 数据。当前
+全局单锁 + 每块额外保存 4 KiB 副本，不适合盲目扩容。
+
+Linux 的 page cache 可以使用大部分空闲内存，因为它有 per-inode 索引（XArray）、
+per-node LRU、per-CPU folio batch 和全局 shrinker 协调。CongCore 还没有这些，
+所以这里只复制 Linux 的原则（常数查找、有界回收、clean-first、锁外 I/O），容量
+由实测 A/B 决定。
 
 ## 对应提交
 
@@ -55,13 +139,31 @@ lock 外；命中只设置一次待晋升状态；每轮最多扫描 64 个候�
 
 ## 对比提升
 
-相同 300 秒 workload 中，31744 块缩减为 2048 块后，Cargo 输出 `69 -> 82` 行
-（+18.84%），deps 文件 `190 -> 211`（+11.05%），探针中位数
-`1.534 s -> 0.913 s`（-40.46%），最大值 `5.871 s -> 4.771 s`（-18.74%）。
-两边 hit rate 均为 98%，且无 block stall/stuck；这证明提升来自更低的管理成本，
-不是隐藏 I/O。完整 BuildStorm 与正式 judge 尚未由本条记录证明。
+相同 300 秒 workload，31744 块 → 2048 块：
+
+| 指标 | 旧 (31744) | 新 (2048) | 变化 |
+| --- | ---: | ---: | ---: |
+| Cargo 输出行 | 69 | 82 | +18.84% |
+| deps 文件数 | 190 | 211 | +11.05% |
+| 探针中位延迟 | 1.534 s | 0.913 s | -40.46% |
+| 探针最大延迟 | 5.871 s | 4.771 s | -18.74% |
+
+两边 hit rate 均为 98%，无 block stall/stuck。提升来自更低的管理开销，不是隐藏
+I/O——更小的缓存做了更多真实磁盘读取，但每次查找和回收都快得多，前台编译没被
+阻塞。
+
+完整 BuildStorm 与正式 judge 尚未由本条记录证明。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+本文涉及 ext4 块缓存的索引结构、LRU 管理和回收策略，与设备驱动、调度器和
+page cache 设计都有交叉。早期为了正确性用了粗粒度全局锁；放大容量使得锁内
+工作量进一步增长，形成越缓存越慢的现象。下面保留完整的 perf 证据、候选方案
+实验记录和回滚决策。
 
 ## 1. 结论
 

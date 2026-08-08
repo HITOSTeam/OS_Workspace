@@ -140,6 +140,43 @@ ARCH=loongarch64 IMAGE_MODE=copy ./run.sh buildstorm
 `/glibc`、执行脚本并调用对应 judge。日志、评分 JSON 和可写工作镜像存放于
 `.tmp/final-runs/`，不得加入版本控制。
 
+### 使用 perf 和 QEMU `-perfmap`
+
+Linux 宿主机上分析 QEMU 中的 guest 内核热点时，通过 `QEMU_EXTRA_ARGS` 给 QEMU
+加入 `-perfmap`。`run.sh` 会把它与 `IMAGE_MODE=snapshot` 自动追加的
+`-snapshot` 组合起来：
+
+```zsh
+# 终端 1：先启动 QEMU；正式采样前让 guest 进入目标 workload。
+QEMU_EXTRA_ARGS=-perfmap ARCH=loongarch64 IMAGE_MODE=snapshot ./run.sh shell
+
+# 终端 2：附加到准确的 QEMU PID，先从 30--60 秒短采样开始。
+qemu_pid=$(pgrep -n -f '[q]emu-system-loongarch64')
+test -n "$qemu_pid"
+timeout --signal=INT --kill-after=5s 60s \
+    perf record -F 99 -e cycles:u -g -p "$qemu_pid" -o perf.data
+perf report -i perf.data
+```
+
+RISC-V 分析把进程名替换为 `qemu-system-riscv64`。QEMU 会生成
+`/tmp/perf-${qemu_pid}.map`；在 `perf report` 完成前必须保留该文件，即使 QEMU
+已经退出。确认报告可读后，只删除核对过 PID 的准确路径，禁止用宽泛通配符清理
+其他进程的 perf map。
+
+`-perfmap` 很有用，但不适合直接做耗时对比。本机实测 45 秒与 240 秒采样分别生成
+约 361 MiB 和 1.3 GiB 的 map；QEMU 的翻译块生成及 libdw 符号查询进入明显热点，
+响应探针也可能被拖慢。使用原则是：
+
+- 以短采样定位候选函数，采样频率默认从 99 Hz 开始，并始终设置硬截止；
+- 若 guest 探针超过既定上限，立即向 `perf` 发送 `SIGINT` 使其完整落盘，然后停止
+  QEMU，不等待疑似卡死自行恢复；
+- `perf record` 结束后检查 `Total Lost Samples`，丢样或损坏的 `perf.data` 不作为
+  结论依据；
+- 确定热点后关闭 `-perfmap`，用相同镜像状态、SMP、内存、workload 和截止时间做
+  A/B；同时记录 guest 进度、探针延迟、QEMU RSS、host 可用内存和 swap；
+- host 总体计数可用不带 `-perfmap` 的 `perf stat` 补充，但任何优化都必须由实际
+  guest workload 的进度或完成耗时证明。
+
 ## 决赛测例
 
 两个计分项目都使用 glibc 环境。

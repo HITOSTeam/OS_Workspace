@@ -1,4 +1,187 @@
-# 8-6 Linux 风格有界 dentry CLOCK 回收
+# 8-6 限制 dentry CLOCK 回收的前台扫描次数
+
+## 问题概述
+
+有界 positive dcache（目录项缓存）解决了 BuildStorm 的 OOM，但初版 CLOCK 回收
+有两个毛病：
+
+1. cache 满（32,768 项）且全部标记为"最近访问过"时，一次 miss 要在全局写锁内
+   扫完整个 clock 再多转一圈才能腾出一项——精确上界 32,769 次扫描。虽然不是
+   无限循环，但在一把写锁里做这么多事会把其他核全挡住。
+2. 没区分"只有 cache 自己持有的叶子"和"还被别人引用的 dentry"。如果先驱逐
+   parent，内存不会真正释放，而且 child 的引用校验会失败导致后续 miss。
+
+修复后：一次前台回收最多扫 64 项，优先驱逐只有 cache 自己持有的叶子节点。
+
+## 背景知识
+
+**dentry cache 回顾**。课上讲的"目录项缓存"——把路径查找的结果（"名字→inode
+编号"）缓存在内存里，避免每次打开文件都逐级去磁盘查目录。本项目给它加了
+32,768 项的硬上限，满了就要驱逐旧的腾地方。
+
+**缓存不限容量会怎样**。如果不限制，每个曾经查过的路径都留在内存里。
+BuildStorm 编译几千个文件，产生上百万条目录项——大部分只用一次以后再也不会
+访问。不限容量就会无限增长直到内存耗尽（这正是之前 OOM 的根因）。
+
+**CLOCK（二次机会）回收算法怎么工作**。教科书讲页面置换时通常讲 LRU：最久
+没用的最先淘汰。但精确 LRU 要维护一个完整的访问时间排序，开销大。CLOCK 是
+LRU 的近似，用一个环形队列加一个 bit 实现：
+
+```text
+        ┌─────────────────────────────┐
+        │     CLOCK 环形队列          │
+        │                             │
+   ───► A(ref=1)  B(ref=0)  C(ref=1) │
+   指针  D(ref=1)  E(ref=0)  F(ref=1) │
+        └─────────────────────────────┘
+
+需要驱逐时，指针从当前位置往前走：
+  - 遇到 ref=0 的项：驱逐它，结束
+  - 遇到 ref=1 的项：把 ref 清零（给它"第二次机会"），继续往前走
+```
+
+每次缓存命中时把 `ref` 标记为 1。这样最近用过的项被扫到时会获得一次豁免，
+只有两轮扫描都没被用过的才会被驱逐。效果接近 LRU，但只需要一个 bit 而不是
+完整时间戳。
+
+**问题在哪**。如果所有 32,768 项都是 `ref=1`（全部热），一次驱逐要扫完整个
+环才能把第一项的 ref 清零、再绕回来才能驱逐它。在这期间写锁一直不释放，
+其他核的所有路径查找都在等。
+
+**Linux 怎么做**。Linux 的 shrinker（内存回收器，根据系统内存压力决定回收
+力度）通过 `nr_to_scan` 参数告诉 dcache "这次最多扫多少项"。它不会一口气
+扫完所有——每次只做一小批，做不完下次再来。另外 Linux 的 `dentry_lru_isolate()`
+会检查 dentry 是否还有外部引用（`d_lockref` 的 count），有引用的不算有效回收。
+
+**slab 分配器为什么比通用堆快**。课上讲的 buddy allocator 按 2 的幂分配内存
+页，适合大块分配。但 dentry 只有几十字节，用 buddy 的最小块（如 128 字节）
+会浪费将近一半空间。slab 把一个 4 KiB 页切成固定大小的小格子（比如 96 字节
+一格），分配/释放只是从链表摘下或挂回一个格子，不用搜索、不用合并、不用拆分：
+
+```text
+一个 4 KiB slab page，切成 96-byte slots：
+┌──────┬──────┬──────┬──────┬───...───┬──────┐
+│slot 0│slot 1│slot 2│slot 3│         │slot41│
+│ used │ free │ used │ free │   ...   │ free │
+└──────┴──┬───┴──────┴──┬───┴───...───┴──┬───┘
+          │             │                │
+          └─── free list (链表穿过空闲 slot)
+```
+
+dentry 的 `Arc` 分配（72 字节）正好落在 96-byte class 里，比 buddy 的
+128-byte 块省 25% 空间，而且分配速度快得多。
+
+**为什么驱逐要区分"只有 cache 持有"和"还有别人引用"**。一个 dentry 可能
+被子 dentry 的 parent 指针引用，也可能被打开的文件描述符引用。如果驱逐了
+一个还被引用的 parent dentry：
+- 它的内存不会真正释放（引用计数不为零）；
+- 子 dentry 下次查 parent 时发现不匹配，变成 miss；
+- 相当于白驱逐了，还制造了额外的 miss。
+
+所以应该优先驱逐 `Arc::strong_count == 1`（只有 cache 自己持有）的叶子节点。
+
+## 如何发现
+
+专家复核 `make_clock_room()` 代码，指出它和之前 block-cache 无界 clean scan
+形状相同。核对 run 116 的 `/proc/perf`：
+
+```text
+dcache_peak_entries=32721
+dcache_evictions=0
+dcache_clock_scans=0
+```
+
+峰值只差上限 47 项，完全没触发回收。用这些数据说"淘汰没问题"没有依据。
+
+新增宿主机定向 harness，强制填满 cache 并把所有项标热，计时第 32,769 项插入
+触发的那一次回收。
+
+对照 Linux `exampleOs/linux` commit `4549871118cf`：
+- `dentry_lru_isolate()` 对引用计数非零的对象跳过；
+- `prune_dcache_sb()` 把 `nr_to_scan` 传给 `list_lru_shrink_walk()`，每次
+  回收工作量有明确上限。
+
+```sh
+perf stat -r 7 -e task-clock,cycles,instructions,branches,branch-misses -- \
+  /tmp/congcore-dentry-clock-before --ignored benchmark_all_hot_clock_reclaim
+
+perf stat -r 7 -e task-clock,cycles,instructions,branches,branch-misses -- \
+  /tmp/congcore-dentry-cache-tests-after --ignored benchmark_all_hot_clock_reclaim
+```
+
+原始证据：
+
+```text
+testsuits-final/.tmp/final-runs/20260806-dentry-clock-budget-before-122/results.csv
+testsuits-final/.tmp/final-runs/20260806-dentry-clock-budget-after-123/results.csv
+testsuits-final/.tmp/final-runs/20260806-dentry-clock-perf-stat-125/results.csv
+```
+
+## 怎么解决
+
+**有界扫描预算**：`make_clock_room()` 每轮最多扫
+`DENTRY_CLOCK_SCAN_BUDGET = 64` 个 clock record。
+
+**优先驱逐能真正释放内存的叶子**：`Arc::strong_count(&cached.dentry) == 1`
+表示只有 cache 自己持有，驱逐后内存立刻回收。冷的 cache-only 叶子立即驱逐。
+
+**stale record 快速处理**：invalidation 留下的过期 key 只删除元数据，立即
+结束本轮，不误杀别的 live entry。
+
+**确定性 fallback**：64 项内没有冷叶子时，按 hot cache-only 叶子 > 冷但被
+引用 > hot 且被引用的顺序选 fallback，保证 32K 硬上限一定能守住。
+
+**容量为 1 的边界**：fallback 可能让队列暂时为空，循环同时检查队列非空，
+防止对空队列 `pop_front()`。
+
+为什么两个改动必须同时做：只加 `strong_count == 1` 过滤没有扫描预算的话，
+大量 active/hot 项仍可能扫完整个 cache；只加预算没有 fallback 的话，64 项
+全不可回收时就守不住 32K 上限。
+
+Linux 的 shrinker 把预算通过 `nr_to_scan` 传进来，不是固定 64。本内核还没有
+通用 shrinker，64 是前台回收的局部预算，是有界过渡方案。
+
+## 对应提交
+
+- `os/` 修复提交：`62537ad5474aa1dbffded6a2be88324910d7d43d`
+  (`vfs: bound positive dentry cache lifetime`)。
+- 顶层工作树基线：`16d5daa3ab8301a41975b15c441678f346874f8b`。
+- `os/` 工作树基线：`b0185b3a4522c0ffc52599d73bd17b3d52320815`。
+
+## 对比提升
+
+| 指标 | 修改前 | 修改后 | 改善 |
+| --- | ---: | ---: | ---: |
+| clock scans / eviction | 32,769 | 64 | -99.805% |
+| 单次回收延迟 | 2,811,844 ns | 10,570 ns | -99.624% |
+| 等效加速 | 1.00x | 266.02x | — |
+
+每轮前后都精确产生一次 eviction，证明提升不是跳过回收或放宽上限得到的。
+
+perf stat 完整 harness（7 轮均值，含构造+填充+预热+单次回收）：
+
+| 指标 | 修改前 | 修改后 | 改善 |
+| --- | ---: | ---: | ---: |
+| task-clock | 53.43 ms | 45.49 ms | -14.86% |
+| cycles | 191,583,503 | 176,407,103 | -7.92% |
+| instructions | 647,556,547 | 607,842,082 | -6.13% |
+| elapsed | 54.244 ms | 46.541 ms | -14.20% |
+
+QEMU 语义回归 4/4 通过（`vfs_stat_smp_perf_smoke`、
+`open_unlink_lifetime_smoke`、`vfs_pathwalk_smoke`、`unix_vfs_path_smoke`）。
+没有再跑一轮完整 BuildStorm——run 121 已证明完整工作负载通过，而 run 116 的
+`evictions=0` 证明它压根没进入本次修改的路径。
+
+以下是 AI 的具体分析，作为存档。
+
+---
+
+## 历史分析背景
+
+初版有界 dcache 虽然堵住了 Weak 墓碑 OOM，但回收路径本身的最坏延迟和驱逐质量
+没有被实际负载覆盖到。本文记录了如何把最坏情况从"写锁内扫 32,769 次"降到
+"最多扫 64 次+优先释放真正能回收的叶子"，以及为什么当前方案是在没有通用
+shrinker 前的有界过渡。下面保留完整的 perf 数据、QEMU 回归环境和验证细节。
 
 ## 问题概述
 
@@ -184,7 +367,7 @@ ext4 目前仍采用 `DentryCachePolicy::Revalidate`，所以 positive hit 前�
 ### QEMU 语义与资源回归
 
 没有再跑一轮约 55 分钟的 BuildStorm：已通过的 run 121 证明完整工作负载和 OOM
-闭环，而诊断 run 116 的 `evictions=0/scans=0` 证明它不会覆盖本次唯一修改的回收
+完整覆盖，而诊断 run 116 的 `evictions=0/scans=0` 证明它不会覆盖本次唯一修改的回收
 路径。强制满 cache 基准对本问题更直接；另以官方镜像做短时真实 guest 回归。
 
 环境：

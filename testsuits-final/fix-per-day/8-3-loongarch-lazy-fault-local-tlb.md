@@ -1,52 +1,126 @@
-# 2026-08-03 LoongArch lazy fault 本地 TLB 发布修复
+# 2026-08-03 LoongArch lazy fault 只刷本核 TLB，不再全员广播
 
 ## 问题概述
 
-文件映射改为按需缺页后，每个首次访问都要把无效页表项发布为有效页表项。旧 LoongArch
-实现把这种“原来没有有效映射”的变化也当成替换旧映射，对整个地址空间执行同步跨核
-转换检测缓冲区（Translation Lookaside Buffer，TLB）失效，产生大量处理器间中断
-（Inter-Processor Interrupt，IPI）和等待周期。
+文件映射改为按需缺页后，每个首次访问都要把"无效"变成"有效"。旧代码不区分
+"从来没有过有效映射"和"替换旧映射"，统一走跨核 TLB shootdown——向所有正在运行
+该地址空间的核心发 IPI，等它们逐一确认。结果是：一次普通文件 page fault 产生一次
+处理器间中断和一段自旋等待，120 秒 `tg-xtask` 负载下累计约 5,047 次远端 IPI 和
+1,390 万个等待周期。
+
+根因一句话：**首次安装 PTE 时别的核根本不可能缓存过这个映射，不需要通知它们。**
+
+## 背景知识
+
+这一节给只上过操作系统课的读者铺路。
+
+**TLB 是页表的高速缓存**。CPU 每次访问虚拟地址，都要把虚拟页号翻译成物理页号。
+如果每次都去内存里查多级页表，代价太大。TLB（Translation Lookaside Buffer）把
+最近查过的"虚拟页号 → 物理页号"存起来，命中就直接用，不命中再去查页表。
+
+**LoongArch 的 TLB 分成两块，查找时并行查**：
+
+```text
+              ┌─────────────────────────────────────┐
+   虚拟地址 ──┤                                     │
+              │  ┌───────────┐   ┌───────────────┐  │
+              ├─>│   MTLB    │   │     STLB      │<─┤
+              │  │ 全相联    │   │ 组相联        │  │
+              │  │ 每项自带  │   │ 固定页大小    │  │
+              │  │ 页大小    │   │ 表项多        │  │
+              │  │ (约 48 项)│   │ (数百~千项)   │  │
+              │  └─────┬─────┘   └───────┬───────┘  │
+              │        │  命中任一即可   │          │
+              │        └────────┬────────┘          │
+              └─────────────────┼───────────────────┘
+                                ▼
+                          物理页号 + 属性
+```
+
+- **STLB**（Single Page Size TLB）：全表只能装一种固定页大小（本项目设为 4 KiB），
+  组相联结构，组数和路数从 `CSR.PRCFG3` 读出。类似一个大容量但查找键固定的 L2。
+- **MTLB**（Multiple Page Size TLB）：全相联，每项自带页大小字段，可以混装
+  4 KiB、2 MiB 等不同大小的映射。容量小但灵活。
+
+这个设计的后果：**刷新 TLB 时两块都可能有残留项**，一条 `invtlb` 指令会同时作用
+于两块。
+
+**一个表项装两个页（偶/奇页对）**。LoongArch TLB 每个表项包含：
+
+```text
+TLBEHI  ── 虚拟页号高位 + ASID + 页大小
+TLBELO0 ── 偶数页的物理页号和属性
+TLBELO1 ── 奇数页的物理页号和属性
+```
+
+4 KiB 页配置下，一个 TLB 项覆盖相邻的 8 KiB（两个 4 KiB 页）。所以"刷新单页"
+的实际硬件粒度是 8 KiB 的页对。
+
+**invtlb 指令通过 op 编码选择刷新粒度**：
+
+| op | 效果 | 什么时候用 |
+|---|---|---|
+| 0x5 | 按 ASID + 虚拟地址精确刷 | 本文的 lazy fault：只刷一个页对 |
+| 0x4 | 按 ASID 刷所有非全局项 | 大范围修改时整体丢弃 |
+| 0x3 | 清本核所有非全局项 | ASID 用完回绕时 |
+| 0x1 | 清本核全部（含全局） | 内核共享映射变了 |
+
+**ASID（Address Space Identifier）**就是给 TLB 项打标签的进程编号。不同进程用
+不同 ASID，切换进程时不需要全刷 TLB。LoongArch 的 ASID 是 10 位，per-hart 分配，
+ASID 0 保留给内核。
+
+**DMW（直接映射窗口）**。内核访问物理内存时不经过页表，而是用 `CSR.DMW0..3`
+配置一段虚拟地址直接映射到物理地址。这段地址不消耗任何 TLB 表项。所以内核态
+执行 `CSR.ASID = 0` 时，用户的 TLB 项虽然还物理地躺在硬件里，但匹配不上（ASID
+不等），等价于不存在。
+
+**为什么"首次安装"不需要通知别的核**。当一个页表项从无效变有效时，别的核的
+TLB 里不可能缓存过这个映射——TLB 只缓存有效翻译。最坏情况是别的核缓存了同一
+8 KiB 页对里"另一半无效"的信息，但 LoongArch 规范允许硬件不缓存无效项，即使
+缓存了也只是下次访问时再触发一次 fault。所以只需要在本核刷新一下页对就够了，
+不需要发 IPI 通知远端。
 
 ## 如何发现
 
-前一批 120 秒 `tg-xtask` 诊断的 `/proc/perf` 记录约 313,135 个 page batch、5,047 个
-远端中断和 13,925,600 个失效等待周期。相关日志与本批复核日志：
+前一批 120 秒 `tg-xtask` 诊断的 `/proc/perf` 记录约 313,135 个 page batch、
+5,047 个远端 IPI 和 13,925,600 个等待周期。相关日志：
 
 ```text
 testsuits-final/.tmp/final-runs/20260803-lazy-local-tlb/serial.log
 testsuits-final/.tmp/final-runs/20260803-lazy-local-tlb-perf/serial.log
 ```
 
-运行和检查命令：
+检查命令：
 
 ```sh
-ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot ./run.sh shell
 rg -n 'commit_lazy_fault|PageTableUpdateBatch|update_mmu_cache' \
   os/src/mm os/src/arch/loongarch64
 ```
 
 源码显示 `MemorySet::commit_lazy_fault()` 即使确认旧 PTE 无效，也进入地址空间
-invalidation sequence、扫描活动核心、发送 IPI 并等待确认。Linux `mm/memory.c` 的
-missing-PTE 路径则安装后调用本地 `update_mmu_cache_range()`，只有替换或降权旧映射
-才执行强制跨核 flush。
+invalidation sequence、扫描活动核心、发送 IPI 并等待确认。对照 Linux
+`mm/memory.c`：missing-PTE 路径安装后只调 `update_mmu_cache_range()`（本核局部
+操作），只有替换或降权旧映射才执行跨核 flush。
 
 ## 怎么解决
 
-新增 `update_mmu_cache_for_new_pte()`：读取当前核心缓存的
-`(generation, address_space_identifier)`；如果存在有效上下文，先用 `dbar 0` 发布
-PTE store，再对 fault 地址所在的 8 KiB paired entry 执行当前核心、指定地址空间
-标识符（Address Space Identifier，ASID）的 `invtlb`，最后用屏障保证返回用户态前
-完成。该路径不进入地址空间失效序列、不扫描活动核心、不发送 IPI。
+**新增本核刷新函数 `update_mmu_cache_for_new_pte()`**：读取当前核心缓存的
+`(generation, ASID)`；有效就用 `dbar 0` 保证 PTE store 可见，再对 fault 地址
+所在的 8 KiB 页对执行当前核心、指定 ASID 的 `invtlb 0x5`。该路径不进入地址空间
+失效序列、不扫描活动核心、不发 IPI。
 
-另一个核心若缓存了同一 pair 的 invalid half，访问时会再次 fault；
-`prepare_lazy_fault()` 发现 PTE 已有效后返回 `Resolved`，并在该核心调用同一个本地
-更新函数后重试。以下路径仍保留同步跨核失效：写时复制替换物理页、`mprotect` 降权、
-`munmap`、旧页回收、内核 trap-context 页和共享内核页表更新。
+**并发恢复**：另一个核缓存了同一 pair 的 invalid half，访问时再次 fault；
+`prepare_lazy_fault()` 发现 PTE 已有效后返回 `Resolved`，调用同一个本核刷新函数
+重试。
 
-Linux LoongArch `__update_tlb()` 和 `local_flush_tlb_page()` 也是当前处理器局部操作，
-paired entry 按 `PAGE_SIZE << 1` 对齐。本项目没有硬件页表遍历器的所有 Linux 快路，
-所以没有把更新简化成空操作，而是保留本地 pair `invtlb` 以处理 QEMU 曾观察到的
-negative half。
+**仍保留跨核 shootdown 的场景**：COW 替换物理页、`mprotect` 降权、`munmap`、
+旧页回收、内核 trap-context 页和共享内核页表更新——这些存在"旧有效映射"，必须
+通知别的核。
+
+Linux LoongArch 的 `__update_tlb()` 和 `local_flush_tlb_page()` 也是当前 CPU
+局部操作，paired entry 按 `PAGE_SIZE << 1` 对齐。本项目没有硬件页表遍历器的全部
+Linux 快路，所以没有把更新简化成空操作，而是保留本地 pair `invtlb` 来处理 QEMU
+曾观察到的 negative half。
 
 ## 对应提交
 
@@ -57,12 +131,24 @@ negative half。
 
 ## 对比提升
 
-专项测试包含 512 次首次文件 PTE 发布和 256 次跨核心 paired-invalid 恢复；修改后这些
-动作不再一页对应一个地址空间 page batch。测试与文件页缓存、强制跨核失效回归均
-通过。该批没有对旧内核运行相同专项测试做严格时间 A/B，也没有运行完整 BuildStorm，
-因此记录计数路径消除，不填写未经测量的耗时提升。
+新增回归测试包含 512 次首次文件 PTE 发布和 256 次跨核 paired-invalid 恢复；
+修改后这些动作不再一页一个 mm page batch。`tlb_exact_pairs` 增量 1,139 次
+（本地 pair 操作），同时 `tlb_remote_ipis` 增量只有 66 次（来自 exec、clone、
+映射销毁等生命周期更新）。
+
+该批没有对旧内核运行相同专项测试做严格时间 A/B，也没有运行完整 BuildStorm，
+因此记录路径消除，不填写未经测量的耗时提升。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个问题在文件映射改为按需缺页后暴露：每次 fault 的 TLB 刷新开销与核数成正比。
+修复需要分清"首次安装"与"替换旧映射"两种语义，并保留 LoongArch paired TLB 的
+特殊处理。下面保留完整的环境信息、Linux 对照、设计细节、回归测试和 perf 数据。
+
 
 ## 1. 结论
 

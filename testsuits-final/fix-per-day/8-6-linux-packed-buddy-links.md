@@ -1,18 +1,107 @@
-# 8-6 Linux 风格 packed buddy links
+# 8-6 把 buddy 空闲链表指针压进一个 u64，恢复 8-byte 最小粒度
 
 ## 问题概述
 
-O(1) buddy 第一版需要 32-byte free node，使 1--31 byte 请求全部至少占 32 bytes；
-BuildStorm 在约 908 秒耗尽 512 MiB kernel heap。改回较小节点后，纯 buddy 的
-power-of-two 取整和大块外部碎片仍是剩余边界。
+上一轮用 O(1) 双向链表和位图替换了线性扫描（见 `8-6-linux-o1-buddy-coalescing.md`），
+但第一版空闲节点占 32 bytes（prev + next + order 各一个指针宽度），使得所有
+1–31 byte 的请求至少浪费到 32 bytes。BuildStorm 在 guest uptime 约 908 秒耗尽
+512 MiB 内核堆，OOM dump 显示 `actual/user ≈ 1.45`——真正分给用户的只有
+320 MiB，分配器自己吃掉了 145 MiB。
+
+```text
+问题示意：一次 1-byte 分配在 32-byte 最小块下的浪费
+
+请求: 1 byte
+实际分配: 32 bytes  [prev 8B | next 8B | order 8B | 用户1B + 填充7B]
+浪费率: 31/32 = 96.9%
+```
+
+解决方法：把 prev、next、order 三个字段编码进一个 64-bit word，最小块恢复到
+8 bytes。续跑越过原 OOM 点并以 `rc=0` 完成；但全新冷启动在 1836 秒再次 OOM，
+说明 buddy 本身的 2 的幂取整和外部碎片仍需后续 slab 分层解决。
+
+## 背景知识
+
+这一节给只上过一门 OS 课的读者铺路。已经熟悉 buddy 分配器的可以跳过。
+
+**为什么内核要按 2 的幂分配**。Buddy 分配器把内存切成 2^0、2^1、2^2 …
+大小的块，好处是合并时只需要看"同一个父块拆出来的另一半"（伙伴）是不是也
+空闲，不用扫描整个链表。代价是：请求 5 bytes 就要给 8 bytes，请求 9 bytes
+就要给 16 bytes——总是向上取整到最近的 2 的幂。
+
+**free_area 数组和链表结构**：
+
+```text
+free_area[0]: 最小块链表  ──→ [块A] ⇄ [块B] ⇄ ...
+free_area[1]: 2倍块链表   ──→ [块X] ⇄ [块Y] ⇄ ...
+free_area[2]: 4倍块链表   ──→ [块M] ⇄ ...
+  ...
+```
+
+需要 2^k 大小的块时，从 `free_area[k]` 摘一个。如果 k 级空了，从更高级拆分。
+释放时用 XOR 算出伙伴地址，检查伙伴也空闲就合并成更大块挂到上一级。
+
+**伙伴地址怎么算**。一块起始地址为 addr、大小为 2^order 的块，它的伙伴是：
+
+```text
+buddy_addr = addr XOR (1 << order)
+```
+
+一条异或指令就能找到伙伴，不需要遍历链表。
+
+**为什么 Linux 把链表指针放在页描述符（struct page）里**。Linux 为每个物理页
+预分配了一个 `struct page` 结构体，里面有 `lru` 字段可以当双向链表节点。
+空闲块本身不需要存任何管理信息——管理信息全在 `struct page` 数组里，这个数组
+在启动时一次性分配好，不占用户能申请的空间。
+
+```text
+Linux 的做法：
+
+物理内存:    [页0] [页1] [页2] [页3] ...
+struct page: [描述符0] [描述符1] [描述符2] [描述符3] ...
+              ↑ 链表指针在这里，不在页的数据区域里
+
+用户分配到的空间 = 整个页，没有一个字节被链表指针占用
+```
+
+**CongCore 没有独立页描述符的后果**。CongCore 的内核堆按字节分配，没有独立
+的页描述符数组。链表指针只能放在空闲块自己的头部。第一版用了 3 个 8-byte 字段
+（prev + next + order = 24 bytes），加上对齐填充到 32 bytes 做最小块。这意味着
+1-byte 分配实际占 32 bytes，造成严重的内部碎片（内部碎片：分配的块比请求大，
+多出来的空间谁也用不了）。
+
+**packed 编码的思路**。如果能把三个字段压进一个 8-byte word，最小块就能恢复到
+8 bytes。关键观察：每个 shard 最大 64 MiB，按 8-byte slot 编号只需要 24 bit
+索引（2^24 × 8 = 128 MiB > 64 MiB）；order 最多 60 多级，6 bit 够用。所以
+prev、next、order 可以拼进 64 bit：
+
+```text
+一个 u64 里的布局：
+┌──────────┬──────────┬────────┬──────────┐
+│ prev(24b)│ next(24b)│order(6)│reserved(10)│
+└──────────┴──────────┴────────┴──────────┘
+```
+
+这样空闲块头只占 8 bytes，1-byte 分配实际占 8 bytes（而不是 32），内部碎片从
+96.9% 降到 87.5%——虽然仍有浪费，但 512 MiB 堆里能多出好几十 MiB 可用空间。
+
+**外部碎片为什么还在**。即使最小块回到 8 bytes，buddy 仍然只能分配 2 的幂
+大小的块。请求 201096 bytes 时要给 256 KiB（262144 bytes），浪费 30%。而且
+反复分配释放后，大块被拆碎了可能拼不回来——总空闲量够，但找不到一块连续的
+128 KiB，这就是外部碎片。彻底解决需要 slab：把常见的小 size 各自维护一个
+free list，不走 buddy 的 2 的幂取整。
 
 ## 如何发现
 
-OOM dump 给出 `user=319614722`、`actual=464679392`，结合 32-byte 最小块直接确认
-表示层浪费；host 同时仍有约 23 GiB 可用内存，排除宿主 OOM。修复后从 OOM 磁盘状态
-续跑成功，但官方 raw 冷启动约 1836 秒再次 OOM，进一步区分了“节点过大”和“纯 buddy
-不适合小对象”两个问题。Linux 对照仍是 `PageBuddy`、order metadata 和 O(1)
-`list_del()`。
+32-byte 版本跑完整 BuildStorm 时触发 OOM panic：
+
+```text
+layout=Layout { size: 201096, align: 1 }
+user=319614722 actual=464679392 total=536870912
+```
+
+同时 QEMU RSS 约 4.36 GiB，host `MemAvailable` 约 23 GiB，排除宿主压力。
+OOM 磁盘状态冷续跑用 packed 内核一路完成，证明是节点过大造成提前耗尽。
 
 ```text
 .tmp/final-runs/20260806-buildstorm-linux-buddy-full-105/
@@ -21,8 +110,6 @@ OOM dump 给出 `user=319614722`、`actual=464679392`，结合 32-byte 最小块
 ```
 
 ```sh
-# guest：从全新 overlay 或失败现场的只读 child 启动
-./buildstorm_testcode.sh
 # host：直接测试 allocator 数据结构
 rustc --edition=2024 --test os/src/mm/buddy_heap.rs \
   -o /tmp/congcore-buddy-tests
@@ -31,21 +118,29 @@ rustc --edition=2024 --test os/src/mm/buddy_heap.rs \
 
 ## 怎么解决
 
-把 prev/next/order 压入一个 64-bit word，用相对 shard 的 one-based 8-byte slot 编码，
-恢复 8-byte 最小粒度并保留位图验证和 O(1) 摘链。更好的最终方案是 buddy 管理页/大块，
-小对象走有限 size-class slab；同时大块从共享 arena/页分配器获得，避免 12 个独立 shard
-放大外部碎片。
+**把三个字段编码进一个 u64**。用相对 shard 起点的 one-based 8-byte slot index
+表示前驱和后继，0 表示空。24 bit 索引覆盖接近 128 MiB，初始化时断言 shard
+不超出编码容量。6 bit 存 order，剩余 bit 保留。
 
-编码把 one-based 8-byte slot 的前驱、后继和 order 压入一个 `u64`；0 表示空 link。
-初始化时断言 shard 范围能由 24-bit 相对索引表示，读取 free memory 前仍必须通过
-free-head bitmap 和 order 双重校验。
-Linux 的链表字段位于固定 `struct page`，不占用户请求空间；本项目用相对索引压缩
-空闲块内元数据，是缺少独立页描述数组时的过渡方案。它恢复 8-byte 粒度，却仍不能
-替代 Linux 中“伙伴分配器管理页、slab 管理小对象”的分层。
+```text
+bits  0..23: previous link (one-based slot)
+bits 24..47: next link (one-based slot)
+bits 48..53: buddy order
+bits 54..63: reserved
+```
+
+**安全约束不变**：分配、释放前仍先查 free-head bitmap 确认地址属于 allocator
+管理的空闲块，bitmap 和节点内 order 双重匹配后才 O(1) 摘链。metadata 不从全局
+堆动态分配，不递归进入 allocator。
+
+**和 Linux 的关系**。Linux 把链表字段放在预分配的 `struct page` 数组里，不占
+用户请求空间，所以根本不存在"节点太大"的问题。CongCore 没有独立页描述符数组，
+所以用相对索引压缩空闲块内元数据——这是过渡方案。长期应像 Linux 那样 buddy
+只管页/大块，小对象进 slab。
 
 ## 对应提交
 
-- 状态：待提交，packed buddy 当前仍位于未提交工作树；完整提交还应包含后续 slab
+- 状态：待提交，packed buddy 当前位于未提交工作树；完整提交还应包含后续 slab
   分层，或拆成两个可独立验证的提交。
 - 基线：顶层 `21332ba37bf1ba0efe8229e7f80eeffa3b99a239`；`os/`
   `b0185b3a4522c0ffc52599d73bd17b3d52320815`。
@@ -53,11 +148,26 @@ Linux 的链表字段位于固定 `struct page`，不占用户请求空间；本
 
 ## 对比提升
 
-在 32-byte 版本的 OOM 磁盘状态上，packed 版本越过原 OOM 点并最终令脚本返回 rc=0；
-36 次探针中位数 361 ms、最大 888 ms。但官方 raw 冷启动仍在约 1836 秒因 128 KiB
-请求和碎片 OOM，所以只能证明 packed 表示修复有效，不能宣称完整问题闭环。
+| 场景 | 结果 |
+| --- | --- |
+| 32-byte OOM 磁盘续跑 | packed 内核越过原 OOM 点，最终 `rc=0`；36 次探针中位数 361 ms、最大 888 ms |
+| 官方 raw 全新冷启动 | 约 1836 秒再次 OOM（128 KiB 请求失败），说明 buddy 本身的 power-of-two 取整和外部碎片仍在 |
+
+packed 修复了 32-byte 节点的额外浪费，但不能说容量问题已经彻底解决。纯 buddy 对
+任意 layout 向上取整到 2 的幂以及大块外部碎片仍需 slab 分层解决。全新冷启动
+的 OOM 也证明：只压缩链表指针不够，还需要减少 buddy 本身的 rounding 浪费。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个问题跨越 allocator 表示层和分配策略两层：第一版 O(1) buddy 证明了算法方向
+（释放从线性扫描变为常数时间），但把最小块扩大到 32 bytes 是副作用。packed 只
+修复表示层，buddy 的 power-of-two rounding 和碎片需要后续 slab 分层才能真正
+解决。下面保留完整的编码设计、OOM 证据、续跑数据和冷启动反证。
+
 
 ## 结论
 
@@ -239,7 +349,7 @@ frame_refs=603050
 此时仍约有 49343408 bytes 未计入 live actual，却无法找到一个 128-KiB block，说明
 除了约 148.6 MiB internal rounding 之外还有外部碎片。QEMU RSS 约 4.74 GiB，host
 `MemAvailable` 约 24.4 GiB、`SwapFree` 约 20 GiB；退出后无残留进程，qcow2 再次通过
-`qemu-img check`。所以续跑 rc=0 只能证明 packed 改动有益，不能证明容量根因已经闭环。
+`qemu-img check`。所以续跑 rc=0 只能证明 packed 改动有益，不能证明容量问题的根因已经解决。
 
 ## 当前边界与下一步
 

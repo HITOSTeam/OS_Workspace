@@ -1,23 +1,69 @@
-# 8-6 Linux-style lockless inode-table lookup
+# 8-6 让 inode-table 位置查找不再抢 allocator 锁
 
 ## 问题概述
 
-`Inode::find()` 为计算只读 inode-table 位置也获取 filesystem-wide allocator mutex，
-使并行 pathname/stat lookup 与无关查找、分配串行化；已有目录索引命中时还会重复读取
-父 inode 类型。
+`Inode::find()` 每次都要拿 filesystem-wide allocator mutex 才能算出 inode-table 的磁盘位置，但 block size、inode size、inodes-per-group 和各组 inode-table 起始块在挂载后根本不变。结果是所有并行的 pathname lookup / stat 都和无关的 block/inode 分配排在同一把锁后面。另外，目录索引已经命中时还多读一次父 inode 判断类型。
+
+## 背景知识
+
+**磁盘 inode 在哪里**。ext4 把整块磁盘分成若干"块组"（block group），每个组里有固定数目的 inode（由 `inodes-per-group` 参数决定）。给定一个 inode 号，要算出它存在磁盘第几个块上，步骤是：
+
+```text
+第几组 = inode_num / inodes_per_group
+组内偏移 = inode_num % inodes_per_group
+磁盘块号 = 该组的 inode-table 起始块 + (组内偏移 × inode_size) / block_size
+```
+
+这些参数（block size、inode size、inodes-per-group、各组 inode-table 起始块）在格式化时就写死了，挂载后一个字节都不会变。
+
+**为什么旧代码要拿 allocator 锁**。旧实现把上面这些参数存在和 block/inode 分配器共用的结构体里。分配器的 bitmap cursor、空闲计数这些字段确实需要互斥保护，但挂载后不变的几何参数也被同一把锁包住了。于是出现这种场景：
+
+```text
+hart 0: stat("/bin/ls")
+  → 要查 inode 123 的磁盘位置
+  → 拿 allocator mutex
+  → 只是做一道除法和查表
+  → 释放锁
+
+hart 1: write() 需要分配新块
+  → 等 allocator mutex
+  → 修改 bitmap cursor
+
+hart 2: stat("/etc/passwd")
+  → 等 allocator mutex
+  → 只是做除法和查表
+```
+
+hart 0 和 hart 2 做的事情完全不修改任何可变状态，它们互相等没有道理。
+
+**Linux 是怎么做的**。Linux 的 `__ext4_get_inode_loc()` 通过 `EXT4_INODES_PER_GROUP(sb)`（挂载时从超级块读出的常量）算出组号，再从 `s_group_desc`（一个只读数组，挂载时一次性读好）取出 group descriptor，里面有 inode-table 起始块。整个过程不需要任何互斥锁——因为读的全是常量。
+
+**内存里的 inode 表为何存在**。磁盘 inode 存在磁盘上，每次都去读磁盘太慢。内核在内存里维护一张"活跃 inode 表"：打开过的文件、遍历过的目录的 inode 都留在这张表里，下次再访问直接取内存副本。这张表按 inode 号做哈希索引，查表只需要 inode 号和一些不变的几何参数——正是本文优化的那些。
+
+**i_count 与 i_nlink**。每个内存 inode 有两个计数器：
+
+- `i_count`（内存引用数）：有几个打开的 fd、mmap、目录遍历在用这个 inode。降到零说明内核里没人在用它了，可以从内存表里移除。
+- `i_nlink`（硬链接数）：有几个目录项指向这个 inode。降到零说明文件名全删了，等最后一个引用也消失就可以释放磁盘空间。
+
+本文的优化和这两个计数没有直接关系，但理解它们有助于理解后面的"目录索引命中时不需要重新读父 inode"——因为目录索引本身就是由父 inode 对象维护的，索引命中已经隐含"父对象是目录"这个信息。
+
+**目录索引命中走快路径**。旧代码在目录索引命中的情况下仍然从磁盘重读父 inode 判断"它是不是目录"。但目录索引本身就是为目录建立的，如果索引存在且命中，父对象必然是目录，不需要再确认。只有 cold miss 时才有必要补读一次。
 
 ## 如何发现
 
-BuildStorm 慢探针阶段的 `perf record` 将稳定 guest PC 解析到 `Inode::find()`；host
-`MemAvailable` 和 `SwapFree` 充足，排除资源耗尽。Linux 对照为
-`ext4_lookup()`、`__ext4_get_inode_loc()` 与 `ext4_get_group_desc()`：挂载后不变的
-几何和 group descriptor 可由读侧直接使用，无需 allocator-wide mutex。
+BuildStorm 慢探针阶段用 `perf record` 采样，稳定 guest PC 之一解析到 `Inode::find()`。host `MemAvailable` 和 `SwapFree` 充足，排除资源耗尽。
 
 ```sh
 perf record -F 99 -e cycles:u -g -p <qemu-pid> -o perf.data -- sleep 15
 # guest
 /user/vfs_stat_smp_perf_smoke.bin
 ```
+
+Linux 对照：
+- `ext4_lookup()` → `__ext4_get_inode_loc()`：通过挂载时已确定的 `EXT4_INODES_PER_GROUP()`、inode size 和 group descriptor 直接算位置；
+- `ext4_get_group_desc()`：从 `s_group_desc` 的 RCU（Read-Copy-Update，读侧不加锁的并发保护）可读数组取 group descriptor，不为普通 inode lookup 抢 allocator-wide mutex。
+
+原始证据：
 
 ```text
 .tmp/final-runs/20260806-vfs-stat-ab-baseline-81/results.csv
@@ -28,29 +74,38 @@ perf record -F 99 -e cycles:u -g -p <qemu-pid> -o perf.data -- sleep 15
 
 ## 怎么解决
 
-挂载时建立不可变 `InodeTableLayout`，由 allocator 与读侧通过同一个 `Arc` 共享；
-`Inode::find()` 直接计算位置。目录索引命中走快路径，失败时才补查父类型以保持
-`ENOENT/ENOTDIR`。更完整方案可引入 Linux 式 inode cache/RCU 查找，但必须先具备可靠
-reclaim；本轮没有为此增加永久强引用。
+**挂载时建立不可变 `InodeTableLayout`**：收集 block size、inode size、inodes-per-group 和每组 inode-table 起始块，allocator 和读侧通过同一个 `Arc` 共享。`Inode::find()` 直接从 layout 算位置，不再进 allocator lock。
 
-`InodeTableLayout` 在挂载阶段收集 block size、inode size、inodes-per-group 和每组
-inode-table 起始块；`Inode::find()` 只读该 `Arc`，分配器仍在自己的锁内使用同一
-布局，不维护第二套位置公式。
+**目录索引命中走快路径**：已有索引命中时直接用；cold miss 才补读父 inode 确认是目录。VFS adapter 只在 lookup 失败时补查父类型以区分 `ENOENT` 和 `ENOTDIR`。
+
+没有引入 Linux 式 inode cache 或 RCU 查找——那需要先有可靠的 reclaim（回收机制）。本轮没有增加永久强引用。
 
 ## 对应提交
 
 - 状态：待提交，当前实现仍位于未提交工作树。
-- 基线：顶层 `21332ba37bf1ba0efe8229e7f80eeffa3b99a239`；`os/`
-  `b0185b3a4522c0ffc52599d73bd17b3d52320815`。
+- 基线：顶层 `21332ba37bf1ba0efe8229e7f80eeffa3b99a239`；`os/` `b0185b3a4522c0ffc52599d73bd17b3d52320815`。
 - 建议提交主题：`ext4: make inode-table lookup lockless`。
 
 ## 对比提升
 
-12,288 次 stat 的 guest 中位数 `153869 -> 143236 us`（-6.9%），host 中位数
-`199 -> 177 ms`（-11.1%）；交替 fork/thread 对照也分别改善 6.3% 和 3.4%。
-聚焦回归通过，但不代表完整 BuildStorm 已通过。
+12,288 次 stat（12 worker 各 1,024 次 `newfstatat()`），交替 A/B 各 11 轮：
+
+| 指标 | 修改前 | 修改后 | 改善 |
+| --- | ---: | ---: | ---: |
+| guest 中位数 | 153,869 us | 143,236 us | -6.9% |
+| host 中位数 | 199 ms | 177 ms | -11.1% |
+
+独立 fork/thread 对照也没有退化（guest -6.3%，host -3.4%）。
+
+聚焦回归通过（`vfs_stat_smp_perf_smoke` 12,288 stat errors=0、`open_unlink_lifetime_smoke`、`vfs_pathwalk_smoke`、`unix_vfs_path_smoke`），ext4-fs 13/13，LoongArch release 构建和 RISC-V `cargo check` 通过。不代表完整 BuildStorm 已通过。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这是 `Inode::find()` 热路径上的一次简单但有效的锁消除：挂载后不变的磁盘几何信息没必要每次都在 allocator 的 mutex 里读。问题在 BuildStorm 规模下才明显，因为连续的 `cargo build` 产生大量并发 stat。下面保留完整的 perf 发现过程、Linux 对照和回归细节。
 
 ## Problem
 

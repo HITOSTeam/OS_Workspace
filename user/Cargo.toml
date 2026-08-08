@@ -25,6 +25,10 @@ name = "lazy_fault_local_tlb_smoke"
 path = "src/bin/smoke_archive/lazy_fault_local_tlb_smoke.rs"
 
 [[bin]]
+name = "loongarch_asid_wrap_smoke"
+path = "src/bin/smoke_archive/loongarch_asid_wrap_smoke.rs"
+
+[[bin]]
 name = "riscv_icache_smp_smoke"
 path = "src/bin/smoke_archive/riscv_icache_smp_smoke.rs"
 
@@ -93,8 +97,16 @@ name = "open_unlink_lifetime_smoke"
 path = "src/bin/smoke_archive/open_unlink_lifetime_smoke.rs"
 
 [[bin]]
+name = "rename_over_mmap_lifetime_smoke"
+path = "src/bin/smoke_archive/rename_over_mmap_lifetime_smoke.rs"
+
+[[bin]]
 name = "poll_wakeup_race_smoke"
 path = "src/bin/smoke_archive/poll_wakeup_race_smoke.rs"
+
+[[bin]]
+name = "socketpair_exit_eof_smoke"
+path = "src/bin/smoke_archive/socketpair_exit_eof_smoke.rs"
 
 [[bin]]
 name = "eventfd_epoll_smoke"
@@ -113,5 +125,21 @@ name = "fork_thread_group_perf_smoke"
 path = "src/bin/smoke_archive/fork_thread_group_perf_smoke.rs"
 
 [[bin]]
+name = "sched_yield_smp_perf_smoke"
+path = "src/bin/smoke_archive/sched_yield_smp_perf_smoke.rs"
+
+[[bin]]
+name = "vfs_stat_smp_perf_smoke"
+path = "src/bin/smoke_archive/vfs_stat_smp_perf_smoke.rs"
+
+[[bin]]
+name = "exec_file_page_cache_perf_smoke"
+path = "src/bin/smoke_archive/exec_file_page_cache_perf_smoke.rs"
+
+[[bin]]
 name = "timerfd_epoll_smoke"
 path = "src/bin/smoke_archive/timerfd_epoll_smoke.rs"
+
+[[bin]]
+name = "signal_frame_fault_smoke"
+path = "src/bin/smoke_archive/signal_frame_fault_smoke.rs"

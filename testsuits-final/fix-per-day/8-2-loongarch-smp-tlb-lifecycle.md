@@ -1,16 +1,109 @@
-# 8-2 LoongArch SMP、TLB 与进程生命周期修复
+# 8-2 LoongArch 12 核 TLB 与进程生命周期修复
 
 ## 问题概述
 
-LoongArch 12 个处理器核心上线后，用户程序仍会遇到地址转换异常、重复回收进程、网络
-命名空间过早清理和 Rust 辅助线程创建失败。它们不是同一处错误：页表更新需要跨核心
-失效转换检测缓冲区（Translation Lookaside Buffer，TLB）；进程退出需要把重资源
-清理、僵尸状态发布和唯一回收者分开；网络命名空间需要由 socket、命名空间文件和
-进程统一持有引用；默认内存过量承诺策略又错误地把累计虚拟承诺当成严格硬上限。
+LoongArch 12 核上线后，用户程序遇到四类不同的故障：
+
+```text
+用户地址异常（TLBEHI 和 BADV 落在同一个 8 KiB 页对）
+    → TLB 跨核失效不完整
+重复 reap 警告（pid X not found, already reaped?）
+    → 进程退出和 wait4 之间有竞态
+rustc helper thread EAGAIN
+    → 内存过量承诺策略把累计虚拟 commit 当成硬上限
+CAgent 间歇 reject
+    → 网络命名空间过早清理
+```
+
+不是同一个 bug，但都是多核暴露出的并发问题。
+
+## 背景知识
+
+这一节给只上过操作系统课的读者铺路。
+
+**LoongArch 的两块 TLB 和刷新规则**。课上讲的 TLB 一般只有一块，LoongArch 分成
+两块，查找时并行查：
+
+```text
+ 虚拟地址
+    │
+    ├──────────────────────────────────────────┐
+    ▼                                          ▼
+┌──────────┐                           ┌─────────────┐
+│   MTLB   │  全相联，每项自带页大小   │    STLB     │  组相联，固定 4 KiB
+│  ~48 项  │  可混装 4K/2M/1G 映射     │  数百~千项  │  大容量、查找快
+└────┬─────┘                           └──────┬──────┘
+     │          命中任一即可                   │
+     └─────────────────┬──────────────────────┘
+                       ▼
+                 物理页号 + 属性
+```
+
+一个 TLB 表项存偶/奇两个页（TLBELO0 和 TLBELO1），4 KiB 页配置下一个表项覆盖
+8 KiB。所以"刷一页"的最小硬件粒度是 8 KiB 的页对。
+
+**invtlb 指令——选择刷新粒度**。`invtlb op, asid, addr` 的 `op` 决定匹配规则：
+
+| op | 作用 | 类比 |
+|---|---|---|
+| 0x5 | 按 ASID + 地址刷 | "只把这一个条目丢掉" |
+| 0x4 | 按 ASID 刷所有非全局项 | "把这个进程的缓存全清" |
+| 0x3 | 清本核所有非全局项 | "所有用户缓存一起丢" |
+| 0x1 | 清本核全部 TLB（含全局） | "内核映射也重新来" |
+
+刷新时两块 TLB 同时受影响。用错 op 会把别的进程的条目也刷掉（比如本想按地址刷
+却用了按 ASID 刷的 0x4）。
+
+**ASID（地址空间标识符）**。每个 TLB 项带一个 10 位 ASID 标签。不同进程用不同
+ASID，这样切换进程不需要全刷 TLB。LoongArch 的 ASID 是 per-hart 分配的——同一个
+进程在不同核上的 ASID 编号可以不同。ASID 0 保留给内核。
+
+**PLV（特权级）**。LoongArch 有 4 级特权（0 最高，3 最低），内核在 PLV 0，用户在
+PLV 3。PTE 的 PLV 字段决定哪个特权级能访问该页。
+
+**CSR.ASID**。当 CPU 进入内核时，trampoline 会把 `CSR.ASID` 切成 0（内核 ASID）。
+这意味着一旦进入内核态，TLB 里用户 ASID 的条目虽然物理上还在，但匹配不上了——
+硬件比较 ASID 时发现不等，直接跳过。这是 LoongArch 与 RISC-V 的一个关键差异：
+RISC-V 内核态不切 SATP，用户页表仍然活着。
+
+**DMW（直接映射窗口）**。内核用 `CSR.DMW0..3` 配置一段虚拟地址直接映射物理内存，
+不经过页表也不占 TLB。所以内核的线性映射零 TLB 开销。
+
+**tlbsrch/tlbrd/tlbwr/tlbfill 四条指令分工**：
+- `tlbsrch`：用 TLBEHI 中的虚拟页号和 ASID 去 TLB 里找，找到就把索引写入
+  `CSR.TLBIDX`；
+- `tlbrd`：读出 `TLBIDX` 指向的那一项到 TLBEHI/TLBELO0/TLBELO1；
+- `tlbwr`：把 CSR 里的内容写入 `TLBIDX` 指向的位置（覆盖）；
+- `tlbfill`：把 CSR 里的内容填入 TLB，**硬件自己选位置**（不会冲掉你指定的项）。
+
+TLB refill 异常处理用的是 `tlbfill`，因为是硬件替换策略。如果错用 `tlbwr` 可能
+覆盖掉别的有效项。
+
+**跨核 TLB shootdown**。一个核修改了页表，别的核的 TLB 里可能还有旧条目。必须
+通知它们刷新，否则会访问到旧物理页甚至已被释放的页。LoongArch 没有像 RISC-V
+SBI RFENCE 那样的固件调用，必须软件自己发 IPI、等确认。流程：
+
+```text
+核 0 修改 PTE
+    → dbar 0 保证写入全局可见
+    → 填 IPI 请求（目标核、ASID、地址范围）
+    → 发送 IPI
+    → 目标核执行 invtlb 并回写 ack
+    → 核 0 看到所有 ack 后才释放旧物理页
+```
+
+**进程退出与 wait4 的竞态**。课上讲的是：进程退出变成 zombie，父进程 wait 取走
+状态。但如果"发布 zombie 状态"和"放入父进程队列"不是原子的，wait 可能在中间
+取走了半成品，然后退出路径又把同一个进程再次入队。
+
+**overcommit（内存过量承诺）**。Linux 默认允许进程申请超过物理内存的虚拟地址空间
+（因为大多数页不会真正用到）。`mode 0` 只拒绝"单次申请量 > 物理内存"的极端
+情况；`mode 2` 才做严格的累计限制。旧代码错误地在 mode 0 下也比较累计虚拟 commit
+与物理内存的 1.5 倍，导致多进程 fork 后很快触及上限。
 
 ## 如何发现
 
-关键失败日志和命令如下：
+关键失败日志：
 
 ```text
 .tmp/final-runs/20260802-113053-loongarch64-shell/serial.log
@@ -21,6 +114,8 @@ LoongArch 12 个处理器核心上线后，用户程序仍会遇到地址转换�
 .tmp/final-runs/20260802-223007-loongarch64-shell/serial.log
 ```
 
+运行命令：
+
 ```sh
 ARCH=loongarch64 MEM=8G SMP=12 IMAGE_MODE=snapshot ./run.sh cagent
 cd /work/tgoskits
@@ -28,43 +123,37 @@ export RUSTUP_TOOLCHAIN=nightly-2026-05-28 CARGO_NET_OFFLINE=true
 cargo build -p tg-xtask
 ```
 
-第一份日志包含用户地址异常，坏地址和 `TLBEHI` 落在同一个 8 KiB 成对 TLB 项；早期
-CAgent 日志出现重复 reap 警告；Rust 日志在 `futures-core` 阶段报告
-`pthread_create(EAGAIN)`。PID 只增长到约 50、没有物理页分配失败，而
-`Committed_AS` 已超过错误实现的 `1.5 * RAM` 门槛，说明用户态的 `EAGAIN` 实际由
-内核 `mmap()` 返回 `ENOMEM` 后经 glibc 转换而来。最终标准 CAgent 和评分 JSON 则
-用来确认修复没有只解决启动日志。
+第一份日志中 `BADV` 和 `TLBEHI` 落在同一个 8 KiB 页对，说明跨核 TLB 发布不完整。
+CAgent 日志出现重复 reap 警告。`tg-xtask` 在 `futures-core` 阶段报告
+`pthread_create(EAGAIN)`，PID 只到约 50、无物理页分配失败，但 `Committed_AS`
+已超过错误的 `1.5 * RAM` 门槛。
 
 ## 怎么解决
 
-处理器启动从固件设备树读取 `/cpus`，次级核心完成独立栈、页表、异常、定时器和
-处理器间中断（Inter-Processor Interrupt，IPI）初始化后才发布 online bit。页表项
-写入后，地址空间对象按活动核心掩码发送失效请求；LoongArch 的 4 KiB 页按 8 KiB
-even/odd pair 对齐，接收核心执行指定地址空间标识符（Address Space Identifier，
-ASID）的 `invtlb`，回写完成序号；发送方观察全部确认后才释放旧物理页。
+四个子问题各修一处：
 
-进程生命周期改为：
+**TLB shootdown 完善**：页表项写入后，按活动核心掩码发送失效请求；4 KiB 页按
+8 KiB 偶/奇 pair 对齐；接收核执行指定 ASID 的 `invtlb 0x5`，回写完成序号；
+发送方全部确认后才释放旧物理页。trap-context 的 supervisor-only 映射也纳入同一
+ASID batch，不再以 U bit 判断是否需要 shootdown。
+
+**进程退出改为三步**：
 
 ```text
 最后存活线程执行资源 teardown
-    -> 原子发布 waitable EXIT_ZOMBIE
-    -> waiter 以一次性 claim 做 EXIT_ZOMBIE -> EXIT_DEAD
-    -> 统计、PID 和 PCB 只释放一次
+    → 原子发布 EXIT_ZOMBIE（exit code + 父队列 + waiter 唤醒 一次完成）
+    → waiter 以一次性 claim 做 EXIT_ZOMBIE → EXIT_DEAD
+    → 统计、PID 和 PCB 只释放一次
 ```
 
-reparent、`CLONE_PARENT` 和失败回滚都沿用同一所有权票据。网络命名空间则使用统一
-lifetime 表：进程成员、socket 和 namespace fd 都增加同一个引用；最后一个引用只
-取得 teardown claim，先从可发现集合移除，再在可睡眠上下文清理协议状态。
+**网络命名空间**：进程、socket 和 namespace fd 都增加同一个统一引用表的引用；
+四类引用同时为零时才能原子 claim teardown，不会出现跨类别的 torn snapshot。
 
-内存过量承诺按 Linux 三种模式区分：mode 0 只拒绝单次大于可管理内存加交换空间的
-申请；mode 1 总是允许；mode 2 才比较累计 `Committed_AS + additional` 与
-`CommitLimit`。本内核没有交换空间，因此 mode 0 用可管理物理内存作为单次申请上限。
-判定由 `mmap()` 和 `brk()` 共享，并只在真实拒绝时打印限频诊断。
+**overcommit 修复**：mode 0 只拒绝单次大于物理内存的申请，不比较累计 commit；
+三种策略抽成可单测的纯函数。
 
-Linux 对照为 LoongArch `tlb.c/smp.c`、`kernel/exit.c`、`fs/nsfs.c`、
-`net/core/net_namespace.c` 和 `mm/util.c`。CongCore 使用固定 hart mask、mailbox 和
-锁保护表代替 Linux 通用跨处理器函数调用、工作队列及完整引用计数基础设施，但保持
-“先准备、一次提交、最后引用清理”和“失效确认后再复用页”的边界。
+Linux 对照为 LoongArch `tlb.c/smp.c`、`kernel/exit.c`、`net/core/net_namespace.c`
+和 `mm/util.c`。
 
 ## 对应提交
 
@@ -78,12 +167,26 @@ Linux 对照为 LoongArch `tlb.c/smp.c`、`kernel/exit.c`、`fs/nsfs.c`、
 
 ## 对比提升
 
-12/12 核心上线，online mask 为 `0xfff`；工具链连续 12 轮完成，最小离线 Cargo
-工程约 1 分 33 秒编译并正确运行；kernel agent 20/20，通过标准 CAgent 10/10，权重
-199.10/200。`tg-xtask` 越过原 `futures-core` 的线程创建失败并继续到 PID 40，但
-60 分钟内仍未完成，所以本条证明阻塞错误消失，不提供完整 BuildStorm 加速比。
+| 指标 | 结果 |
+| --- | --- |
+| 核心上线 | 12/12，online mask `0xfff` |
+| CAgent | 10/10，权重 199.10/200 |
+| kernel agent 连续回归 | 20/20 pass |
+| 工具链连续启动 | 12 轮完成 |
+| 最小离线 Cargo 工程 | 编译 + 运行 Hello world 成功，约 1m33s |
+| `tg-xtask` | 越过原 EAGAIN 故障点，继续到 PID 40；60 分钟未完成 |
+
+该批没有运行完整 BuildStorm，`tg-xtask` 聚焦构建确认原 blocker 消失但整体未完成。
+
+以下是 AI 的具体分析，作为存档。
 
 ---
+
+## 历史分析背景
+
+这个批次把四个互相独立的多核正确性问题集中修复：TLB shootdown 不完整、进程退出
+竞态、netns 过早清理和 overcommit 误判。它们共同导致 12 核 LoongArch 无法稳定
+运行工具链和 CAgent。下面保留完整的失败现场、Linux 对照、设计细节和验证数据。
 
 ## 1. 结论
 
@@ -193,7 +296,7 @@ TLBELO1 0
 
 这说明问题不是“二级 hart 没启动”，而是用户地址空间第一次进入较复杂动态
 glibc/Rust 程序时，LoongArch 的 paired TLB、ASID 和 trap-context 映射发布没有
-形成跨 hart 一致性闭环。
+让各个 hart 看到一致的结果。
 
 ### 3.2 重复 reap 警告
 

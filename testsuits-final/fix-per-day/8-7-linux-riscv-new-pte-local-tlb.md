@@ -2,6 +2,97 @@
 
 ## 问题概述
 
+RISC-V 每次把无效用户 PTE 变成有效 PTE，都会刷新其他核的 TLB。BuildStorm
+并发编译时，新页很多，同一地址空间又会在多个核上运行。这条远程刷新路径因此反复
+触发。Linux 对这种更新只刷新发生缺页的本核；CongCore 改成相同做法。旧映射失效、
+换页、降权、解除映射、COW 和可执行页发布仍通知其他核。
+
+## 背景知识
+
+TLB 就是页表的缓存。可以把页表看成地址簿，把 TLB（Translation Lookaside Buffer，
+地址转换旁路缓存）看成手边的常用联系人。CPU 先查 TLB；没找到时才逐级查页表。
+
+Sv39 是 RISC-V 的 39 位虚拟地址分页方案。它把地址分成三段页表索引和页内偏移：
+
+```text
+虚拟地址低 39 位
++----------+----------+----------+-------------+
+| VPN[2]   | VPN[1]   | VPN[0]   | page offset |
+| 9 bit    | 9 bit    | 9 bit    | 12 bit      |
++-----+----+-----+----+-----+----+-------------+
+      |          |          |
+      v          v          v
+   一级页表 -> 二级页表 -> 三级页表 -> 4 KiB 物理页
+```
+
+VPN（Virtual Page Number，虚拟页号）每段选择 512 个表项之一。最后得到 PTE
+（Page Table Entry，页表项）。PTE 的 V 位表示有效；V=0 时没有映射。R、W、X
+分别允许读、写、执行，U 表示用户态可访问。A、D 还记录访问和写入状态。
+
+CPU 可能把“这个 PTE 无效”也记进 TLB。因此页表内存改好后，要用 `sfence.vma`
+（Supervisor Virtual Memory Fence，监管态虚拟内存屏障）让旧缓存不能继续生效。
+它有四种常用形式：
+
+```text
+sfence.vma x0,   x0     刷本核全部地址、全部 ASID
+sfence.vma addr, x0     刷本核某个虚拟地址
+sfence.vma x0,   asid   刷本核某个 ASID 的全部地址
+sfence.vma addr, asid   刷本核某个 ASID 的某个地址
+```
+
+ASID（Address Space Identifier，地址空间标识符）像贴在 TLB 项上的进程标签。
+不同进程可把相同虚拟地址映到不同物理页。只要标签不同，切进程时就不用清空整个
+TLB。CongCore 还给 ASID 加代际，避免编号回收后误用旧缓存。
+
+`sfence.vma` 只管当前 hart（硬件线程，本文可近似看作一个 CPU 核）。RISC-V
+没有替操作系统广播 TLB 刷新的硬件指令。需要刷其他核时，内核调用 SBI
+（Supervisor Binary Interface，监管态二进制接口）的 remote fence（远程屏障）
+服务。固件再发 IPI（Inter-Processor Interrupt，核间中断），等待目标核执行屏障。
+这会跨核、跨特权级同步，代价远高于一次本地指令。
+
+无效 PTE 变成有效 PTE 时，其他核没有旧物理页或旧权限可误用。发生缺页的核刷自己
+即可。其他核若缓存了“无效”，最多再缺页一次，然后也在本地刷新。反过来，有效 PTE
+变成无效，或改成另一物理页、收紧权限时，其他核可能继续使用旧映射，必须全部通知。
+
+取指还多一层缓存。I-cache（Instruction Cache，指令缓存）可能留着旧指令；
+`fence.i`（取指屏障）让本核之后重新取指。可执行页可能被别的核运行，所以本批没有
+把它放进数据页快路，仍保留跨核 TLB 与 I-cache 同步。
+
+## 如何发现
+
+长测中的 shell 探针一直成功，QEMU 也持续占用 CPU，所以先排除了死锁和 OOM。
+随后用 QEMU `-perfmap` 定位：单核差距不大，多核差距放大到 4--5 倍。源码追踪显示，
+两个新 PTE 路径都进入 SBI RFENCE。原始日志、命令和调用点完整保存在下文。
+
+## 怎么解决
+
+新增 `update_mmu_cache_for_new_pte()`。它读取本核当前代际的 ASID，在 PTE 写入屏障后，
+只执行该地址和该 ASID 的本地 `SFENCE.VMA`。普通数据页和并发伪缺页走这条路径；
+可执行页及所有曾经有效的 PTE 仍走原有的跨核事务。
+
+## 对应提交
+
+内核修复为 `ff9c87df468a025dddc087bad28937032a22c80b`，提交主题是
+`riscv: avoid remote shootdown for new PTEs`。顶层基线、内核基线、Linux 对照提交和
+文件清单见历史记录。
+
+## 对比提升
+
+在 8 vCPU、8 GiB、300 秒 ABBA 对照中，14 个可比采样的编译输出平均增加 18.77%。
+两轮 after 都推进到更多 crate，QEMU CPU 只增加约 0.5%。6 项 TLB、文件映射、共享
+地址空间和 I-cache 回归为 6 passed / 0 failed。四轮都因 300 秒上限以 `rc=124`
+结束，所以这证明短窗口吞吐提升，不代表完整 BuildStorm 已通过。
+
+以下是 AI 的具体分析，作为存档。
+
+---
+
+## 历史分析背景
+
+# 2026-08-07 RISC-V missing-PTE 本地 TLB 发布修复
+
+## 问题概述
+
 RISC-V BuildStorm 的 `tg-xtask` 前置编译并没有死锁。旧实现的问题是：每次 lazy
 fault 把一个原先不存在的用户 PTE 安装为有效 PTE 时，都会开启完整的 mm 失效事务，
 扫描 resident harts，并通过 SBI RFENCE 同步刷新其他 hart 的 TLB。
