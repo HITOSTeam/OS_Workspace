@@ -263,7 +263,8 @@ tg-xtask 已通过；240 秒时两边都离生成二进制很远，因此本批�
 | --- | --- |
 | 顶层分支 | `dev_final` |
 | `os/` 基线 | `da190f90640edc08de48f628da16f259fc5ca077` |
-| `os/` 修复 | `9f06a1d`（`riscv64: share high-half MMIO mappings`） |
+| `os/` 修复 | `9f06a1d882ded0624188e5bcaf8b325bcb263d45`（`riscv64: share high-half MMIO mappings`） |
+| 顶层集成 | `34d97b6d`（`riscv64: integrate high-half MMIO mappings`） |
 | 修复文件 | `irq.rs`、`trap.asm`、`config.rs`、`virtio_blk.rs`、`memory_set.rs`、`mm/mod.rs` |
 
 共享工作树中 slab、file-backed exec、signal、scheduler 和其它工作人员的修改均未加入
