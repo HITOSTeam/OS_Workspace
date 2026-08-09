@@ -104,7 +104,9 @@ fault-around batch 使用固定 `[Option<_>; 16]`，没有每-fault Vec 分配�
 - 提交前重新校验 VMA、MapArea 起止、权限和 PTE；已有有效 PTE 直接跳过；
 - executable 页逐 frame 复用既有 I-cache publication；
 - MAP_SHARED 每页更新 resident backing ref；
-- 每个新 PTE 仍调用架构 `update_mmu_cache_for_new_pte()`；
+- 初版每个新 PTE 调用一次架构 hook；后续提交
+  `9cbde1a48ae50693be0775271beac5722c04673e` 已改为公共 range publication，
+  一批 PTE store 完成后只调用一次架构 range hook；
 - truncate/EOF、madvise、COW 和 reverse-mm 失效机制未绕过。
 
 ### 4. 增加最小因果计数

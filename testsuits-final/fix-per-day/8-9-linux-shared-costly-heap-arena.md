@@ -1,5 +1,11 @@
 # 8-9 共享 costly-order heap arena 隔离大块分配
 
+> **后续状态（2026-08-09）**：该固定 96 MiB arena 在 LoongArch 12-hart
+> BuildStorm 中达到容量临界点并产生吞吐悬崖，已经由
+> `014eb34c7fcf9dbea96a63de4301b3432bd99cef` 的“共享 zone + 可回填
+> per-hart slab cache”替代。本文保留为过渡方案及 RISC-V OOM 止血的历史记录，
+> 最终设计与验证见 `8-9-linux-refillable-heap-zone.md`。
+
 ## 问题概述
 
 内核 512 MiB heap 原先被永久切成 `MAX_HARTS` 个独立 slab/buddy shard。小对象走
