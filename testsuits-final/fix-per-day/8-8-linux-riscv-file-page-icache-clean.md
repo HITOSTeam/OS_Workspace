@@ -99,9 +99,12 @@ memfd 的保守路径都保留。没有新增全局 hart mask、跨 mm 广播、
 
 ## 对应提交
 
-当前实现尚未提交。`os/` 当前基线是
-`6c0752901c7fdf7075f616b6227bcad74f37fe7c`。建议提交标题：
-`riscv64: cache file-page I-cache cleanliness`。
+`os/` 基线是 `6c0752901c7fdf7075f616b6227bcad74f37fe7c`。实现随
+`b18fffbd7439d22571cf530b21786fb08bce62e9`（`kernel: integrate final performance
+improvements`）提交；顶层由 `6cb4b18f`（`final: integrate recent performance
+rounds`）集成。该 `os/` 提交还包含同一阶段已经验证的 allocator、VM、文件系统和调度
+修改，因此不能把整个提交的性能差异只归因于 I-cache clean 状态；本节的精确消融数据
+仍是该机制的因果证据。
 
 ## 对比提升
 
