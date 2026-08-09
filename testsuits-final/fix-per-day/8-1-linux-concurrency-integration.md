@@ -1,130 +1,187 @@
 # 8-1 筛选并集成 Linux 式内核并发修复，消除八核 CAgent 停顿
 
 ## 问题概述
-
-候选工作树同时改了页分配、Copy-on-Write（写时复制，COW）缺页、文件描述符关闭、
-调度器、内核堆和终端。只有内存管理与文件描述符生命周期修改通过筛选；其余方案会停顿或退化。
-合入后，8 核 CAgent 仍偶发卡住，最终又找出四个互不相同的并发错误：
-
-```text
-候选补丁 ── Linux 语义 + 聚焦回归 ──┬─ 通过：内存管理、文件描述符修改进入主线
-                                      └─ 失败：调度器、内核堆、早期终端方案撤回
-                                                        |
-8 核 CAgent 复核 <───────────────────────────────────────┘
-    └─ 中断重入 + 内存空间/进程控制块反向加锁 + 只读文件释放抢写锁 + 标准输出字节交错
-```
-
-## 背景知识
-
-先把锁想成门钥匙。洗手间只有一个隔间，拿钥匙的人几十秒就出来时，门口的人站着等
-通常没问题；如果里面的人要办半小时手续，门口的人就该领号、坐下，轮到时再被叫醒。
-
-```text
-很短、不能停下的工作              可能等待磁盘或调度的工作
-拿钥匙 -> 做几步 -> 还钥匙         领号 -> 没轮到就休息 -> 被叫醒
-       自旋等待                              阻塞等待
-```
-
-前一种是 spinlock（自旋锁）：拿不到锁的 CPU 一直循环检查，等待期间仍占用处理器。
-后一种是 sleeping lock（可阻塞锁），常见实现是 mutex（互斥锁）：拿不到锁的任务进入
-等待队列，由调度器换别的任务运行。自旋锁适合只改几个字段的短临界区，也能用于不能
-睡眠的中断上下文；mutex 适合可能等待输入输出（input/output，I/O）、分配内存或持锁
-时间较长的进程上下文。
-
-再想象接力赛。选手拿着唯一的接力棒，却突然离场等公交；其他选手即使一直冲刺，也拿
-不到棒。更糟的是，接他回来的车可能也要先拿这根棒，于是所有人永久等待。
-
-这就是“不能拿着自旋锁睡眠”的直观原因。任务 sleep（睡眠）后不再执行，也就不能释放
-锁；其他 CPU 只会持续自旋。若唤醒路径、调度路径或资源完成路径还要同一把锁，就形成
-死锁。很多内核自旋锁还会关闭抢占，因此持锁代码只能做不会阻塞的短操作。本文把清零
-4 KiB 页面、文件读取和对象析构移到锁外，正是为了守住这个边界。
-
-中断还多一层风险。想象店员拿着库房钥匙时，紧急铃响了；店员停下手头工作去处理警报，
-但警报流程也要同一把钥匙。原来的店员只有处理完警报后才能回来还钥匙，警报却永远等锁。
-
-```text
-CPU 0 普通代码：lock(L) ──────── 被中断，尚未 unlock(L)
-                              |
-                              v
-CPU 0 中断处理：            lock(L) -> 一直自旋
-                              ^
-                              └── 普通代码不能恢复，L 永远不会释放
-```
-
-因此，只要 interrupt handler（中断处理程序）也会取得某把自旋锁，普通代码在拿锁前
-就必须先关闭本地中断，释放锁后恢复原来的中断状态。Linux 常用
-`spin_lock_irqsave()`；本文对应的 allocator（分配器）元数据锁也要保存并关闭本地中断。
-这里只关当前 CPU 已足够：别的 CPU 可以竞争，但不会让持锁者被同核中断截断。
-
-等待队列也有一个像“错过叫号”的窗口。顾客先看屏幕，发现还没轮到自己；就在他从
-屏幕走到座位之间，柜台更新号码并广播一次。广播时他还没登记为等待者，坐下后又不会
-再收到广播，于是条件明明已经满足，他却一直睡着。
-
-```text
-等待者 CPU 0                         唤醒者 CPU 1
-检查 ready == false
-                                     ready = true
-                                     wake(queue) -> 队列为空
-把自己加入 queue
-schedule() -> 永久睡眠
-```
-
-这叫 check-then-sleep race（先检查再睡眠竞争），结果叫 lost wakeup（丢失唤醒）。
-wait queue（等待队列）的正确协议要让“检查条件”和“登记等待”受同一把锁保护：等待者
-先登记、再检查，确认条件仍不满足才原子地放锁并调度；唤醒者也在这把锁的规则下更新
-条件并唤醒。这样，唤醒要么看见等待者，要么等待者看见已经成立的条件，不会两边错过。
-
-最后想象一名会计从 0 号柜台换到 1 号柜台。他只有一本账和一个抽屉。0 号柜台必须先
-明确交出账本，1 号柜台才能接手；只看到“他应该去 1 号柜台”就让两边同时开工，会把
-账本写乱。
-
-一个 task（任务）同样只有一份内核栈、寄存器保存区和调度状态，也只能属于一个正在
-执行的位置。若两个 CPU 同时运行它，会并发改同一内核栈，并可能把它重复挂入 runqueue
-（运行队列）。所以“任务已变为可运行”不等于“旧 CPU 已经停止运行它”。
-
-```text
-CPU 0：仍在执行任务 A -> 完成切换 -> store-release(on_cpu = 0)
-                                                    |
-                                                    v
-CPU 1：准备唤醒 A   -> acquire 等待 on_cpu == 0 -> 把 A 加入运行队列
-```
-
-`on_cpu`（任务仍在某 CPU 上执行的标志）就是这次交接的信号。release/acquire
-（发布/获取内存顺序）保证 CPU 1 看到标志清零时，也看到 CPU 0 先前对任务状态的修改。
-Linux 的 `try_to_wake_up()` 还用 `pi_lock`（保护任务调度状态的自旋锁）串行化变化。
-筛选调度器候选时不能只比较 runnable（可运行任务）数量；任何快路径都必须保留这套交接规则。
+CAgent 执行过程中死锁 
 
 ## 如何发现
 
-先跑 hackbench 的四种进程/线程通信组合与 lmbench `lat_proc fork`，再由
-`tools/analyze_concurrency_focus.py` 计算五次中位数；任一单项退化超过 5% 就拒绝。
-通过初筛后，用下面两条命令复核 8 核 CAgent 和混合 IOZone：
+QEMU 监视器显示 7 个核心都在等同一个 inode 写信号量；`debugfs ncheck` 把它定位到
+只读  libc
+方法： info registers -a 拿到 7 个 hart 的 pc，落在同一个地址区间。 2. 用内核 ELF 把地址翻成符号（nm/addr2line os/target/<arch>/release/os），看到都在读写信号量的等待循环里。 3. 锁对象的地址在寄存器或栈上，xp 把那块内存 dump 出来，读出里面的 inode 号——一个裸数字。这才需要 debugfs ncheck 反查成 libc.so.6。
 
-```sh
-ARCH=riscv64 SMP=8 MEM=8G IMAGE_MODE=snapshot \
-  BOOT_TIMEOUT=900 TEST_TIMEOUT=600 LOG=error ./run.sh cagent
-IOZONE_RUNS=3 IOZONE_WORKLOAD=mixed \
-  bash tools/run_iozone_focus.sh \
-  /home/shiyicong/temp/CongCore \
-  .tmp/iozone/iozone-root.img .tmp/iozone/linux-mm-fput-tty-final.log
+代码审查随后确认：读缺页等块 I/O 时，退出路径的
+`OSInode::drop()` 无条件抢写锁；
+
+进程控制块锁与内存空间锁；读取
+`/proc/meminfo` 时，`Committed_AS` 扫描全部进程和虚拟内存区域，又放大了等待。
+
+>[!TIP] 
+> Committed_AS 是 /proc/meminfo 里的一个字段，AS 指 address space。含义是：系统当前已经"承诺"给所有进程的内存总量（单位
+>  kB）——如果每个进程把它申请到的可写私有内存全部真正写一遍，需要多少物理内存加 swap。
+>  
+>  关键点是它记的是承诺而不是占用：
+>  
+>  - 记账发生在映射建立时（mmap、brk），不是首次访问时。所以它和 RSS（实际驻留）是两回事，通常远大于 RSS。
+>>  - 因为是承诺，它可以超过物理内存总量——这就是 overcommit（超额分配）。Linux 默认允许，因为大多数进程申请了不会全用。
+>  - 只有"可能需要独占物理页"的映射才计入：私有可写映射、堆、共享匿名/shmem。只读文件映射不计入（缺页时读的是 page
+>  cache，多个进程共享同一份），MAP_NORESERVE 也不计入。
+  
+
+
+串口日志还显示 10 个测试其实都已完成，只因 stdout 按字节交错，judge 仅识别出
+5 个完整结果行。
+## 那把 inode 写信号量是什么
+
+每个 `OSInode` 持有 ext4 inode 的读写信号量 `self.inode_lock`（可睡眠，对应 Linux 的 `i_rwsem`）。文件映射缺页读取时走 `pread_at`，只读描述取的是读锁：
+
+```rust
+// os/src/fs/inode.rs:970
+pub fn pread_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+    if self.writable {
+        let _inode_guard = self.inode_lock.write();
+        return self.pread_at_locked(offset, buf);
+    }
+    let _inode_guard = self.inode_lock.read();
 ```
+
+调用点在缺页路径 `os/src/mm/memory_set/fault.rs:800`，读锁一直持到 ext4 块 I/O 返回，中间会睡眠让出 CPU：
+
+```rust
+match file_page_cache_get_or_load(dev, ino, file_page, |page| {
+    let _ = os_inode.pread_at(plan.file_off, page);
+}) { ... }
+```
+
+
+## 无条件抢写锁的退出路径
+
+`OSInode::drop()` 是这样的：
+
+```rust
+ impl Drop for OSInode {
+     fn drop(&mut self) {
+-        let inode_key = {
+-            let _inode_guard = self.inode_lock.write();   // 无条件
+-            let mut inner = self.inner.lock();
+-            let inode_key = (inner.inode.device_id(), inner.inode.inode_num());
+-            if !inner.write_buf.is_empty() { ...回写... }
+-            inode_key
+-        };
+```
+
+inode 号只是从 `inner` 里读两个字段，却为此取了写锁；只读文件的 `write_buf` 永远是空的，写锁纯属多余。修复后先判断再取：
+
+```rust
+// os/src/fs/inode.rs:1755
+let inode_key = (self.inode_device_id, self.inode_num);
+let has_pending_write = self.writable && !self.inner.lock().write_buf.is_empty();
+if has_pending_write {
+    let _inode_guard = self.inode_lock.write();
+    ...
+}
+```
+
+同一提交还把回写提前到 `close` 阶段（`inode.rs` 的 `File::close`，`if last_fd && self.writable { flush_with_error() }`）。原因写在提交注释里：`Drop` 可能在 idle 清理路径上跑，那里没有 current task，根本不能在 inode 信号量上睡眠——一个不能睡眠的上下文去抢一把要睡眠等待的写锁，就是死锁。
+
+`libc.so.6` 之所以是受害者：它是只读的、被每个动态链接程序映射，读者极多；任何一个进程退出关闭它，都会往这把读写锁里插一个写者，把后续所有读者一并挡住。
+
+## 锁序反向的两处
+
+`c58f935` 之前，MemorySet 的锁是 `spin::Mutex`，而且几乎所有路径都是"先拿 PCB 锁，再在 PCB 锁里拿 mm 锁"：
+
+```rust
+// mmap.rs 修复前
+let inner = process.borrow_mut();          // PCB ticket lock，不可睡眠
+...
+let mut memory_set = inner.memory_set.lock();   // 之后可能等 inode rwsem
+```
+
+```rust
+// procfs/content.rs 修复前
+let inner = proc.borrow_mut();
+let regions = { let memory_set = inner.memory_set.lock(); ... };
+```
+
+而私有文件映射在 mm 锁里要等 inode 读写信号量。于是形成：PCB 自旋锁 → mm 锁 → inode 信号量。持 inode 读锁的那个缺页正在等磁盘，要靠调度器唤醒才能推进；可其他核心正拿着不可睡眠的 PCB 自旋锁死等——自旋锁不会让出 CPU，owner 就永远醒不过来。
+
+`c58f935` 的注释把这条讲得很直接：
+
+```rust
+// os/src/task/process_block.rs:1590
+/// This is the local equivalent of Linux `get_task_mm()`: only the short
+/// task lookup is protected by the task lock; callers then acquire the
+/// sleeping mmap lock independently.  Keeping the monolithic PCB spinlock
+/// while waiting for MemorySet can otherwise strand the mm owner and make
+/// signal/procfs walkers spin behind the same process.
+pub fn memory_set(&self) -> MmRef { self.borrow_mut().memory_set.clone() }
+```
+
+两处改动：mm 锁换成可睡眠的 `KernelMutex`（`mm_ref.rs` 的 `use spin::MutexGuard;` → `use crate::sync::{KernelMutex, KernelMutexGuard};`）；调用方只在 PCB 锁里克隆一个 `MmRef` 指针就放锁，锁不再嵌套。
+
+## Committed_AS 的放大作用
+
+`c58f935` 删掉的就是原来那个全量扫描：
+
+```rust
+ pub fn vm_committed_as_bytes() -> usize {
+-    let processes = { PID2PCB.lock().values().cloned().collect::<Vec<_>>() };
+-    processes.iter().fold(0usize, |acc, process| {
+-        let Some(inner) = process.try_borrow_mut() else { return acc };
+-        let memory_set = inner.memory_set.lock();          // 又是 PCB → mm
+-        acc + memory_set.heap_size() + memory_set.anon_private_writable_vm_bytes()
+-    })
++    MmRef::global_committed_bytes()
+ }
+```
+
+它同时踩了两个雷：遍历所有进程和 VMA 让临界区变长，且用的正是"PCB → mm"这个错误锁序。现在改成 VMA 变动时增量维护一个全局原子计数，读取是 O(1)：
+
+```rust
+// os/src/mm/memory_set/mm_ref.rs:11
+static VM_COMMITTED_BYTES: AtomicUsize = AtomicUsize::new(0);
+// MmGuard::drop() 里 update_committed_bytes(self.guard.committed_vm_bytes())
+```
+
+LTP 的 `overcommit_memory.c`、`max_map_count.c` 都要反复读 `/proc/meminfo`，所以这条路径在测试里是热路径，不是偶发。
+
+## judge 报 5/10 的原因
+
+`Stdout::write` 是逐字节 `console_putchar` 的循环，中间没有任何互斥：
+
+```rust
+// os/src/fs/stdio.rs:82
+fn write(&self, user_buf: UserBuffer) -> usize {
+    let bytes = user_buf.to_vec();
+    for &b in &bytes { console_putchar(b as usize); }
+    bytes.len()
+}
+```
+
+多进程并发写终端时，两条 `PASS:` 行会逐字节交错，judge 按整行匹配就只认出 5 条。`d21154e` 加了一把可睡眠的写锁，并且在翻译用户页之前就取：
+
+```rust
+// os/src/fs/stdio.rs:16
+static STDOUT_WRITE_LOCK: KernelMutex<()> = KernelMutex::new(());
+
+// os/src/syscall/filesystem/io.rs:345
+let _stdout_write_guard = if file.as_any().downcast_ref::<Stdout>().is_some() {
+    let Some(guard) = Stdout::lock_write(nonblock) else { return err(SyscallError::EAGAIN) };
+    Some(guard)
+} else { None };
+```
+
+## 归纳
+
+四处缺陷是同一个错误的四种形态：慢操作（块 I/O、全量扫描、串口输出）落在了不该持有的锁里面。
+综合起来的设计模式可以看成是这样 
 
 ```text
-.tmp/concurrency-runs/core-final-regression-retry.log
-.tmp/final-runs/20260801-195749-riscv64-cagent/serial.log
-.tmp/final-runs/20260801-202517-riscv64-cagent/serial.log
-.tmp/final-runs/20260801-201818-riscv64-cagent/serial.log
-.tmp/final-runs/20260801-200911-riscv64-cagent/serial.log
-.tmp/final-runs/20260801-223907-riscv64-cagent/
-.tmp/iozone/linux-mm-fput-tty-final.log
+持锁：只快照 VMA/PTE/frame 并固定对象
+放锁：分配、清零、拷贝、读文件、等 I/O
+重新加锁：复核快照未变则继续，变了丢弃重试
 ```
 
-QEMU 监视器显示 7 个核心都在等同一个 inode 写信号量；`debugfs ncheck` 把它定位到
-只读 `libc.so.6`。代码审查随后确认：读缺页等块 I/O 时，退出路径的
-`OSInode::drop()` 无条件抢写锁；进程控制块锁与内存空间锁反向取得；读取
-`/proc/meminfo` 时，`Committed_AS` 扫描全部进程和虚拟内存区域，又放大了等待。
-串口日志还显示 10 个测试其实都已完成，只因 stdout 按字节交错，judge 仅识别出
-5 个完整结果行。以上现场保存在这些日志中。
+`fault.rs` 里 `prepare_lazy_fault` / `commit_lazy_fault` 的拆分就是这个模式的实现。
 
 ## 怎么解决
 
@@ -170,8 +227,6 @@ QEMU 监视器显示 7 个核心都在等同一个 inode 写信号量；`debugfs
 最终 CAgent 在 RISC-V 8 核、8 GiB、快照模式下 10/10 完成，单项 1566--3715 ms；
 混合 IOZone 三轮中位数为 66.86 s。相对 7 月 31 日同工作负载的 76.23 s 集成基线
 缩短 12.29%，但该数字跨越多批修复，只能作为累计状态，不能归因给某一个提交。
-被拒绝的 heap magazine 把 64.17 s 中位数退化到 75.60 s（+17.81%）。具体开销没有
-继续拆分，且每核快路径缺少迁移、抢占和中断重入约束；超过 5% 门槛后直接回滚。
 
 以下是 AI 的具体分析，作为存档。
 
