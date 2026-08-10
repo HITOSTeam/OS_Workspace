@@ -31,7 +31,7 @@ fn notify_handler() {
 fn install_sigusr1_handler() {
     let mut new_action = SignalAction::default();
     let mut old_action = SignalAction::default();
-    new_action.handler = notify_handler as usize;
+    new_action.handler = notify_handler as *const () as usize;
     assert_eq!(
         sigaction(SIGUSR1, Some(&new_action), Some(&mut old_action)),
         0

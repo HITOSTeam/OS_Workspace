@@ -1,7 +1,7 @@
 //! Driver for VirtIO block devices.
 
 use crate::hal::Hal;
-use crate::queue::VirtQueue;
+use crate::queue::{VirtQueue, VirtQueueState};
 use crate::transport::Transport;
 use crate::volatile::{volread, Volatile};
 use crate::{Error, Result};
@@ -265,7 +265,7 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
         let token = self
             .queue
             .add(&[req.as_bytes()], &mut [buf, resp.as_bytes_mut()])?;
-        if self.queue.should_notify() {
+        if cfg!(target_arch = "loongarch64") || self.queue.should_notify() {
             self.transport.notify(QUEUE);
         }
         Ok(token)
@@ -347,7 +347,7 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
         let token = self
             .queue
             .add(&[req.as_bytes(), buf], &mut [resp.as_bytes_mut()])?;
-        if self.queue.should_notify() {
+        if cfg!(target_arch = "loongarch64") || self.queue.should_notify() {
             self.transport.notify(QUEUE);
         }
         Ok(token)
@@ -375,6 +375,11 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
     /// removing it from the used ring. If there are no pending completed requests returns `None`.
     pub fn peek_used(&mut self) -> Option<u16> {
         self.queue.peek_used()
+    }
+
+    /// Returns a read-only snapshot of virtqueue progress.
+    pub fn queue_state(&self) -> VirtQueueState {
+        self.queue.state()
     }
 
     /// Returns the size of the device's VirtQueue.

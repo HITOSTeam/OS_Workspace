@@ -41,3 +41,5 @@ loongarch_img_info/
 .kiro/
 
 vendor/cargo-vendor
+
+OS_Workspace/os/.tmp

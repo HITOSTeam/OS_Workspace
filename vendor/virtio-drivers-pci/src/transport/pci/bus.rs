@@ -237,8 +237,13 @@ impl PciRoot {
         );
     }
 
+    /// Returns the legacy PCI interrupt pin (1 = INTA through 4 = INTD).
+    pub fn interrupt_pin(&self, device_function: DeviceFunction) -> u8 {
+        (self.config_read_word(device_function, 0x3c) >> 8) as u8
+    }
+
     /// Gets an iterator over the capabilities of the given device function.
-    pub fn capabilities(&self, device_function: DeviceFunction) -> CapabilityIterator {
+    pub fn capabilities(&self, device_function: DeviceFunction) -> CapabilityIterator<'_> {
         CapabilityIterator {
             root: self,
             device_function,

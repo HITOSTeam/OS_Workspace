@@ -34,15 +34,15 @@ copy_ext4_fs: prepare_submit
 	mkdir -p $(SUBMIT_FOLDER)/ext4-fs
 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C ext4-fs . | tar -xf - -C $(SUBMIT_FOLDER)/ext4-fs
 
-copy_easy_fs: prepare_submit
-	rm -rf $(SUBMIT_FOLDER)/easy-fs
-	mkdir -p $(SUBMIT_FOLDER)/easy-fs
-	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs
+# copy_easy_fs: prepare_submit
+# 	rm -rf $(SUBMIT_FOLDER)/easy-fs
+# 	mkdir -p $(SUBMIT_FOLDER)/easy-fs
+# 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs
 
-copy_easy_fs_fuse: prepare_submit
-	rm -rf $(SUBMIT_FOLDER)/easy-fs-fuse
-	mkdir -p $(SUBMIT_FOLDER)/easy-fs-fuse
-	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs-fuse . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs-fuse
+# copy_easy_fs_fuse: prepare_submit
+# 	rm -rf $(SUBMIT_FOLDER)/easy-fs-fuse
+# 	mkdir -p $(SUBMIT_FOLDER)/easy-fs-fuse
+# 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs-fuse . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs-fuse
 
 copy_vendor: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/vendor
@@ -73,7 +73,7 @@ copy_img: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/img
 	cp -r img/ $(SUBMIT_FOLDER)/img/
 
-all: copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_easy_fs copy_easy_fs_fuse copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore
+all: copy_os copy_user copy_ext4_fs_packer copy_ext4_fs  copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore
 	chmod -R u+rwX,go+rX ./submit_repo
 
 clean:
@@ -86,4 +86,4 @@ clean:
 	@rm -rf $(LOCAL_VENDOR_TMP)
 	@cargo clean
 
-.PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_easy_fs copy_easy_fs_fuse copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore
+.PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore

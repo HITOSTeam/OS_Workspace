@@ -1,12 +1,12 @@
 [workspace]
-members = ["os", "user", "ext4-fs", "ext4-fs-packer"]
-resolver = "1"
+resolver = "3"
+members = ["os", "user", "easy-fs", "easy-fs-fuse", "ext4-fs", "ext4-fs-packer"]
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
-debug = 2
-opt-level = 3
-overflow-checks = false
+debug = true
+opt-level = 3           # LTP fork-heavy cases need optimized kernel hot paths.
+overflow-checks = false # 关闭整数溢出检查

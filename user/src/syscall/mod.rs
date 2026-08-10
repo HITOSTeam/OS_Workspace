@@ -15,6 +15,8 @@ const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPENAT: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
+const SYSCALL_MKDIRAT: usize = 34;
+const SYSCALL_MOUNT: usize = 40;
 const SYSCALL_SYNC: usize = 81;
 const SYSCALL_PIPE2: usize = 59;
 const SYSCALL_DUP3: usize = 24;
@@ -202,6 +204,29 @@ pub fn getpid() -> isize {
 
 pub fn sync() -> isize {
     syscall(SYSCALL_SYNC, [0, 0, 0, 0, 0, 0])
+}
+
+/// 创建评测运行时文件系统的挂载点，遵循 Linux 的 mkdirat 调用约定。
+pub fn mkdirat(dirfd: isize, path: &str, mode: usize) -> isize {
+    syscall(
+        SYSCALL_MKDIRAT,
+        [dirfd as usize, path.as_ptr() as usize, mode, 0, 0, 0],
+    )
+}
+
+/// 挂载 proc、sysfs、devtmpfs 或 tmpfs 等内核文件系统。
+pub fn mount(source: &str, target: &str, fs_type: &str, flags: usize) -> isize {
+    syscall(
+        SYSCALL_MOUNT,
+        [
+            source.as_ptr() as usize,
+            target.as_ptr() as usize,
+            fs_type.as_ptr() as usize,
+            flags,
+            0,
+            0,
+        ],
+    )
 }
 
 pub fn poweroff() -> ! {

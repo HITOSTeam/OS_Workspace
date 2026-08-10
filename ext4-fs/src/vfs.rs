@@ -1,15 +1,15 @@
 //! Virtual filesystem layer for ext4
 
+use super::block_cache::{get_block_cache_with_hint, sync_block_cache};
 use super::error::{Ext4Error, Result};
-use super::ext4::Ext4FileSystem;
+use super::ext4::{Ext4FileSystem, Ext4FileSystemHandle};
 use super::layout::*;
-use super::{BLOCK_SZ, BlockDevice, get_block_cache, get_block_cache_readahead};
+use super::{BLOCK_SZ, BlockDevice, get_block_cache};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::max;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use spin::Mutex;
 
@@ -18,10 +18,6 @@ fn align4(n: usize) -> usize {
 }
 
 type DirIndex = BTreeMap<String, (u32, u8)>;
-
-/// 连续 fault 预读 32 KiB；调用者本来就请求多块时最多合并为 128 KiB I/O。
-const SEQUENTIAL_READ_AHEAD_BLOCKS: usize = 8;
-const MAX_FILE_READ_BATCH_BLOCKS: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct InodeCacheKey {
@@ -45,6 +41,14 @@ const EXTENTS_CACHE_MAX: usize = 256;
 const EXTENTS_IN_INODE: usize = (15 * 4 - 12) / 12;
 const EXTENTS_PER_NODE: usize = (BLOCK_SZ - 12) / 12;
 const EXTENT_TREE_MAX_DEPTH: u16 = 5;
+const EXTENT_READ_AHEAD_BLOCKS: usize = 32;
+
+fn extent_read_ahead_blocks(phys_off: usize, remaining: usize, block_size: usize) -> usize {
+    phys_off
+        .saturating_add(remaining)
+        .div_ceil(block_size)
+        .clamp(1, EXTENT_READ_AHEAD_BLOCKS)
+}
 
 lazy_static! {
     static ref DIR_INDEX_CACHE: Mutex<BTreeMap<InodeCacheKey, Arc<Mutex<DirIndex>>>> =
@@ -128,13 +132,11 @@ pub struct Inode {
     /// Offset within the block
     block_offset: usize,
     /// Filesystem reference
-    fs: Arc<Mutex<Ext4FileSystem>>,
+    fs: Arc<Ext4FileSystemHandle>,
     /// Block device reference
     block_device: Arc<dyn BlockDevice>,
     /// Cached block size (avoid locking fs repeatedly)
     block_size: usize,
-    /// 记录下一次期望读取的逻辑块，用于识别连续访问；跳跃访问不会触发预读。
-    next_read_block: AtomicUsize,
 }
 
 #[derive(Clone, Copy)]
@@ -148,7 +150,48 @@ pub struct InodeStatSnapshot {
     pub special_rdev: u64,
 }
 
+/// Filesystem-wide counters needed by a VFS `statfs` implementation.
+///
+/// The snapshot is read from the filesystem handle owned by this inode, so a
+/// mounted secondary ext4 device never accidentally reports the root device's
+/// superblock.  The current allocator does not persistently maintain every
+/// free-space counter yet; callers therefore get the same best-effort on-disk
+/// values that the ext4 backend currently exposes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileSystemStatSnapshot {
+    pub block_size: u64,
+    pub blocks: u64,
+    pub blocks_free: u64,
+    pub blocks_available: u64,
+    pub files: u64,
+    pub files_free: u64,
+}
+
 impl InodeStatSnapshot {
+    pub fn is_dir(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFDIR
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFLNK
+    }
+
+    pub fn is_fifo(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFIFO
+    }
+
+    pub fn is_chrdev(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFCHR
+    }
+
+    pub fn is_blkdev(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFBLK
+    }
+
+    pub fn is_socket(&self) -> bool {
+        (self.mode & S_IFMT) == S_IFSOCK
+    }
+
     pub fn rdev_for_mode(&self) -> u64 {
         match self.mode & S_IFMT {
             S_IFCHR | S_IFBLK => self.special_rdev,
@@ -228,15 +271,15 @@ impl Inode {
         cache.get(&key).unwrap().clone()
     }
 
-    /// Create a new inode reference (locks fs to get block_size)
+    /// Create a new inode reference.
     pub fn new(
         inode_num: u32,
         block_id: usize,
         block_offset: usize,
-        fs: Arc<Mutex<Ext4FileSystem>>,
+        fs: Arc<Ext4FileSystemHandle>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Self {
-        let block_size = fs.lock().block_size();
+        let block_size = fs.block_size();
         Self {
             inode_num,
             block_id,
@@ -244,7 +287,6 @@ impl Inode {
             fs,
             block_device,
             block_size,
-            next_read_block: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -253,7 +295,7 @@ impl Inode {
         inode_num: u32,
         block_id: usize,
         block_offset: usize,
-        fs: Arc<Mutex<Ext4FileSystem>>,
+        fs: Arc<Ext4FileSystemHandle>,
         block_device: Arc<dyn BlockDevice>,
         block_size: usize,
     ) -> Self {
@@ -264,7 +306,6 @@ impl Inode {
             fs,
             block_device,
             block_size,
-            next_read_block: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -273,7 +314,27 @@ impl Inode {
         self.block_size
     }
 
-    /// 通过一次块缓存查询读取 stat 所需的 inode 元数据。
+    /// Read filesystem-wide stat information from this inode's own ext4
+    /// superblock.  This mirrors Linux routing `statfs` through
+    /// `path.dentry->d_sb`, rather than consulting a process-global root disk.
+    pub fn filesystem_stat_snapshot(&self) -> FileSystemStatSnapshot {
+        let fs = self.fs.lock();
+        let sb = &fs.superblock;
+        let blocks_free =
+            ((sb.s_free_blocks_count_hi as u64) << 32) | sb.s_free_blocks_count_lo as u64;
+        let reserved_blocks =
+            ((sb.s_r_blocks_count_hi as u64) << 32) | sb.s_r_blocks_count_lo as u64;
+        FileSystemStatSnapshot {
+            block_size: sb.block_size() as u64,
+            blocks: sb.blocks_count(),
+            blocks_free,
+            blocks_available: blocks_free.saturating_sub(reserved_blocks),
+            files: sb.s_inodes_count as u64,
+            files_free: sb.s_free_inodes_count as u64,
+        }
+    }
+
+    /// Read stat-relevant inode metadata with one block-cache lookup.
     pub fn stat_snapshot(&self) -> InodeStatSnapshot {
         self.read_disk_inode(|inode| InodeStatSnapshot {
             inode_num: self.inode_num,
@@ -384,17 +445,22 @@ impl Inode {
 
     /// Find a file/directory by name in current directory
     pub fn find(&self, name: &str) -> Option<Arc<Inode>> {
-        if !self.is_dir() {
-            return None;
-        }
-
-        let idx = self.dir_index();
+        // A cached index can only have been built for this directory inode and
+        // is invalidated when that inode is removed or reused.  Trust it just
+        // as Linux trusts an instantiated directory dentry; cold lookup still
+        // validates the inode type before building the index.
+        let idx = if let Some(idx) = dir_index_cached(self.inode_num, &self.block_device) {
+            idx
+        } else {
+            if !self.is_dir() {
+                return None;
+            }
+            self.dir_index()
+        };
         let (inode_num, file_type) = { idx.lock().get(name).copied()? };
 
-        let fs = self.fs.lock();
-        let (block_id, offset) = fs.get_inode_pos(inode_num);
-        let block_size = fs.block_size();
-        drop(fs);
+        let (block_id, offset) = self.fs.inode_pos(inode_num);
+        let block_size = self.fs.block_size();
 
         let inode = Arc::new(Inode::new_with_block_size(
             inode_num,
@@ -606,23 +672,7 @@ impl Inode {
         let block_size = self.block_size; // Use cached block size
 
         if uses_extents {
-            let start_lblock = offset / block_size;
-            let next_lblock = offset
-                .saturating_add(read_len)
-                .saturating_add(block_size - 1)
-                / block_size;
-            let expected = self.next_read_block.swap(next_lblock, Ordering::Relaxed);
-            let speculative_readahead = if expected == start_lblock {
-                SEQUENTIAL_READ_AHEAD_BLOCKS
-            } else {
-                1
-            };
-            self.read_extents(
-                offset,
-                &mut buf[..read_len],
-                block_size,
-                speculative_readahead,
-            )
+            self.read_extents(offset, &mut buf[..read_len], block_size)
         } else {
             // Ensure holes (sparse blocks) read back as zeros.
             buf[..read_len].fill(0);
@@ -631,13 +681,7 @@ impl Inode {
     }
 
     /// Read data using extent tree
-    fn read_extents(
-        &self,
-        offset: usize,
-        buf: &mut [u8],
-        block_size: usize,
-        speculative_readahead: usize,
-    ) -> usize {
+    fn read_extents(&self, offset: usize, buf: &mut [u8], block_size: usize) -> usize {
         let extents = if let Some(cached) = extents_cached(self.inode_num, &self.block_device) {
             cached
         } else {
@@ -650,7 +694,7 @@ impl Inode {
             debug_assert_extents_ordered(&extents);
             extents_cache_put(self.inode_num, &self.block_device, extents)
         };
-        self.read_from_extents(&extents, offset, buf, block_size, speculative_readahead)
+        self.read_from_extents(&extents, offset, buf, block_size)
     }
 
     /// Parse the extent tree from inode block data
@@ -763,7 +807,6 @@ impl Inode {
         offset: usize,
         buf: &mut [u8],
         block_size: usize,
-        speculative_readahead: usize,
     ) -> usize {
         let file_start = offset;
         let file_end = offset.saturating_add(buf.len());
@@ -799,6 +842,8 @@ impl Inode {
             let mut dst_off = copy_start - file_start;
             let mut remaining = read_end - copy_start;
 
+            // Unwritten extents are allocated on disk but expose zeroes until
+            // they are converted to initialized extents.
             if extent.is_unwritten() {
                 buf[dst_off..dst_off + remaining].fill(0);
                 covered_until = read_end;
@@ -809,25 +854,15 @@ impl Inode {
             let offset_in_extent = copy_start - extent_start;
             let mut cur_block = extent.start_block() as usize + offset_in_extent / block_size;
             let mut phys_off = offset_in_extent % block_size;
-            let extent_end_block =
-                (extent.start_block() as usize).saturating_add(extent.len() as usize);
 
             while remaining > 0 {
-                // 大块 read 合并调用者明确需要的数据；单页 lazy fault 只有在同一
-                // inode 连续访问时才做小窗口预读，避免随机代码页造成缓存污染。
-                let requested_blocks = phys_off
-                    .saturating_add(remaining)
-                    .saturating_add(block_size - 1)
-                    / block_size;
-                let readahead_blocks = extent_end_block
-                    .saturating_sub(cur_block)
-                    .min(requested_blocks.max(speculative_readahead))
-                    .min(MAX_FILE_READ_BATCH_BLOCKS)
-                    .max(1);
-                let cache = get_block_cache_readahead(
+                // `remaining` is already clipped to this extent, so the hint
+                // never crosses a non-contiguous physical mapping.
+                let read_ahead = extent_read_ahead_blocks(phys_off, remaining, block_size);
+                let cache = get_block_cache_with_hint(
                     cur_block,
                     Arc::clone(&self.block_device),
-                    readahead_blocks,
+                    read_ahead,
                 );
                 let to_read = remaining.min(block_size - phys_off);
 
@@ -1227,11 +1262,6 @@ impl Inode {
         inode.i_flags |= EXT4_EXTENTS_FL;
         let (old_leaf_blocks, old_index_blocks) =
             Self::extent_tree_blocks(inode, &self.block_device);
-        let old_depth = {
-            let header_ptr = inode.i_block.as_ptr() as *const Ext4ExtentHeader;
-            let header = unsafe { &*header_ptr };
-            header.is_valid().then_some(header.eh_depth)
-        };
 
         // If the extents fit in the inode, store as a depth-0 leaf.
         if extents.len() <= EXTENTS_IN_INODE {
@@ -1250,41 +1280,6 @@ impl Inode {
             if need_index > EXTENTS_IN_INODE {
                 return Err(Ext4Error::Unsupported);
             }
-        }
-
-        // 常见的编译输出会分批追加数据。depth-1 树已有足够叶节点时直接
-        // 原地重写，容量增长时也只补分配缺少的叶节点。旧实现每次 flush
-        // 都重建整棵树并释放旧叶，既产生平方级元数据写入，也让顺序分配
-        // 游标不断越过刚释放的块，最终把链接产物切成大量碎片。
-        if old_depth == Some(1) && need_leaf <= EXTENTS_IN_INODE {
-            let reused = core::cmp::min(old_leaf_blocks.len(), need_leaf);
-            let mut leaf_blocks = old_leaf_blocks[..reused].to_vec();
-            let new_leaf_blocks =
-                Self::alloc_extent_metadata_blocks(fs, need_leaf.saturating_sub(reused))?;
-            leaf_blocks.extend_from_slice(&new_leaf_blocks);
-
-            for (i, pblock) in leaf_blocks.iter().copied().enumerate() {
-                let start = i * EXTENTS_PER_NODE;
-                let end = core::cmp::min(extents.len(), start + EXTENTS_PER_NODE);
-                if let Err(e) =
-                    Self::write_extent_leaf_block(&self.block_device, pblock, &extents[start..end])
-                {
-                    Self::dealloc_extent_metadata_blocks(fs, &new_leaf_blocks);
-                    return Err(e);
-                }
-            }
-
-            Self::write_extent_root_index_in_inode(
-                inode,
-                &leaf_blocks,
-                extents,
-                1,
-                EXTENTS_PER_NODE,
-            );
-            Self::dealloc_extent_metadata_blocks(fs, &old_leaf_blocks[reused..]);
-            Self::dealloc_extent_metadata_blocks(fs, &old_index_blocks);
-            extents_cache_invalidate(self.inode_num, &self.block_device);
-            return Ok(());
         }
 
         let leaf_blocks = Self::alloc_extent_metadata_blocks(fs, need_leaf)?;
@@ -1481,12 +1476,15 @@ impl Inode {
             return Ok(());
         }
 
-        extents.insert(insert_pos, Ext4Extent {
-            ee_block: lblock,
-            ee_len: 1,
-            ee_start_hi: (pblock >> 32) as u16,
-            ee_start_lo: (pblock & 0xFFFF_FFFF) as u32,
-        });
+        extents.insert(
+            insert_pos,
+            Ext4Extent {
+                ee_block: lblock,
+                ee_len: 1,
+                ee_start_hi: (pblock >> 32) as u16,
+                ee_start_lo: (pblock & 0xFFFF_FFFF) as u32,
+            },
+        );
         Ok(())
     }
 
@@ -2058,7 +2056,10 @@ impl Inode {
                 let cache = get_block_cache(data_block as usize, Arc::clone(&self.block_device));
                 let mut guard = cache.lock();
                 guard.get_bytes_mut(0, BLOCK_SZ).fill(0);
-                guard.sync();
+                drop(guard);
+                // Directory initialization is ordered before publishing its
+                // inode. Flush without holding the cache lock across I/O.
+                sync_block_cache(&cache);
             }
             self.dir_write_entry_at(data_block, 0, 12, inode_num, Ext4DirEntry::FT_DIR, ".")?;
             self.dir_write_entry_at(

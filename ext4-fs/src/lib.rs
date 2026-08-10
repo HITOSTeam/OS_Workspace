@@ -17,10 +17,9 @@
 
 #![no_std]
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
-// 只读位图辅助尚未接入当前分配路径，保留给后续一致性检查使用。
-#[allow(dead_code)]
-mod bitmap;
 mod block_cache;
 mod block_dev;
 mod error;
@@ -35,11 +34,13 @@ pub const BLOCK_SZ: usize = 4096;
 
 pub use block_dev::BlockDevice;
 pub use error::{Ext4Error, Result};
-pub use ext4::Ext4FileSystem;
-pub use vfs::{Inode, InodeStatSnapshot};
+pub use ext4::{Ext4FileSystem, Ext4FileSystemHandle};
+pub use vfs::{FileSystemStatSnapshot, Inode, InodeStatSnapshot};
 
-pub use block_cache::cache_stats;
-use block_cache::{block_cache_sync_all, get_block_cache, get_block_cache_readahead};
+pub use block_cache::{
+    CacheDiagnostics, cache_diagnostics, cache_stats, configure_block_cache_for_memory,
+};
+use block_cache::{block_cache_sync_all, get_block_cache};
 
 /// Flush all cached blocks to the underlying block device.
 pub fn sync_all() {
