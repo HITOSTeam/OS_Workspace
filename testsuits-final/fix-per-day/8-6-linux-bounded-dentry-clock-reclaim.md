@@ -82,7 +82,7 @@ dentry 的 `Arc` 分配（72 字节）正好落在 96-byte class 里，比 buddy
 
 ## 如何发现
 
-专家复核 `make_clock_room()` 代码，指出它和之前 block-cache 无界 clean scan
+复核 `make_clock_room()` 代码，指出它和之前 block-cache 无界 clean scan
 形状相同。核对 run 116 的 `/proc/perf`：
 
 ```text
@@ -128,18 +128,20 @@ testsuits-final/.tmp/final-runs/20260806-dentry-clock-perf-stat-125/results.csv
 **stale record 快速处理**：invalidation 留下的过期 key 只删除元数据，立即
 结束本轮，不误杀别的 live entry。
 
-**确定性 fallback**：64 项内没有冷叶子时，按 hot cache-only 叶子 > 冷但被
-引用 > hot 且被引用的顺序选 fallback，保证 32K 硬上限一定能守住。
+**确定性 fallback**：64 项内没有可回收的冷叶子时，按"hot cache-only 叶子 >
+冷但被引用 > hot 且被引用"的顺序挑选，保证 32K 硬上限一定能守住。
 
-**容量为 1 的边界**：fallback 可能让队列暂时为空，循环同时检查队列非空，
-防止对空队列 `pop_front()`。
+**容量为 1 的边界**：fallback 可能让队列暂时为空，所以循环里要同时检查
+队列非空，不能对空队列 `pop_front()`。
 
-为什么两个改动必须同时做：只加 `strong_count == 1` 过滤没有扫描预算的话，
-大量 active/hot 项仍可能扫完整个 cache；只加预算没有 fallback 的话，64 项
-全不可回收时就守不住 32K 上限。
+两个改动缺一不可：
 
-Linux 的 shrinker 把预算通过 `nr_to_scan` 传进来，不是固定 64。本内核还没有
-通用 shrinker，64 是前台回收的局部预算，是有界过渡方案。
+- 只加 `strong_count == 1` 过滤而没有扫描预算：active/hot 项太多时仍可能
+  扫遍整个 cache；
+- 只加预算而没有 fallback：64 项全部不可回收时守不住 32K 上限。
+
+Linux 通过 shrinker 的 `nr_to_scan` 传入预算，不是固定 64。本内核还没有
+通用 shrinker，64 只是前台回收的局部预算，属于有界过渡方案。
 
 ## 对应提交
 

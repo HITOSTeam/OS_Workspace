@@ -7,10 +7,13 @@ LoongArch 12 核上线后，用户程序遇到四类不同的故障：
 ```text
 用户地址异常（TLBEHI 和 BADV 落在同一个 8 KiB 页对）
     → TLB 跨核失效不完整
+
 重复 reap 警告（pid X not found, already reaped?）
     → 进程退出和 wait4 之间有竞态
+
 rustc helper thread EAGAIN
     → 内存过量承诺策略把累计虚拟 commit 当成硬上限
+
 CAgent 间歇 reject
     → 网络命名空间过早清理
 ```
@@ -19,7 +22,18 @@ CAgent 间歇 reject
 
 ## 背景知识
 
-这一节给只上过操作系统课的读者铺路。
+ BADV = Bad Virtual Address，CSR
+  0x7。发生地址相关异常时，硬件把出错的完整虚拟地址写进去。对应
+  RISC-V 的 stval、x86 的 CR2。代码里就是
+  os/src/arch/loongarch64/trap/handler.rs:72 的
+  read_badv()，取到的值直接当 si_addr 传给
+  force_current_fault_signal(SIGBUS, ...)。
+  
+  TLBEHI = TLB Entry HI，CSR 0x11。它是 TLB 表项的"高半部分"，字段是
+  VPPN（虚拟页号高位）加 ASID、页大小。TLB
+  异常时硬件把出错地址的页号填进来；它同时是 tlbsrch（查找）和
+  tlbfill（填充）的输入寄存器。你引用的那份文档 8-2 的第 72
+  行列了这四条指令怎么用它。
 
 **LoongArch 的两块 TLB 和刷新规则**。课上讲的 TLB 一般只有一块，LoongArch 分成
 两块，查找时并行查：
@@ -123,7 +137,7 @@ export RUSTUP_TOOLCHAIN=nightly-2026-05-28 CARGO_NET_OFFLINE=true
 cargo build -p tg-xtask
 ```
 
-第一份日志中 `BADV` 和 `TLBEHI` 落在同一个 8 KiB 页对，说明跨核 TLB 发布不完整。
+第一份日志中 `BADV` 和 `TLBEHI` 落在同一个 8 KiB 页对，说明跨核 TLB 回收 不完整。
 CAgent 日志出现重复 reap 警告。`tg-xtask` 在 `futures-core` 阶段报告
 `pthread_create(EAGAIN)`，PID 只到约 50、无物理页分配失败，但 `Committed_AS`
 已超过错误的 `1.5 * RAM` 门槛。
@@ -132,10 +146,11 @@ CAgent 日志出现重复 reap 警告。`tg-xtask` 在 `futures-core` 阶段报�
 
 四个子问题各修一处：
 
-**TLB shootdown 完善**：页表项写入后，按活动核心掩码发送失效请求；4 KiB 页按
+**TLB shootdown 完善**：页表项写入后，按active_hart发送失效请求；4 KiB 页按
 8 KiB 偶/奇 pair 对齐；接收核执行指定 ASID 的 `invtlb 0x5`，回写完成序号；
 发送方全部确认后才释放旧物理页。trap-context 的 supervisor-only 映射也纳入同一
 ASID batch，不再以 U bit 判断是否需要 shootdown。
+这个问题之前riscv 修复是类似 的。
 
 **进程退出改为三步**：
 
@@ -176,7 +191,6 @@ Linux 对照为 LoongArch `tlb.c/smp.c`、`kernel/exit.c`、`net/core/net_namesp
 | 最小离线 Cargo 工程 | 编译 + 运行 Hello world 成功，约 1m33s |
 | `tg-xtask` | 越过原 EAGAIN 故障点，继续到 PID 40；60 分钟未完成 |
 
-该批没有运行完整 BuildStorm，`tg-xtask` 聚焦构建确认原 blocker 消失但整体未完成。
 
 以下是 AI 的具体分析，作为存档。
 

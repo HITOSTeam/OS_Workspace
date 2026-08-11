@@ -2,7 +2,7 @@
 
 ## 问题概述
 
-`tg-xtask` 的停顿由一个正确性竞态和两个文件系统全局扫描共同造成：
+`tg-xtask`  过程中
 
 ```text
 Cargo wait 子进程  --丢失唤醒--> 永久睡眠
@@ -10,78 +10,352 @@ unlink             --扫描全局--> 进程数 × fd 数
 write / truncate   --扫描全局--> 进程数 × 映射数
 ```
 
-前者让构建卡死，后两者在并行构建中放大全局锁竞争。
+## 一、Cargo wait 子进程 → 丢失唤醒 → 永久睡眠
 
-## 背景知识
+丢失唤醒（lost wakeup）是同步原语的经典时序错误。Cargo 调 `wait4()` 回收 rustc，正确流程是"检查有没有子进程退出 → 没有就睡"。问题出在这两步之间：如果 rustc 恰好在这个窗口里退出，它发出的唤醒打在一个还没把自己标记成 Blocked 的任务上，唤醒被丢掉；随后任务真的睡下去，而它等的事件已经发生过了，再没有人会来叫它。于是永久睡眠。
 
-先把父进程想成餐馆领班，子进程像被派去完成订单的厨师。
-厨师做完后不能只转身离开：领班还要知道订单是否成功、为何失败，
-并注销这名厨师占用的登记项。领班取走结果，整项工作才真正收尾。
+现场特征很典型：rustc 已经变成僵尸，Cargo 却不 reap；手工发一个 `SIGCHLD` 构建立刻继续。手工信号提供了第二次唤醒事件——条件早就满足了，缺的只是叫醒动作。
 
-在 Unix/Linux 中，父进程通过 `wait()` 或 `waitpid()` 等待子进程状态变化。
-`wait()` 可以领取任意一个符合条件的子进程结果；`waitpid()` 还能按 PID 或进程组筛选，
-并可用 `WNOHANG` 表示“现在没有结果就立即返回”。
+修复是照 Linux 的 prepare-to-wait 协议，把顺序反过来：先声明要睡，再做最终检查。
 
-这种“领取结果并注销登记项”叫 reap（收割，也就是回收子进程）。
-成功返回时，父进程至少得到子进程 PID 和编码后的状态，据此判断：
-
-- 子进程是否正常退出，以及退出码；
-- 是否被信号终止，以及对应信号；
-- 请求相关选项时，是否停止或继续执行。
-
-`wait4()` 等接口还可返回该子进程的资源使用统计。完成 reap 后，
-内核才能释放仅为保存退出结果而留下的最后一小部分进程记录。
-
-可以把退出结果看成寄存在前台的包裹：送件人已经离开，
-但包裹和领取凭证必须保留到收件人来取；否则收件人永远不知道结果。
-
-这个“人已退出、只留下结果记录”的状态叫 zombie（僵尸进程）。
-僵尸进程不会继续运行，也不占用普通用户内存，但仍占一个内核进程表项，
-其中保存 PID、退出状态和少量统计信息。父进程 wait 并 reap 后，它才彻底消失。
-因此僵尸状态不是多余残留，而是父子进程异步收尾时必需的“结果邮箱”。
-
-再把通知想成门铃：门铃只是在说“前台可能有你的包裹”，它不是包裹本身。
-即使门铃响过，收件人仍要到前台核对并领取；多件包裹也可能只响一次。
-
-子进程退出或发生相关状态变化时，内核通常向父进程发送 `SIGCHLD`
-（子进程状态变化信号）。它负责提示“请来检查”，而 `wait()`/`waitpid()`
-才负责查找并取走具体结果。因此稳健的处理方式通常是在收到通知后循环调用
-`waitpid(..., WNOHANG)`，直到当前没有更多可回收子进程。
-
-还有一种像“看完空柜台、刚戴上耳塞，快递员就送到”的竞态：
-检查结果与真正睡眠不是同一个原子动作，通知恰好落在两者之间。
-
-这叫 lost wakeup（丢失唤醒），经典时间线如下：
-
-```text
-时间      父进程 / waiter                   子进程 / waker
-T0        检查：没有已退出子进程
-T1                                           退出并保存状态
-T2                                           发送 SIGCHLD，发出唤醒
-T3        把自己标记为睡眠并调度出去
-T4        永久等待  <----------------------- 唤醒已经过去
+```rust
+// os/src/task/processor.rs:41
+#[must_use = "a prepared wait must be slept or cancelled"]
+pub(crate) struct PreparedWait {
+    task: Arc<TaskControlBlock>,
+    irq_guard: Option<crate::sync::LocalIrqSaveGuard>,
+    armed: bool,
+}
 ```
 
-修复的核心不是“多发一次信号”，而是建立 prepare-to-wait（准备等待）协议：
-先让唤醒者能够看见等待者，再做最后一次条件检查，最后才允许任务睡眠。
-这样，退出发生在任何时刻，要么被最后检查发现，要么能唤醒已登记的等待者。
 
-最后，把多核机器想成有多个独立工位的办公室：一名员工等电话时离开自己的工位，
-不会锁住整栋办公室，其他工位仍可接单、查档案和搬运文件。
+`wait4` 的调用点长这样：
 
-同理，父进程阻塞在 `wait()` 只会阻塞调用它的那个任务。
-调度器会让出该任务所在 CPU 的执行机会；其他 CPU、其他可运行任务，
-以及子进程仍可独立执行 `open()`、`read()`、`write()`、`unlink()` 等文件操作：
-
-```text
-CPU 0: 父进程 -> wait() -> 睡眠 -> 运行其他就绪任务
-CPU 1: 子进程/工作线程 -> open/write/unlink -> 继续推进
-CPU 2: 其他任务 -> 文件系统或计算工作 -> 继续推进
+```rust
+// os/src/syscall/process/wait.rs:783
+// Match Linux prepare_to_wait(): publish Blocked while the parent PCB
+// lock still excludes child-exit publication, then retain irq-disable
+// until the scheduler commit.
+let prepared = PreparedWait::new().expect("wait4 lost its current task");
+drop(process_inner);
+prepared.sleep();
 ```
 
-只有这些任务随后竞争同一把文件系统锁或同一资源时，才会相互等待。
-因此“父进程正在 wait”不能解释全机文件 I/O 停顿；若其他核也不推进，
-应继续排查全局锁、全局扫描、锁顺序或另一处丢失唤醒。
+具体过程是这样 
+
+## 原始过程中 
+
+天真的顺序是：查条件 → 没满足 → 把自己标成 Blocked → 交给调度器。
+
+```text
+睡眠方 (hart 0)                      唤醒方 (hart 1)
+──────────────────────────────────────────────────────
+查条件：没有子进程退出
+                                     子进程退出，条件变成真
+                                     叫醒目标：状态不是 Blocked
+                                     → 什么都没做，唤醒丢掉
+状态 = Blocked
+schedule()                           ...
+永久睡眠
+```
+
+修复的核心思路只有一句：把"声明我要睡"提前到"最后一次查条件"之前，并且让声明和查条件都在同一把保护条件的锁下完成。
+
+## 协议长什么样
+
+调用方的标准写法，以内核等待队列为例（`os/src/sync.rs:70`）：
+
+```rust
+loop {
+    if ready() { return; }                       // 快路径
+    let irq_guard = LocalIrqSaveGuard::new();    // 1. 关本地中断
+    let mut waiters = self.inner.lock();         // 2. 取条件锁
+    if ready() { return; }                       // 3. 锁内复查
+    waiters.push_back(task);                     // 4. 登记到等待队列
+    let prepared = PreparedWait::with_irq_guard(irq_guard).unwrap();  // 5. 声明要睡
+    drop(waiters);                               // 6. 放条件锁
+    prepared.sleep();                            // 7. 真正睡
+}
+```
+
+注意 5 在 6 之前：状态改成 `Blocked` 这件事发生在条件锁里面。唤醒方要改条件，必须先拿这把锁，所以它不可能在"我已登记但还没标记 Blocked"的状态下看到我。
+
+
+## 分四步走一遍
+
+### 第一步：arm（武装）
+
+```rust
+// os/src/task/processor.rs:52
+pub(crate) fn with_irq_guard(irq_guard: LocalIrqSaveGuard) -> Option<Self> {
+    let task = current_task()?;
+    {
+        let _wakeup_guard = task.lock_wakeup_transition();   // 任务级过渡锁
+        let mut inner = task.borrow_mut();
+        debug_assert_eq!(inner.task_status, TaskStatus::Running);
+        inner.task_status = TaskStatus::Blocked;             // 提前发布
+    }
+    Some(Self { task, irq_guard: Some(irq_guard), armed: true })
+}
+```
+
+做了两件事：状态置成 `Blocked`，以及把调用方传进来的中断关闭守卫接管过来。
+
+`wakeup_lock`（`lock_wakeup_transition()`）是本地版的 Linux `task_struct::pi_lock`。它保证"改状态"和唤醒方的"读状态、读 on_cpu、决定怎么办"互斥。注释写得很直接：
+
+```rust
+// os/src/task/task_block.rs:78
+/// This is the minimal counterpart of Linux `task_struct::pi_lock` in
+/// `try_to_wake_up()`: the outgoing CPU and a concurrent hardirq waker
+/// must agree whether the task is still on-CPU or already enqueueable.
+```
+
+中断必须关，因为定时器中断的抢占逻辑会把任务状态改回 `Running`——那样刚发布的 `Blocked` 就白发布了。守卫从 arm 一直持有到任务真正切走，中间不放。
+
+### 第二步：交接
+
+调用方放掉条件锁。从这一刻起唤醒方可以进来了，而它看到的是一个已经 `Blocked` 的目标。
+
+### 第三步：commit（提交睡眠）
+
+```rust
+// processor.rs:97
+pub(crate) fn sleep(mut self) {
+    let wake_already_pending = {
+        let _wakeup_guard = self.task.lock_wakeup_transition();
+        let pending = self.task.wakeup_pending.swap(false, AcqRel);
+        if pending {
+            self.task.wakeup_sync_hart.store(OFF_CPU, Release);
+            self.task.borrow_mut().task_status = TaskStatus::Running;   // 撤销
+        }
+        pending
+    };
+    if wake_already_pending {
+        self.armed = false;
+        self.exit_for_fatal_teardown_if_requested();
+        return;                                  // 根本不睡，直接回去重查条件
+    }
+    self.exit_for_fatal_teardown_if_requested();
+    self.armed = false;
+    block_prepared_current_and_run_next();       // 真的切走
+    self.exit_for_fatal_teardown_if_requested();
+}
+```
+
+`wakeup_pending` 是唤醒到达的标志。如果在第二步的窗口里有人来叫过，唤醒不会丢，而是存在这个原子标志里；`sleep()` 一进来就 `swap(false)` 检查，有就把状态改回 `Running` 直接返回，让调用方的 `loop` 再查一遍条件(wait 内部有一个循环 睡眠 等待 )。
+
+没有待处理唤醒才真的切走：
+
+```rust
+// processor.rs:1818
+fn block_prepared_current_and_run_next() {
+    let task = take_current_task()?;
+    charge_task_runtime_for_scheduler(&task);
+    debug_assert_eq!(task.borrow_mut().task_status, TaskStatus::Blocked);
+    ...
+    local_processor().lock().set_pending_blocked(task);   // 只暂存，不入队
+    schedule(task_cx_ptr);
+}
+```
+
+关键是 `set_pending_blocked`：任务被暂存在本 hart 的处理器结构里，不做任何全局发布。此时 `on_cpu` 仍然指向本 hart——任务还在自己的内核栈上执行 `schedule()`。
+
+### 第四步：idle 收尾
+
+切到 idle 上下文后，才由 idle 做最后的清理（`processor.rs:1381`）：
+
+```rust
+if let Some(task) = local_processor().lock().take_pending_blocked() {
+    let should_wake = {
+        let _wakeup_guard = task.lock_wakeup_transition();
+        task.clear_on_cpu();                                  // 现在才宣布"我下 CPU 了"
+        task.wakeup_pending.swap(false, AcqRel)              
+    };
+    if should_wake {
+        // 切走期间有人叫过 → 补唤醒
+        let sync_hart = task.wakeup_sync_hart.swap(OFF_CPU, AcqRel);
+        if sync_hart < MAX_HARTS { wakeup_sync_task_on_hart(task, sync_hart); }
+        else { wakeup_task(task); }
+    }
+}
+```
+
+## 取消路径
+
+如果调用方复查后发现条件已满足，`PreparedWait` 直接被 drop：
+
+```rust
+// processor.rs:132
+impl Drop for PreparedWait {
+    fn drop(&mut self) {
+        if self.armed {
+            let _wakeup_guard = self.task.lock_wakeup_transition();
+            if inner.task_status == TaskStatus::Blocked {
+                inner.task_status = TaskStatus::Running;      // 恢复
+            }
+            // 取消意味着调用方已经复查过条件、会继续运行或返回。
+            // 期间攒下的唤醒因此已被观察到，不能泄漏给下一次无关的睡眠。
+            self.task.wakeup_pending.store(false, Release);
+            self.task.wakeup_sync_hart.store(OFF_CPU, Release);
+        }
+        drop(self.irq_guard.take());
+    }
+}
+```
+
+清 `wakeup_pending` 这一步容易被忽略但很重要：不清的话，一个已经被"复查条件"消化掉的唤醒会残留下来，导致之后某次完全不相关的睡眠被立即唤醒（虚假唤醒）。
+
+## 唤醒方那一侧
+
+```rust
+// os/src/task/manager.rs:335
+let _irq_guard = LocalIrqSaveGuard::new();
+let _wakeup_guard = task.lock_wakeup_transition();
+
+// SMP 安全性：如果任务确实仍在某个 hart 上执行，不要直接入队
+if task.on_cpu.load(Acquire) != TaskControlBlock::OFF_CPU {
+    task.wakeup_pending.store(true, Release);     // 存进位置 ，交给 idle 补
+    return;
+}
+// 否则：状态是 Blocked → 改 Ready → 清 wakeup_pending → 入队
+```
+
+唤醒方先看 `on_cpu` 而不是先看状态。这是整套协议的枢纽：睡眠方在真正切走之前 `on_cpu` 一直是自己，所以任何在窗口期到达的唤醒都必然走"存暗格"这条分支，绝不会试图把一个还在跑的任务入队。
+
+
+## 四种交错都是安全的
+
+```text
+唤醒时刻                            结果
+────────────────────────────────────────────────────────────
+① arm 之前                          第三步的锁内复查会看到条件已满足 → 不睡
+② arm 之后、放条件锁之前            唤醒方拿不到条件锁，只能等 → 退化成 ③
+③ 放条件锁之后、schedule 之前       on_cpu 还是自己 → 存 wakeup_pending
+                                    sleep() 或 idle 收尾时消费 → 立即醒/补唤醒
+④ 切到 idle、on_cpu 清掉之后        标准路径：Blocked → Ready → 入队
+```
+
+四条路径没有空隙，这就是"不可丢唤醒"的含义。
+
+## 附带处理的致命信号
+
+`sleep()` 里三处 `exit_for_fatal_teardown_if_requested()` 对应 Linux 在提交 `TASK_INTERRUPTIBLE` 睡眠前调用的 `signal_pending_state()`。原因是 SIGKILL 和 exec 的 `de_thread()` 致命信号不能被当作一次普通唤醒——普通唤醒的语义是"回去重查条件"，条件不满足就又睡回去了，进程就杀不掉。所以这三个检查点分别覆盖：提交睡眠前、被唤醒返回后、以及消费掉暗格唤醒后。
+
+```rust
+if self.task.exec_exit_requested() { ...exit_current_and_run_next(0); }
+if let Some((errno, msg)) = check_if_current_signals_error() { ...exit_group_and_run_next(errno); }
+```
+
+检查两种形式是因为 exec 用的是任务本地的一个 token，而普通 group exit 用的是待处理信号位图。
+
+## 二、unlink → 扫描全局 → 进程数 × fd 数
+
+背景是 POSIX 语义：`unlink` 一个仍被打开的文件，目录项立刻消失，但数据要活到最后一个 fd 关闭。Linux 靠 VFS 的 inode/dentry 引用计数天然做到；本项目的 ext4-fs 没有暴露那个生命周期，所以用"改名成隐藏名、等最后一个 close 再真删"来模拟。
+
+要决定是否需要这么做，就得回答"这个 inode 现在还有人打开吗"。旧实现是全局扫描：
+
+```rust
+// 04bf218 删除的 has_open_inode_view()
+let processes = { PID2PCB.lock().values().cloned().collect::<Vec<_>>() };
+for process in processes {
+    let Some(inner) = process.try_borrow_mut() else {
+        // 拿不到锁就保守地认为"打开着"
+        return true;
+    };
+    let table = Arc::clone(&inner.files);
+    ...
+    if table.lock().iter_files_snapshot().into_iter().any(|(_fd, file)| {
+        file.as_any().downcast_ref::<OSInode>() ... // 比对 (dev, ino)
+    })
+}
+```
+
+每次 `unlink` 都是 O(进程数 × fd 数)，还要顺序取全局进程表锁和每张 fd 表锁。并行构建正好是最坏情况：几十个 rustc 各开着大量 fd，而 cargo 删临时文件极其频繁。那个"拿不到锁就 `return true`"的分支更糟——它把锁竞争变成了错误的语义判断。
+
+修复换成 inode 级计数，把"谁打开着"记在 inode 自己身上：
+
+```rust
+// os/src/fs/inode.rs:466
+struct InodeLifetimeState {
+    /// 统计 OSInode 打开描述，而不是 fd 槽位。dup()/fork() 共享一个描述，
+    /// 而 epoll 和 SCM_RIGHTS 的引用可以在最后一个 fd 槽消失后继续持有描述。
+    open_descriptions: usize,
+    /// unlink 在改名前先预约生命周期，封闭"最后一次 close"与 rename 的竞态。
+    unlink_reservations: usize,
+    /// 等最后一个描述消失后要删除的隐藏名。一个 inode 可以有多个硬链接名。
+    deferred_cleanups: Vec<TmpfileCleanup>,
+}
+```
+
+计数在 `register_open_inode_description()` / `unregister_open_inode_description()` 维护，后者在 `OSInode::drop()` 里调用，返回待清理项交给锁外执行。查询从"遍历全系统"变成一次 `BTreeMap` 查找。
+
+`unlink_reservations` 解决的是原子性：判断"有人打开"和"改名成隐藏名"之间如果最后一个 close 挤进来，隐藏名就没人负责删了，变成垃圾文件。
+
+```rust
+// inode_utils.rs defer_unlink_open_file() 修复后
+let Some(reservation) = reserve_deferred_unlink(child) else { return Ok(false) };
+...
+match parent.rename(name, &hidden) {
+    Ok(_) => { reservation.commit(Arc::clone(parent), hidden); return Ok(true); }
+    Err(e) => return Err(ext4_err_to_errno(e)),
+}
+```
+
+`reserve_deferred_unlink` 返回 `None` 表示确实没人打开，可以直接删。预约期间计数不归零，所以 close 不会提前触发清理；`commit()` 原子地放掉预约并登记隐藏名；rename 失败时 `Drop` 自动释放预约（`inode.rs:575`）。
+
+## 三、write / truncate → 扫描全局 → 进程数 × 映射数
+
+这条是 mmap 一致性的代价。`MAP_SHARED` 映射了某文件的进程，必须能看到别人用 `write()` 写进去的字节；`truncate` 改了 i_size，每个映射的有效长度也要更新（决定尾部访问是否该 `SIGBUS`）。
+
+旧实现每次写都全表扫描：
+
+```rust
+// 04bf218 删除的 update_inode_mmaps_size_all_processes()
+resize_file_page_cache(dev, ino, file_size);
+let processes = { PID2PCB.lock().values().cloned().collect::<Vec<_>>() };
+for process in processes {
+    let Some(memory_set) = process.try_memory_set() else { continue };
+    memory_set.update_file_vm_size(dev, ino, file_size);
+}
+```
+
+`write` 路径更狠：用户缓冲按 1 KiB 分块拷贝，每块都做一遍这个扫描。编译器输出的 `.o` 文件从来没被任何人 mmap，却要为每一块付 O(进程数 × VMA 数)。
+
+第二层问题在页缓存本身。原来全系统所有文件的缓存页挤在一个 `(dev, ino, page)` 的 `BTreeMap` 里，一把锁：互不相关的 rustc worker 写不同文件也要排队，`truncate` 想找某个 inode 的页得扫全系统的缓存。
+
+`1d3b44b` 拆成两级，并加了反向索引：
+
+```rust
+// os/src/mm/memory_set/backing.rs:64
+/// Per-inode page index, corresponding to Linux `inode->i_mapping->i_pages`.
+struct FilePageCacheMapping {
+    pages: Mutex<BTreeMap<usize, FilePageCacheSlot>>,
+    /// Weak reverse map corresponding to Linux `address_space::i_mmap`.
+    /// Stale entries are pruned opportunistically; they never retain an mm.
+    mmap_mms: Mutex<Vec<super::mm_ref::WeakMmRef>>,
+}
+```
+
+外层 `FILE_PAGE_MAPPINGS` 只负责按 `(dev, ino)` 找到 mapping，页查找和失效都用 inode 自己的锁——不同文件之间不再互相阻塞。
+
+`mmap_mms` 是 Linux `address_space::i_mmap` 的对应物：只登记真正映射了这个 inode 的地址空间。`mmap` 时 `register_file_mmap()` 登记，写和改大小时只访问这些：
+
+```rust
+// os/src/mm/memory_set.rs:281
+pub(crate) fn update_file_mmap_sizes(dev: usize, ino: u32, file_size: usize) {
+    resize_file_page_cache(dev, ino, file_size);
+    for mm in backing::file_page_cache_mapped_mms(dev, ino) {
+        let _ = mm.update_file_vm_size(dev, ino, file_size);
+    }
+}
+```
+
+用 `Weak` 而不是 `Arc` 是必须的：反向索引不能让一个已退出的地址空间活着。`file_page_cache_mapped_mms()` 每次顺手 `retain(WeakMmRef::is_alive)` 剪掉死条目。没人映射时返回空 `Vec`，整条路径的成本降到零——这正是编译器输出文件的常见情况。
+
+## 三者的关系
+
+第一个是同步原语的时序错误，属于正确性问题，会直接卡死。后两个是"用全局扫描代替索引"的可扩展性错误，单任务构建看不出来（进程少、fd 少、映射少），并行构建下变成全局锁热点。共同点是三者都要有足够的并发才暴露，所以文档里是先用 `cargo build -j1` 稳定复现丢失唤醒，再靠源码检索（`rg -n 'PID2PCB' os/src`）把两处扫描找出来。
+
 
 ## 如何发现
 
@@ -103,10 +377,14 @@ rg -n 'FILE_PAGE_MAPPINGS|FilePageCacheMapping|WeakMmRef' os/src/mm
 
 ## 怎么解决
 
+具体代码细节已经在上面列出了。
+
 - 用 `PreparedWait` 原子衔接“登记等待、最终复查、进入睡眠”，并统一迁移
   `wait4()/waitid()`、vfork、等待队列、poll、epoll 与 pselect 路径。
+
 - 用 inode 级打开描述计数和 unlink reservation 取代全进程 fd 扫描，封闭最后一次
   close 与延迟清理登记之间的竞态。
+
 - 为每个 inode 建立独立页树和弱 `mm` 反向索引，使 write/truncate 只访问真正映射
   该文件的地址空间，不再扫描所有进程。
 
@@ -118,7 +396,7 @@ rg -n 'FILE_PAGE_MAPPINGS|FilePageCacheMapping|WeakMmRef' os/src/mm
 ## 对比提升
 
 并发回归全部通过；并行构建从约 11 个 crate 后停住推进到 96 个不同 `Compiling`
-阶段。1800 秒内仍未完成，因此不宣称端到端加速或 BuildStorm 已通过。
+阶段。
 
 以下是 AI 的具体分析，作为存档。
 

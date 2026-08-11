@@ -10,12 +10,6 @@
 
 ## 背景知识
 
-**BuildStorm 是什么**。BuildStorm 是一个并发编译压力测试：它让系统同时跑大量
-`cargo build` 这样的构建任务，产生密集的 fork/exec（创建编译子进程）、文件读写
-（读源码、写 .o 和 .rlib）和内存分配（编译器本身很吃内存）。一次 BuildStorm 能
-同时压进程管理、文件系统和内存分配三条内核路径，所以它特别容易暴露并发竞态——
-单独跑某一项可能没事，但三条路同时走就出问题了。本文的 bug 就是在 BuildStorm 的
-前置测试 `tg-xtask`（单个 Cargo 编译）中暴露出来的。
 
 **先检查条件再睡眠——经典丢唤醒竞态**。操作系统课上讲过：一个任务想等某个条件
 成立才继续，基本模式是"检查条件，不满足就睡眠"。问题是检查和睡眠之间有一道缝隙。
@@ -124,20 +118,200 @@ ARCH=riscv64 SMP=8 MEM=8G ./run.sh shell
 远端唤醒并重新获得处理器，sleep() 返回之后
 ```
 
-函数先检查 `TaskUserRes` 是否已被取走；若是，说明当前栈正在执行一次性退出清理，
-不能递归退出。否则先处理 task-local exec exit token，再处理默认动作会终止进程的
-pending signal。前者进入 `exit_current_and_run_next(0)`，后者记录原因并进入
-`exit_group_and_run_next()`。普通输入输出唤醒仍返回调用者重查条件。
 
-**与 Linux 的对应**。Linux 的 `prepare_to_wait_event()` 会在等待队列锁内根据
-`signal_pending_state()` 拒绝可中断或可杀死的睡眠；`do_group_exit()` 和
-`de_thread()` 分别发布进程组退出与 exec peer 清理。CongCore 用 task-local exec
-token 避免把退出请求反向广播给 exec owner，因此必须在 prepared-sleep 边界显式
-检查，不能只依赖普通信号扫描。
+## 一、`exit_for_fatal_teardown_if_requested()` 的三步分流
 
-**同批被否决的性能实验**。本批同时试验了 64 桶 futex 等待队列和"分片伙伴分配器加
-每核心小对象缓存"。前者没有证明 BuildStorm 进度收益，后者缺少 Linux slab/page
-分层、批量补充/排空和水位控制，并在 IOZone 中退化（慢 3.9%），均完整回滚。
+代码在 `os/src/task/processor.rs:75-95`：
+
+```rust
+fn exit_for_fatal_teardown_if_requested(&mut self) {
+    // 第 0 步：当前栈已经在做退出清理？
+    if self.task.borrow_mut().res.is_none() {
+        return;
+    }
+    // 第 1 步：exec de-thread 请求
+    if self.task.exec_exit_requested() {
+        self.armed = false;
+        drop(self.irq_guard.take());
+        exit_current_and_run_next(0);
+    }
+    // 第 2 步：默认致命信号
+    if let Some((errno, msg)) = crate::task::signal::check_if_current_signals_error() {
+        self.armed = false;
+        drop(self.irq_guard.take());
+        crate::task::signal::log_signal_exit(msg);
+        exit_group_and_run_next(errno);
+    }
+}
+```
+
+### 第 0 步：`TaskUserRes` 防递归
+
+`TaskUserRes` 是一个线程的用户态资源（TID、trap context、用户栈、mm 引用等，定义在 `os/src/task/id.rs:241-252`）：
+
+```rust
+pub struct TaskUserRes {
+    pub tid: usize,
+    trap_cx_slot: usize,
+    pub ustack_base: usize,
+    pub process: Weak<ProcessControlBlock>,
+    memory_set: MmRef,
+    ...
+}
+```
+
+它由 `TaskControlBlockInner.res: Option<TaskUserRes>` 持有（`task_block.rs:469`）。线程退出时的**"不归路"动作**就是 `Option::take()` 把这个 `res` 取走。`processor.rs:81` 的判断 `res.is_none()` 就是发现——"我已经走过那一刀了"。
+
+为什么必须这样做？注释里 `processor.rs:76-80` 解释了：退出清理本身会**让出 CPU**（unmap 旧 mm 时可能触发冷页访问或块 I/O）。如果被远端唤醒后又递归进入 `exit_current_and_run_next`，就会重复消费一次性的生命周期票据（`LiveThreadRetirement`，`id.rs:262-288`）。
+
+所以第 0 步是**递归防护**：已经在退出流程里的栈，不能再次启动退出。
+
+### 第 1 步：task-local exec exit token
+
+`exec_exit_requested()` 在 `task_block.rs:212-214`：
+
+```rust
+pub(crate) fn exec_exit_requested(&self) -> bool {
+    self.exec_exit_state.load(Ordering::Acquire) == Self::EXEC_EXIT_COUNTED
+}
+```
+
+`exec_exit_state` 是个三态机（`task_block.rs:150-152`）：`EXEC_EXIT_NONE(0) / EXEC_EXIT_COUNTED(1) / EXEC_EXIT_RETIRED(2)`。谁想触发另一个线程为 exec 退出，就调用 `try_count_exec_exit()` 把它从 `NONE` 比到 `COUNTED`（`task_block.rs:201-210`）。
+
+发起者就在 `process_block.rs:1447-1469`：exec owner 把同组其他线程都过一遍，逐个 `try_count_exec_exit()`，把成功被"标记"的收集起来：
+
+```rust
+let candidates = { /* 拷贝同组除自己外的 TCB */ };
+let peers = candidates.into_iter().filter(|task| {
+    self.exec_remaining.fetch_add(1, Ordering::Relaxed);
+    if task.try_count_exec_exit() { true }       // 标记成功
+    else {
+        let previous = self.exec_remaining.fetch_sub(1, Ordering::Relaxed);
+        debug_assert!(previous > 0, "exec peer accounting underflow");
+        false
+    }
+}).collect::<Vec<_>>();
+```
+
+收集完后调用 `terminate_tasks_for_exec(peers)` 唤醒它们（`process_block.rs:1493`），然后 owner 自己在 `while exec_remaining != 0 { suspend }` 等它们全部退出（`process_block.rs:1494-1496`）。
+
+第 1 步就是匹配这种情况：唤醒到来，token 置位 → 进入 `exit_current_and_run_next(0)`。这个函数只**单独退出当前线程**（`processor.rs:1940`），不广播 SIGKILL 给整个进程。
+
+注意还有个小细节：`exit_current_and_run_next` 内部也会反过来查"是 exec peer 吗"（`processor.rs:1963`），并 `exit_group_and_run_next`（`processor.rs:2166`）开头也再判一次 `exec_exit_requested`（`processor.rs:2180, 2199`）。这是双向的保险——exec token 优先级高于 group exit，无论谁先发起，token 置位的线程都只走单线程退出路径。
+
+### 第 2 步：默认致命信号
+
+`check_if_current_signals_error()` 在 `signal.rs:521-524`，核心 `check_task_signals_error` 在 `signal.rs:453-519`。它**只有当默认动作是"终止进程"**才返回：
+
+```rust
+// signal.rs:506-515
+if handler != SIG_DFL {
+    continue;                 // 安装了用户 handler：不退出
+}
+// ...
+if signum <= MAX_SIG {
+    if let Some(flag) = SignalFlags::from_bits(1u32 << signum) {
+        if let Some((errno, msg)) = flag.check_error() {
+            return Some((errno, msg));  // SIG_DFL 是"致命"才返回
+        }
+    }
+}
+```
+
+也就是说：`SIG_IGN`、`SIG_DFL` 但默认行为不是终止（如 `SIGCHLD` 一类）都不会触发退出；只有真正默认动作是终止的信号才会被这里捕到。
+
+第 2 步走 `exit_group_and_run_next`（`processor.rs:2166`）。这个函数会广播 SIGKILL 给整个线程组（`processor.rs:2189-2195`）：
+
+```rust
+// processor.rs:2189-2195
+if process.begin_group_exit(&task, tid, exit_code) {
+    let _ = crate::task::signal::kill_current(crate::task::signal::SIGKILL_NUM as i32);
+}
+```
+
+注意它和 exec 的优先级关系：`processor.rs:2196-2201` 显式再查一次 `exec_exit_requested`——如果 exec 在 group exit 中途胜出，立刻改成单线程退出，**绝不让 task-local 的 exec 请求被升级成进程级 SIGKILL**（否则会把发起 exec 的 owner 自己也杀掉）。
+
+### 三步总结：分流顺序
+
+| 步骤 | 检查 | 命中后走 | 影响范围 |
+| --- | --- | --- | --- |
+| 0 | `res.is_none()` | 直接 return | 已经在退出的栈继续原清理 |
+| 1 | `exec_exit_requested()` | `exit_current_and_run_next(0)` | 只 retire 自己这一个线程 |
+| 2 | `check_if_current_signals_error` | `exit_group_and_run_next` | 广播 SIGKILL，整组退出 |
+
+## 二、与 Linux 的对应关系
+
+文档的对照表对应这几处代码：
+
+| Linux 机制 | Linux 源码 | CongCore 对应 |
+| --- | --- | --- |
+| 入队后发布 sleep state 封死丢唤醒 | `kernel/sched/wait.c:prepare_to_wait()` | `PreparedWait::new()`（`processor.rs:48-65`）标记 `TaskStatus::Blocked` |
+| 在等待队列锁里拒绝带 pending signal 的可中断/可杀睡眠 | `prepare_to_wait_event()` + `include/linux/sched/signal.h:signal_pending_state()` | `exit_for_fatal_teardown_if_requested()` 三个边界（`processor.rs:116/123/129`） |
+| 进程组退出广播 | `kernel/exit.c:do_group_exit()` + `kernel/signal.c:zap_other_threads()` | 第 2 步 + `exit_group_and_run_next` 广播 SIGKILL（`processor.rs:2189-2195`） |
+| exec 杀 peer 并以 killable wait 等线程数归零 | `fs/exec.c:de_thread()` | `try_count_exec_exit()` + `exec_remaining` 计数 + `terminate_tasks_for_exec`（`process_block.rs:1461-1496`） |
+
+### 为什么 CongCore 用 task-local token 而非普通 SIGKILL
+
+Linux 的 `de_thread()` 就是直接给所有 peer 发 `SIGKILL`。原因是 Linux 的 `task_struct` 没有"谁发起 exec"的特殊角色概念——SIGKILL 直接杀死所有非 current 的同组线程，current 自身通过 `group_exec_task` 指针豁免。
+
+CongCore 的设计（参见 `processor.rs:2178-2182` 的注释）：
+
+```rust
+// SIGKILL sent by de-threading is task-local: it must retire this peer,
+// not start a process-wide group exit that would also kill the exec caller.
+if task.exec_exit_requested() {
+    exit_current_and_run_next(0);
+}
+```
+
+也就是：**如果 CongCore 也学 Linux 用普通 SIGKILL 位来做 de-thread**，那 `exit_group_and_run_next` 把 SIGKILL 广播过去时，连发起 exec 的那个 owner 也会被牵连——这正是 `exit_group_and_run_next` 自己内部要反复查 `exec_exit_requested()` 改路由的原因（`processor.rs:2180` 和 `2199` 各一次）。
+
+task-local token 的好处是**方向单向、精确**：只置位被要求退出的线程，owner 自己的 `exec_exit_state` 永远是 `NONE`，owner 不会被自己发起的 exec 反向杀死。
+
+代价就是：epoll readiness 循环**扫普通 signal 位扫不到 token**（token 在 `exec_exit_state` 这个独立 `AtomicU8` 里，不在 `pending_signals` 位图）。所以必须在 prepared-sleep 边界**显式**调一次 `exit_for_fatal_teardown_if_requested`，不能只依赖 trap entry 的 signal 扫描。这就是文档"必须在 prepared-sleep 边界显式检查，不能只依赖普通信号扫描"那一句的来历。
+
+## 三、同批被否决的性能实验
+
+这一段的核心：**一个修复批次里搭做了两个看起来 Linux 化、但被证据否决的方案**，本批没有进提交。这两点在当前代码树里都看不到了——验证方式就是查对应代码现在的状态。
+
+### 实验 A：64 桶 futex 等待队列
+
+设想是把 Linux `futex_hash` 那种 64 桶哈希搬进来，降低 futex 全局锁争用。但工程证据不足（在受控 BuildStorm 进度窗口里没看到收益），所以回退。
+
+现在 `os/src/syscall/futex.rs:52` 还保留着最初的"单 BTreeMap"结构：
+
+```rust
+static ref FUTEX_QUEUES: Mutex<BTreeMap<FutexKey, VecDeque<FutexWaiter>>> = ...
+```
+
+如果是 64 桶版本被保留下来，应当看到的是 `[Mutex<BTreeMap>; 64]` 或 `array::from_fn(|_| Mutex::new(...))`。没有 = 已回滚至单 map。
+
+项目的 FutexKey 域里还有相关并发设计——例如 `task_block.rs:115` 有一条"退出清理可直接进入对应 futex bucket 删除 waiter，避免扫描所有桶"的痕迹注释。但它未与 64 桶绑定，桶内仍然走 `FutexKey` 索引。
+
+### 实验 B：分片 buddy + per-hart 小对象缓存
+
+这个实验设想类似 Linux SLUB 的 per-CPU kmem_cache + PCP（per-CPU page cache）。后者的前提是 Linux 完整的 slab/page 双层分层、**批量补充（refill）和排空（drain）**、以及水位控制（`min`/`low`/`high` watermarks），否则每核缓存会过度持有空闲对象，整体碎片化严重。
+
+实测结果（`8-4-buildstorm-prepared-wait-followup.md:154`）：
+
+| 指标 | 现状 baseline | 加 per-hart 小对象缓存后 |
+| --- | ---: | ---: |
+| IOZone 三轮总耗时中位数 | 19.15 s | 19.90 s（**慢 3.9%**） |
+| initial write | 基线 | 下降 8.1% |
+| rewrite | 基线 | 下降 13.4% |
+
+写吞吐大幅下降，原因是新增的 per-hart 缓存层在每核持有空闲对象后，对小对象分配热路径没有净收益，反而让跨核释放（这是写 I/O 的高频操作）多走一段缓存回收逻辑。同时缺少 Linux 的水位控制让缓存里的空闲页迟迟不回 buddy。
+
+回退后，当前 `os/src/mm/heap_allocator.rs:101-111` 看到的是项目**保留的** baseline 形态：
+
+```rust
+/// A Linux-shaped shared page zone with refillable per-hart slab caches.
+...
+slab_pages: [UnsafeCell<SlabPageMeta>; HEAP_PAGE_COUNT],
+```
+
+`heap_allocator.rs:24-25` 注释："Retain one completely empty slab per class and hart. This is the bounded refill cache; a second empty slab is drained to the shared zone." 也就是说**每类每核只缓存一个空 slab，第二个就让回共享区**——这是有边界的简单分层，**没有** Linux 的批量 refill/drain、水位、PCP 列表抽页等机制。被否决的实验是在此基础上**再加一层** per-hart 小对象缓存，回退后只是回到这条被证明不退化的简单 slab 线。
+
 
 ## 对应提交
 

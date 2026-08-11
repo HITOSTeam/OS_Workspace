@@ -8,9 +8,6 @@
 
 ## 背景知识
 
-先打个比方：普通派生进程像“复印一整套办公室资料，再让两家公司各自办公”；
-创建线程则像“在同一间办公室里加一个工位”。资料可以共用，但每个工位都得有自己
-处理临时事务的桌面，否则两个人同时办事时，纸张和步骤会混在一起。
 
 ```text
 fork（创建新进程）
@@ -82,8 +79,6 @@ timeout 900 cargo build -p tg-xtask
 .tmp/final-runs/20260804-022549-loongarch64-shell/serial.log
 ```
 
-前两份是固定窗口构建对照，后两份是 16 线程进程执行 128 次 fork/wait 的五轮微基准。
-微基准直接覆盖热点，避免仅凭 Cargo crate 顺序波动下结论。
 
 ## 怎么解决
 
@@ -96,15 +91,10 @@ timeout 900 cargo build -p tg-xtask
 新：live_threads.load(Acquire)
 ```
 
-该计数仍决定多线程非 `CLONE_VM` fork 后是否只保留子进程主 trap context；文件表、
-信号、写时复制地址空间和进程标识符生命周期没有改变。正常 Linux 多线程 fork 是合法
-行为，因此删除无条件 warning，而不是限频隐藏。
 
 Linux `signal_struct::nr_threads` 在 `copy_process()` 和 `__exit_signal()` 生命周期
 边界维护，`get_nr_threads()` 只做 O(1) 读取。CongCore 没有 Linux 的 tasklist
-读-复制-更新机制和完整 signal lock，但已有原子计数与统一退休票据，直接复用比另建
-扫描快路径更可靠。
-
+读-复制-更新机制和完整 signal lock
 ## 对应提交
 
 - 内核：`d0679eb386789824b66f8bc7988e8699f85e9f9c`

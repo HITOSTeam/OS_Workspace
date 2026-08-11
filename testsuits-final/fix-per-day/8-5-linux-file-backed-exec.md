@@ -16,12 +16,6 @@
 
 ## 背景知识
 
-先把进程的地址空间想成一套舞台布景。虚拟地址是布景上的位置，物理页是后台真正的
-道具，页表负责写下“这个位置该摆哪件道具”。
-
-程序换场时，不能先拆掉旧布景再慢慢搭新的。否则新程序装载失败后，旧程序也无法继续。
-内核会先在旁边搭好新布景，检查入口、解释器、栈和各段映射，最后一次切换：
-
 ```text
 旧程序正在运行
       │
@@ -77,12 +71,8 @@
 
 ## 如何发现
 
-12 路并发诊断在 120 秒内连预热都没完成，但 QEMU（本次使用的虚拟机模拟器）的
-CPU（处理器）时间仍在增长。RSS（常驻内存量）、宿主机可用内存和 swap（交换空间）
-都没有耗尽。这不像静止的死锁。降到 2 路后，旧实现稳定在约 0.9 秒一批，说明并发放大
-了重复分配、读取和复制的成本。
 
-代码对照随后给出根因：普通文件 mmap 的缺页路径已经共享 inode page cache，
+普通文件 mmap 的缺页路径已经共享 inode page cache，
 `map_elf_segments_from_reader()` 却仍给每个 `PT_LOAD` 建私有页并立即复制。
 Linux 参考为 `fs/binfmt_elf.c::elf_map()`、`elf_load()`、
 `mm/filemap.c::filemap_fault()` 和私有 COW 路径。
@@ -96,7 +86,7 @@ testsuits-final/.tmp/final-runs/20260805-exec-cache-regressions-2/serial.log
 testsuits-final/.tmp/final-runs/20260805-exec-cache-riscv-regressions-2/serial.log
 ```
 
-来宾机（guest）先做预热（warmup），再启动两个子进程（child）：
+guest先做预热（warmup），再启动两个子进程（child）：
 
 ```sh
 ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot \
@@ -107,8 +97,7 @@ ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot \
 
 ## 怎么解决
 
-**共享完整文件页。** 主程序和 `PT_INTERP`（ELF 中指定动态解释器的字段）的完整文件页
-改为 inode 支撑的按需 VMA。缓存键 `(dev, ino, page)` 分别表示设备号、inode 号和文件
+**共享完整文件页。** 主程序和 `PT_INTERP`（ELF 中指定动态解释器的字段）的完整文件页 改为 inode 支撑的按需 VMA。缓存键 `(dev, ino, page)` 分别表示设备号、inode 号和文件
 页号。`single-flight`（同一文件页只让第一个缺页者读盘，其余任务等待）避免重复读取。
 
 **单独处理尾页和 BSS。** 映射函数把一个装入段拆成三部分：
@@ -121,7 +110,7 @@ ARCH=loongarch64 SMP=12 MEM=8G IMAGE_MODE=snapshot \
 
 **保留权限和文件对象。** 私有可写页继续走 COW。可执行页保持写保护。文件映射持有稳定的
 `OSInode`（本项目的打开文件对象），所以原文件描述符关闭后仍能处理缺页。`RISC-V`
-（本次回归使用的一种处理器架构）的可执行页继续走原有的 I-cache（指令缓存）发布路径。
+可执行页继续走原有的 I-cache（指令缓存）发布路径。
 
 Linux 用文件 VMA 映射完整页，并用 `padzero()` 清理文件尾页。本项目复用已有 VMA、
 页缓存和 COW，没有实现 Linux 完整的 `folio`（管理一个或多个物理页的对象）、反向映射、
@@ -145,8 +134,6 @@ Linux 用文件 VMA 映射完整页，并用 `padzero()` 清理文件尾页。�
 
 18 个正式测量批次的子进程都返回 0。`LoongArch`（龙芯指令集）6 项、RISC-V 4 项聚焦
 回归通过。新测试结束更快，所以资源采样点更少；CPU 计时采样不能当作精确加速比。
-完整 `BuildStorm`（决赛编译压力测试）、完整 `LTP`（Linux 系统调用测试集）和正式
-`judge`（本地评分脚本）均未运行。12 路旧实现没有完成预热，也不能用来计算提升百分比。
 
 以下是 AI 的具体分析，作为存档。
 

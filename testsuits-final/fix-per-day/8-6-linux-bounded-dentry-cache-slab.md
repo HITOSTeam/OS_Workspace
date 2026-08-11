@@ -2,7 +2,7 @@
 
 ## 问题概述
 
-全新官方镜像上的 BuildStorm 在 guest 约 1320 秒出现 CPU 悬崖，约 1636 秒
+全新官方镜像上的 BuildStorm 在 guest 约 1320 秒出现 CPU (活动核下降 )，约 1636 秒
 输出冻结，1876 秒因 128-KiB 分配失败 panic。
 
 根因：VFS dentry cache 没有容量限制、没有 LRU、没有清理死引用。具体来说：
@@ -10,9 +10,9 @@
 - 缓存用 `BTreeMap<DentryKey, Weak<Dentry>>` 保存，最后一个强引用消失后
   Weak（弱引用，不阻止释放但自身仍占内存）继续钉住 72 字节的 Arc 分配；
 - key 用的是每次重建都会变的临时 id，相同路径的下一次 lookup 不能覆盖旧 key，
-  形成无限增长的"墓碑"；
+  形成无限增长"；
 - OOM 时 order-7 有 1,490,845 个 live block、平均 requested size 72.48 字节
-  ——正好是 `ArcInner<Dentry>` 的大小，dentry 墓碑约占 500 MiB live heap 的
+  ——正好是 `ArcInner<Dentry>` 的大小，dentry 约占 500 MiB live heap 的
   70%–75%。
 
 ## 背景知识
@@ -21,6 +21,7 @@
 ——先在根目录找 `home`，再在 `home` 下找 `alice`，以此类推。每一级查找都要
 读磁盘上的目录数据块。操作系统把查过的"名字→inode 编号"结果缓存在内存里，
 这就是 dentry cache（dcache）。下次走同一路径直接查内存，不用碰磁盘：
+简而言之 就是目录的cache--- 路径 到 inode
 
 ```text
 路径: /home/alice/code/main.c
@@ -74,6 +75,7 @@ CLOCK 算法示意（环形队列 + 1-bit referenced 标记）：
 对比课上的 LRU：LRU 要维护按时间排序的链表，每次访问都要移动节点。CLOCK
 只需翻转一个 bit，代价更小，效果接近。
 
+slab 是 小分配器
 **slab 分配器为什么比通用堆快**。buddy allocator 按 2 的幂分配大块内存，
 最小块 128 字节。72-byte dentry 用 buddy 浪费 44%。slab 从 buddy 申请一整个
 4 KiB 页，切成固定大小的格子：
@@ -93,14 +95,14 @@ Slab page（4 KiB，96-byte class，共 42 格）：
 
 **缓存失效为什么需要稳定 key 而不是靠临时 id**。旧实现用 parent dentry 的
 内存地址作为缓存 key。同一目录的 dentry 对象被释放后重建地址就变了，产生新
-key，旧 key 的墓碑永远不会被覆盖。正确做法是用磁盘上不变的身份——
+key，旧 key 永远不会被覆盖。正确做法是用磁盘上不变的身份——
 `(filesystem id, parent inode 号, 文件名)` 作为 key。同一路径不管重建多少次
 都映射到同一个缓存槽位，旧的被新的覆盖，不会无限增殖。
 
 ## 如何发现
 
 BuildStorm run `20260806-buildstorm-buddy-order-stats-full-112` 的 OOM order
-统计直接定位到 dentry 墓碑。host 当时仍有约 20 GiB swap free，前台探针也能
+统计直接定位到 dentry 未回收。host 当时仍有约 20 GiB swap free，前台探针也能
 在数百毫秒内返回，排除了 host OOM 和全局死锁。
 
 ```text

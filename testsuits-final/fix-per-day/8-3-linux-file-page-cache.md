@@ -13,23 +13,6 @@
 
 ## 背景知识
 
-先想象 12 名学生都要查同一本 271 MiB 的参考书。最差的办法是每个人都去仓库复印
-一整本；更好的办法是在阅览室放一份，所有人只读共享。谁要在书上写字，再复印自己
-真正要改的那一页。
-
-```text
-同一个文件
-   |
-   +-> 共享的干净物理页 -> 进程 A 只读映射
-   |                   -> 进程 B 只读映射
-   |                   -> 进程 C 只读映射
-   |
-   +-> 进程 A 首次写入 -> 复制一页 -> A 的私有页
-```
-
-这份“阅览室副本”就是 page cache（文件页缓存，按文件和页号保存数据）。它通常用
-`(device, inode, page index)` 找到一页，其中 page index 是文件内的页序号。
-
 block cache（块缓存，按磁盘设备和物理块号保存数据）处在更低一层。它回答“磁盘第
 几个块是否已读过”，键通常是 `(device, block_id)`。文件页缓存回答“某个文件的第
 几页是否已读过”，不要求调用者知道 ext4 把这页放在哪些磁盘块里。
@@ -120,6 +103,8 @@ rg -n 'MAP_PRIVATE|FilePageCache|mmap.*populate|commit_cow_fault' \
 
 ## 怎么解决
 
+思路类似于之前ext4 级别优化，对于inode 级别锁的处理。
+
 **同一文件页只读一次**：`backing.rs` 按 `(device_id, inode_num, file_page)` 保存：
 
 ```rust
@@ -141,7 +126,7 @@ enum FilePageCacheSlot {
 `truncate`（截短文件）会清零结尾页尾、删除越界页，并使并发 Loading 失效后唤醒等待者。
 
 CongCore 用 `Loading/Ready` 和等待队列实现 Linux 加锁 folio 的可观察行为。当前只
-回收没有页表或映射区域外部引用的干净 Ready 页；完整冷热 LRU（最近最少使用）和
+回收没有页表或映射区域外部引用的干净 Ready 页；完整 LRU（最近最少使用）和
 后台 writeback（回写）仍未实现。
 
 ## 对应提交
