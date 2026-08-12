@@ -277,15 +277,12 @@ const DEFAULT_BLOCK_CACHE_CAPACITY: usize = if cfg!(target_arch = "loongarch64")
 /// The block cache stores a second, heap-backed copy of each 4 KiB block, so
 /// keep its transitional budget below both a small fraction of RAM and a
 /// conservative fraction of the fixed kernel heap.
-// Linux can let the page cache consume most free memory because lookup,
-// locking and reclaim are split across XArrays, folios and per-node LRUs.
-// This transitional cache duplicates whole blocks in the fixed 512 MiB kernel
-// heap, so it cannot consume Linux-sized fractions of RAM until it is unified
-// with the frame-backed page cache.  Scale to 1/64 of detected RAM, capped at
-// 64 MiB: on the final 8 GiB machine that is 16,384 blocks, eight times the old
-// 8 MiB budget while retaining more than 100 MiB of measured heap headroom.
+// Linux 可以让干净页缓存随可用内存增长；本内核的过渡块缓存则从固定的 512 MiB
+// 内核堆分配，并且每项都复制完整数据块。云端编译的活跃源码和元数据集已明显超过
+// 64 MiB，因此在保留一半以上内核堆给进程与 VFS 的前提下，将上限提高到 128 MiB。
 const BLOCK_CACHE_MEMORY_DIVISOR: usize = 64;
-const MAX_BLOCK_CACHE_CAPACITY: usize = 16 * 1024;
+// 缓存数量翻倍
+const MAX_BLOCK_CACHE_CAPACITY: usize = 32 * 1024;
 const CLEAN_RECLAIM_SCAN_LIMIT: usize = 64;
 
 #[cfg(not(test))]

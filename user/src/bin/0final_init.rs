@@ -6,12 +6,48 @@ extern crate user;
 
 use core::ptr;
 use user::syscall::{
-    _yield, RDONLY, chdir, close, execve, exit, fork, open, poweroff, sync, waitpid,
+    _yield, RDONLY, chdir, close, execve, exit, fork, mount_with_data, open, poweroff, sync,
+    waitpid,
 };
 
 const EVAL_DIR: &str = "/glibc";
 const BUILDSTORM_SCRIPT: &str = "/glibc/buildstorm_testcode.sh\0";
 const CAGENT_SCRIPT: &str = "/glibc/cagent_testcode.sh\0";
+
+/// 将 BuildStorm 每个架构的重新编译输出放入 tmpfs。
+///
+/// 官方脚本会在计时开始前删除这个目录，而 `target/debug` 中预置的 tg-xtask
+/// 缓存不会被覆盖。这样能避免把大量增量编译的小文件写回较慢的 virtio 块设备。
+/// 上限为物理内存的 25%：云端 16GiB 时为 4GiB，本地测试会随 QEMU 内存自动缩小。
+#[cfg(target_arch = "riscv64")]
+const BUILDSTORM_TARGET_DIR: &str = "/work/tgoskits/target/riscv64gc-unknown-linux-musl\0";
+#[cfg(target_arch = "loongarch64")]
+const BUILDSTORM_TARGET_DIR: &str = "/work/tgoskits/target/loongarch64-unknown-linux-musl\0";
+const TMPFS_TARGET_SIZE: &str = "size=25%\0";
+
+/// 挂载失败时保留 ext4 路径，确保优化措施不会阻断官方脚本。
+fn mount_buildstorm_target_tmpfs() {
+    let target = BUILDSTORM_TARGET_DIR.trim_end_matches('\0');
+    let rc = mount_with_data(
+        "tmpfs\0",
+        BUILDSTORM_TARGET_DIR,
+        "tmpfs\0",
+        0,
+        TMPFS_TARGET_SIZE,
+    );
+    if rc < 0 {
+        println!(
+            "[final_init] buildstorm target tmpfs unavailable: path={} errno={}; fallback=ext4",
+            target, -rc
+        );
+    } else {
+        println!(
+            "[final_init] buildstorm target tmpfs mounted: path={} options={}",
+            target,
+            TMPFS_TARGET_SIZE.trim_end_matches('\0')
+        );
+    }
+}
 
 ///判断文件是不是存在
 fn path_exists(path: &str) -> bool {
@@ -172,6 +208,7 @@ pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
     );
 
     println!("[final_init] detected BuildStorm payload");
+    mount_buildstorm_target_tmpfs();
     let _ = chdir(EVAL_DIR);
     let buildstorm_exit_code = run_script("/bin/sh\0", BUILDSTORM_SCRIPT);
     reap_remaining_children();
@@ -180,9 +217,11 @@ pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
         buildstorm_exit_code
     );
 
-    // 本地 LoongArch 诊断入口；上传云端前直接注释下一行即可。
+    // 本地 LoongArch 诊断入口；上传云端前将整个 cfg 代码块注释即可。
     #[cfg(target_arch = "loongarch64")]
-    run_local_ual_runtime_check();
+    {
+        run_local_ual_runtime_check();
+    }
 
     let exit_code = if cagent_exit_code != 0 {
         cagent_exit_code

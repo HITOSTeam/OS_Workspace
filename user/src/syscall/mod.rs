@@ -216,6 +216,20 @@ pub fn mkdirat(dirfd: isize, path: &str, mode: usize) -> isize {
 
 /// 挂载 proc、sysfs、devtmpfs 或 tmpfs 等内核文件系统。
 pub fn mount(source: &str, target: &str, fs_type: &str, flags: usize) -> isize {
+    mount_with_data(source, target, fs_type, flags, "\0")
+}
+
+/// 挂载文件系统，并向内核传入逗号分隔的文件系统参数。
+///
+/// `data` 必须以 NUL 结尾，例如 `"size=2G\0"`。普通挂载请使用
+/// [`mount`]；只有 tmpfs 等确实需要挂载参数的场景才使用此接口。
+pub fn mount_with_data(
+    source: &str,
+    target: &str,
+    fs_type: &str,
+    flags: usize,
+    data: &str,
+) -> isize {
     syscall(
         SYSCALL_MOUNT,
         [
@@ -223,7 +237,7 @@ pub fn mount(source: &str, target: &str, fs_type: &str, flags: usize) -> isize {
             target.as_ptr() as usize,
             fs_type.as_ptr() as usize,
             flags,
-            0,
+            data.as_ptr() as usize,
             0,
         ],
     )
