@@ -35,8 +35,8 @@ else
 QEMU_RV_RUN := timeout $(QEMU_TIMEOUT) qemu-system-riscv64
 QEMU_LA_RUN := timeout $(QEMU_TIMEOUT) qemu-system-loongarch64
 endif
-
-DOCKER_IMAGE ?= docker.educg.net/cg/os-contest:20260510
+# 在测试页面是这个image
+DOCKER_IMAGE ?= zhouzhouyi/os-contest:20260510
 
 
 .DEFAULT_GOAL := all
@@ -68,20 +68,22 @@ disk-la: prepare-cargo
 
 # 模拟官方的指令直接打开，不要动
 run-rv: 
+	@date "+%Y年%m月%d日_%H时%M分%S秒"
 	$(QEMU_RV_RUN) -machine virt -kernel $(KERNEL_RV) -m $(MEM) -nographic -smp $(RISC_SMP) -bios default \
 		-drive file=$(SDCARD_RV_IMG),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -no-reboot -snapshot -device virtio-net-device,netdev=net -netdev user,id=net \
 		-rtc base=utc \
 		-drive file=disk.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
-
+	@date "+%Y年%m月%d日_%H时%M分%S秒"
 run-la: 
+	@date "+%Y年%m月%d日_%H时%M分%S秒"
 	$(QEMU_LA_RUN) -machine virt -kernel $(KERNEL_LA) -m $(MEM) -nographic -smp $(LOONG_SMP) \
 		-drive file=$(SDCARD_LA_IMG),if=none,format=raw,id=x0  \
 		-device virtio-blk-pci,drive=x0 -no-reboot -snapshot -device virtio-net-pci,netdev=net0 \
 		-netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555  \
 		-rtc base=utc \
 		-drive file=disk-la.img,if=none,format=raw,id=x1 -device virtio-blk-pci,drive=x1
-
+	@date "+%Y年%m月%d日_%H时%M分%S秒"
 
 debug-rv: build-rv disk-rv
 	@$(MAKE) -C $(OS_DIR) debug ARCH=riscv64 MODE=$(MODE) FINAL_TEST=$(FINAL_TEST) \
@@ -100,7 +102,7 @@ gdb-la:
 start_docker:
 	docker run --rm -it \
 		-v "$(CURDIR)":/mnt/OS_Workspace/submit_repo \
-		-v /mnt/data:/mnt/data \
+		-v /home/ciallo/rust_learning/image_final:/mnt/data/os_competition/images/final_img/ \
 		-w /mnt/OS_Workspace/submit_repo \
 		$(DOCKER_IMAGE) \
 		/bin/bash

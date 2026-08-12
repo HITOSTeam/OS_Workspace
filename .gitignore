@@ -40,6 +40,6 @@ loongarch_img_info/
 .claude/
 .kiro/
 
-vendor/cargo-vendor
 
-OS_Workspace/os/.tmp
+os/.tmp
+vendor/cargo-vendor

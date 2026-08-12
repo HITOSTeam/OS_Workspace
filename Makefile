@@ -1,6 +1,8 @@
 SUBMIT_FOLDER := submit_repo
 SUBMIT_MAKEFILE := submit_repo.Makefile
 LOCAL_VENDOR_TMP := .local-vendor
+VENDOR_DIR := vendor/cargo-vendor
+VENDOR_TMP := .vendor-tmp
 
 .DEFAULT_GOAL := all
 .NOTPARALLEL:
@@ -44,12 +46,20 @@ copy_ext4_fs: prepare_submit
 # 	mkdir -p $(SUBMIT_FOLDER)/easy-fs-fuse
 # 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C easy-fs-fuse . | tar -xf - -C $(SUBMIT_FOLDER)/easy-fs-fuse
 
+vendor:
+	@rm -rf $(VENDOR_TMP)
+	@cargo vendor --locked --versioned-dirs $(VENDOR_TMP)
+	@rm -rf $(VENDOR_DIR)
+	@mkdir -p vendor
+	@mv $(VENDOR_TMP) $(VENDOR_DIR)
+
 copy_vendor: prepare_submit
 	rm -rf $(SUBMIT_FOLDER)/vendor
 	rm -rf $(LOCAL_VENDOR_TMP)
 	mkdir -p $(LOCAL_VENDOR_TMP)
 	tar --exclude='.git' --exclude='*.log' --exclude='target' -cf - -C vendor . | tar -xf - -C $(LOCAL_VENDOR_TMP)
-	cargo vendor --offline $(LOCAL_VENDOR_TMP)/cargo-vendor >/dev/null
+	# 完整的离线依赖已预先保存在 vendor/cargo-vendor；此处只复制，
+	# 避免在无网络环境下重新解析 crates.io 索引。
 	mv $(LOCAL_VENDOR_TMP) $(SUBMIT_FOLDER)/vendor
 
 copy_cargo_config: prepare_submit
@@ -62,8 +72,9 @@ copy_gitignore:
 	cp -f ./submit_repo.gitignore $(SUBMIT_FOLDER)/.gitignore
 
 copy_workspace: prepare_submit
-	cp -f Cargo.toml $(SUBMIT_FOLDER)/
+	cp -f submit_repo.Cargo.toml $(SUBMIT_FOLDER)/Cargo.toml
 	cp -f Cargo.lock $(SUBMIT_FOLDER)/
+	cp -f rust-toolchain.toml $(SUBMIT_FOLDER)/
 
 copy_submit_makefile: prepare_submit
 	cp -f $(SUBMIT_MAKEFILE) $(SUBMIT_FOLDER)/Makefile
@@ -86,4 +97,4 @@ clean:
 	@rm -rf $(LOCAL_VENDOR_TMP)
 	@cargo clean
 
-.PHONY: all clean prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore
+.PHONY: all clean vendor prepare_submit copy_os copy_user copy_ext4_fs_packer copy_ext4_fs copy_vendor copy_cargo_config copy_workspace copy_submit_makefile copy_readme copy_img copy_gitignore

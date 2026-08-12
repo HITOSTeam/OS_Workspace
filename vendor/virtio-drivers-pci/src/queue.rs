@@ -318,8 +318,10 @@ impl<H: Hal, const SIZE: usize> VirtQueue<H, SIZE> {
         // valid and are not otherwise accessed until then.
         let token = unsafe { self.add(inputs, outputs) }?;
 
-        // Notify the queue.
-        if cfg!(target_arch = "loongarch64") || self.should_notify() {
+        // `should_notify` 同时提供发布后所需的屏障；因此即使 LoongArch 刻意始终
+        // kick，也必须调用它。
+        let should_notify = self.should_notify();
+        if cfg!(target_arch = "loongarch64") || should_notify {
             transport.notify(self.queue_idx);
         }
 
@@ -369,6 +371,11 @@ impl<H: Hal, const SIZE: usize> VirtQueue<H, SIZE> {
     ///
     /// This will be false if the device has supressed notifications.
     pub fn should_notify(&self) -> bool {
+        // VirtIO split virtqueue 的通知流程要求：驱动读取设备拥有的通知抑制字段前，
+        // 已发布的 available index 必须先变得可见。不同原子变量上的 release store
+        // 与 acquire load 在所有架构上都不能提供该 store-to-load 顺序，因此此处保留
+        // 显式全屏障。
+        fence(Ordering::SeqCst);
         if self.event_idx {
             // Safe because self.used points to a valid, aligned, initialised, dereferenceable, readable
             // instance of UsedRing.

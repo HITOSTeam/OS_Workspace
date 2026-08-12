@@ -6,7 +6,9 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::hash::{BuildHasherDefault, Hash, Hasher};
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize as CoreAtomicUsize, Ordering};
+#[cfg(feature = "block-cache-stats")]
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicBool, AtomicUsize as CoreAtomicUsize, Ordering};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use spin::Mutex;
@@ -40,22 +42,51 @@ enum WritebackPreparation {
     Ready(Writeback),
 }
 
-static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
-static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
-static CACHE_LOADS: AtomicU64 = AtomicU64::new(0);
-static CACHE_COALESCED_WAITS: AtomicU64 = AtomicU64::new(0);
-static CACHE_WAIT_RETRIES: AtomicU64 = AtomicU64::new(0);
-static CACHE_EVICTIONS: AtomicU64 = AtomicU64::new(0);
-static CACHE_CLEAN_EVICTIONS: AtomicU64 = AtomicU64::new(0);
-static CACHE_DIRTY_EVICTIONS: AtomicU64 = AtomicU64::new(0);
-static CACHE_PREFETCHED_BLOCKS: AtomicU64 = AtomicU64::new(0);
-static CACHE_ENTRIES: CoreAtomicUsize = CoreAtomicUsize::new(0);
+#[cfg(feature = "block-cache-stats")]
+mod diagnostics {
+    use super::{AtomicU64, CoreAtomicUsize};
 
+    pub(super) static HITS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static MISSES: AtomicU64 = AtomicU64::new(0);
+    pub(super) static LOADS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static COALESCED_WAITS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static WAIT_RETRIES: AtomicU64 = AtomicU64::new(0);
+    pub(super) static EVICTIONS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static CLEAN_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static DIRTY_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static PREFETCHED_BLOCKS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static ENTRIES: CoreAtomicUsize = CoreAtomicUsize::new(0);
+}
+
+macro_rules! record_cache_stat {
+    ($counter:ident, $value:expr) => {
+        #[cfg(feature = "block-cache-stats")]
+        {
+            diagnostics::$counter.fetch_add($value, Ordering::Relaxed);
+        }
+    };
+}
+
+macro_rules! subtract_cache_stat {
+    ($counter:ident, $value:expr) => {
+        #[cfg(feature = "block-cache-stats")]
+        {
+            diagnostics::$counter.fetch_sub($value, Ordering::Relaxed);
+        }
+    };
+}
+
+#[cfg(feature = "block-cache-stats")]
 pub fn cache_stats() -> (u64, u64) {
     (
-        CACHE_HITS.load(Ordering::Relaxed),
-        CACHE_MISSES.load(Ordering::Relaxed),
+        diagnostics::HITS.load(Ordering::Relaxed),
+        diagnostics::MISSES.load(Ordering::Relaxed),
     )
+}
+
+#[cfg(not(feature = "block-cache-stats"))]
+pub fn cache_stats() -> (u64, u64) {
+    (0, 0)
 }
 
 /// Detailed block-cache counters for performance diagnostics.
@@ -74,22 +105,31 @@ pub struct CacheDiagnostics {
     pub capacity: usize,
 }
 
+#[cfg(feature = "block-cache-stats")]
 pub fn cache_diagnostics() -> CacheDiagnostics {
     CacheDiagnostics {
-        hits: CACHE_HITS.load(Ordering::Relaxed),
-        misses: CACHE_MISSES.load(Ordering::Relaxed),
-        loads: CACHE_LOADS.load(Ordering::Relaxed),
-        coalesced_waits: CACHE_COALESCED_WAITS.load(Ordering::Relaxed),
-        wait_retries: CACHE_WAIT_RETRIES.load(Ordering::Relaxed),
-        evictions: CACHE_EVICTIONS.load(Ordering::Relaxed),
-        clean_evictions: CACHE_CLEAN_EVICTIONS.load(Ordering::Relaxed),
-        dirty_evictions: CACHE_DIRTY_EVICTIONS.load(Ordering::Relaxed),
-        prefetched_blocks: CACHE_PREFETCHED_BLOCKS.load(Ordering::Relaxed),
+        hits: diagnostics::HITS.load(Ordering::Relaxed),
+        misses: diagnostics::MISSES.load(Ordering::Relaxed),
+        loads: diagnostics::LOADS.load(Ordering::Relaxed),
+        coalesced_waits: diagnostics::COALESCED_WAITS.load(Ordering::Relaxed),
+        wait_retries: diagnostics::WAIT_RETRIES.load(Ordering::Relaxed),
+        evictions: diagnostics::EVICTIONS.load(Ordering::Relaxed),
+        clean_evictions: diagnostics::CLEAN_EVICTIONS.load(Ordering::Relaxed),
+        dirty_evictions: diagnostics::DIRTY_EVICTIONS.load(Ordering::Relaxed),
+        prefetched_blocks: diagnostics::PREFETCHED_BLOCKS.load(Ordering::Relaxed),
         // Diagnostics must remain observable when the cache is under pressure.
         // Taking the global manager lock here can starve behind filesystem
         // workers and make /proc/perf itself appear hung.
-        entries: CACHE_ENTRIES.load(Ordering::Relaxed),
+        entries: diagnostics::ENTRIES.load(Ordering::Relaxed),
         capacity: block_cache_capacity(),
+    }
+}
+
+#[cfg(not(feature = "block-cache-stats"))]
+pub fn cache_diagnostics() -> CacheDiagnostics {
+    CacheDiagnostics {
+        capacity: block_cache_capacity(),
+        ..CacheDiagnostics::default()
     }
 }
 
@@ -587,25 +627,25 @@ impl BlockCacheManager {
         );
         if can_remove {
             self.entries.remove(&ticket.key);
-            CACHE_ENTRIES.fetch_sub(1, Ordering::Relaxed);
-            CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+            subtract_cache_stat!(ENTRIES, 1);
+            record_cache_stat!(EVICTIONS, 1);
             if ticket.was_clean {
-                CACHE_CLEAN_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+                record_cache_stat!(CLEAN_EVICTIONS, 1);
             } else {
-                CACHE_DIRTY_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+                record_cache_stat!(DIRTY_EVICTIONS, 1);
             }
             true
         } else {
             let mut requeue = None;
-            if let Some(CacheSlot::Ready(entry)) = self.entries.get_mut(&ticket.key)
-                && Arc::ptr_eq(&entry.cache, &ticket.cache)
-            {
-                entry.evicting = false;
-                // A concurrent lookup already installed a newer queue record.
-                // Only add one here when cancellation was caused by some other
-                // transient reference (for example a sync-all snapshot).
-                if !entry.promotion_pending {
-                    requeue = Some(entry.stamp);
+            if let Some(CacheSlot::Ready(entry)) = self.entries.get_mut(&ticket.key) {
+                if Arc::ptr_eq(&entry.cache, &ticket.cache) {
+                    entry.evicting = false;
+                    // A concurrent lookup already installed a newer queue record.
+                    // Only add one here when cancellation was caused by some other
+                    // transient reference (for example a sync-all snapshot).
+                    if !entry.promotion_pending {
+                        requeue = Some(entry.stamp);
+                    }
                 }
             }
             if let Some(stamp) = requeue {
@@ -657,7 +697,7 @@ impl BlockCacheManager {
                 }),
             );
         }
-        CACHE_ENTRIES.fetch_add(missing_keys.len(), Ordering::Relaxed);
+        record_cache_stat!(ENTRIES, missing_keys.len());
 
         CacheLookup::Load(LoadTicket {
             start_block,
@@ -697,8 +737,8 @@ impl BlockCacheManager {
             _ => panic!("missing requested block cache after load"),
         };
         ticket.state.finish();
-        CACHE_LOADS.fetch_add(1, Ordering::Relaxed);
-        CACHE_PREFETCHED_BLOCKS.fetch_add(published.saturating_sub(1), Ordering::Relaxed);
+        record_cache_stat!(LOADS, 1);
+        record_cache_stat!(PREFETCHED_BLOCKS, published.saturating_sub(1));
         requested
     }
 
@@ -719,7 +759,7 @@ impl BlockCacheManager {
         }
         let block_cache = Arc::new(Mutex::new(BlockCache::new_zeroed(block_id, block_device)));
         self.insert_ready(key, Arc::clone(&block_cache));
-        CACHE_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        record_cache_stat!(ENTRIES, 1);
         CacheLookup::Created(block_cache)
     }
 
@@ -759,7 +799,7 @@ pub fn get_block_cache(
 
 fn wait_for_load(state: &LoadState, block_device: &Arc<dyn BlockDevice>) {
     while !state.is_done() {
-        CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+        record_cache_stat!(WAIT_RETRIES, 1);
         block_device.io_relax();
     }
 }
@@ -812,22 +852,22 @@ pub(crate) fn get_block_cache_with_hint(
         match action {
             CacheLookup::Ready(cache) => {
                 if !miss_counted {
-                    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(HITS, 1);
                 }
                 return cache;
             }
             CacheLookup::Created(cache) => return cache,
             CacheLookup::Wait(state) => {
                 if !miss_counted {
-                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-                    CACHE_COALESCED_WAITS.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(MISSES, 1);
+                    record_cache_stat!(COALESCED_WAITS, 1);
                     miss_counted = true;
                 }
                 wait_for_load(&state, &block_device);
             }
             CacheLookup::Load(ticket) => {
                 if !miss_counted {
-                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(MISSES, 1);
                 }
                 let mut buf = vec![0u8; ticket.count.saturating_mul(BLOCK_SZ)];
                 ticket
@@ -858,7 +898,7 @@ pub(crate) fn get_block_cache_with_hint(
             }
             CacheLookup::Evict(ticket) => sync_eviction(ticket),
             CacheLookup::Retry => {
-                CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+                record_cache_stat!(WAIT_RETRIES, 1);
                 block_device.io_relax();
             }
         }
@@ -879,27 +919,27 @@ pub fn get_block_cache_zeroed(
         match action {
             CacheLookup::Ready(cache) => {
                 if !miss_counted {
-                    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(HITS, 1);
                 }
                 return cache;
             }
             CacheLookup::Created(cache) => {
                 if !miss_counted {
-                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(MISSES, 1);
                 }
                 return cache;
             }
             CacheLookup::Wait(state) => {
                 if !miss_counted {
-                    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-                    CACHE_COALESCED_WAITS.fetch_add(1, Ordering::Relaxed);
+                    record_cache_stat!(MISSES, 1);
+                    record_cache_stat!(COALESCED_WAITS, 1);
                     miss_counted = true;
                 }
                 wait_for_load(&state, &block_device);
             }
             CacheLookup::Evict(ticket) => sync_eviction(ticket),
             CacheLookup::Retry => {
-                CACHE_WAIT_RETRIES.fetch_add(1, Ordering::Relaxed);
+                record_cache_stat!(WAIT_RETRIES, 1);
                 block_device.io_relax();
             }
             CacheLookup::Load(_) => unreachable!("zeroed cache lookup cannot start a disk load"),
@@ -934,7 +974,7 @@ pub fn block_cache_sync_all() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "block-cache-stats"))]
 mod tests {
     use super::*;
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -1075,16 +1115,30 @@ mod tests {
             let mut manager = BLOCK_CACHE_MANAGER.lock();
             *manager = BlockCacheManager::new();
         }
-        CACHE_HITS.store(0, Ordering::Relaxed);
-        CACHE_MISSES.store(0, Ordering::Relaxed);
-        CACHE_LOADS.store(0, Ordering::Relaxed);
-        CACHE_COALESCED_WAITS.store(0, Ordering::Relaxed);
-        CACHE_WAIT_RETRIES.store(0, Ordering::Relaxed);
-        CACHE_EVICTIONS.store(0, Ordering::Relaxed);
-        CACHE_CLEAN_EVICTIONS.store(0, Ordering::Relaxed);
-        CACHE_DIRTY_EVICTIONS.store(0, Ordering::Relaxed);
-        CACHE_PREFETCHED_BLOCKS.store(0, Ordering::Relaxed);
-        CACHE_ENTRIES.store(0, Ordering::Relaxed);
+        diagnostics::HITS.store(0, Ordering::Relaxed);
+        diagnostics::MISSES.store(0, Ordering::Relaxed);
+        diagnostics::LOADS.store(0, Ordering::Relaxed);
+        diagnostics::COALESCED_WAITS.store(0, Ordering::Relaxed);
+        diagnostics::WAIT_RETRIES.store(0, Ordering::Relaxed);
+        diagnostics::EVICTIONS.store(0, Ordering::Relaxed);
+        diagnostics::CLEAN_EVICTIONS.store(0, Ordering::Relaxed);
+        diagnostics::DIRTY_EVICTIONS.store(0, Ordering::Relaxed);
+        diagnostics::PREFETCHED_BLOCKS.store(0, Ordering::Relaxed);
+        diagnostics::ENTRIES.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn lookup_counters_count_each_request_once() {
+        let _test_guard = test_lock();
+        reset_cache();
+        let device: Arc<dyn BlockDevice> = Arc::new(TestDevice::default());
+
+        let _cold = get_block_cache(23, Arc::clone(&device));
+        assert_eq!(cache_stats(), (0, 1));
+        let _warm = get_block_cache(23, device);
+        assert_eq!(cache_stats(), (1, 1));
+
+        reset_cache();
     }
 
     #[test]

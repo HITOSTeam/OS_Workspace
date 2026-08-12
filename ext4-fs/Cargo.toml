@@ -3,6 +3,10 @@ name = "ext4-fs"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["block-cache-stats"]
+block-cache-stats = []
+
 [dependencies]
 spin = "0.7.0"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }

@@ -265,7 +265,10 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
         let token = self
             .queue
             .add(&[req.as_bytes()], &mut [buf, resp.as_bytes_mut()])?;
-        if cfg!(target_arch = "loongarch64") || self.queue.should_notify() {
+        // 必须无条件求值：除读取通知抑制状态外，它还保证已发布的 available index
+        // 先于 MMIO doorbell 有序可见。LoongArch 仍按平台回退策略始终 kick。
+        let should_notify = self.queue.should_notify();
+        if cfg!(target_arch = "loongarch64") || should_notify {
             self.transport.notify(QUEUE);
         }
         Ok(token)
@@ -347,7 +350,9 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
         let token = self
             .queue
             .add(&[req.as_bytes(), buf], &mut [resp.as_bytes_mut()])?;
-        if cfg!(target_arch = "loongarch64") || self.queue.should_notify() {
+        // 即使 LoongArch 无条件通知而不使用抑制结果，仍须保留发布后的屏障。
+        let should_notify = self.queue.should_notify();
+        if cfg!(target_arch = "loongarch64") || should_notify {
             self.transport.notify(QUEUE);
         }
         Ok(token)
@@ -380,6 +385,14 @@ impl<H: Hal, T: Transport> VirtIOBlk<H, T> {
     /// Returns a read-only snapshot of virtqueue progress.
     pub fn queue_state(&self) -> VirtQueueState {
         self.queue.state()
+    }
+
+    /// 无条件通知设备队列 0 可能已有待处理工作。
+    ///
+    /// VirtIO 设备必须容忍冗余通知。异步块设备包装层仅在请求异常久未取得进展时，
+    /// 将其作为一次性恢复 kick 使用。
+    pub fn force_notify(&mut self) {
+        self.transport.notify(QUEUE);
     }
 
     /// Returns the size of the device's VirtQueue.
