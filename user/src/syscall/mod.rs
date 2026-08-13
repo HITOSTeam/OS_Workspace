@@ -208,10 +208,14 @@ pub fn sync() -> isize {
 
 /// 创建评测运行时文件系统的挂载点，遵循 Linux 的 mkdirat 调用约定。
 pub fn mkdirat(dirfd: isize, path: &str, mode: usize) -> isize {
-    syscall(
-        SYSCALL_MKDIRAT,
-        [dirfd as usize, path.as_ptr() as usize, mode, 0, 0, 0],
-    )
+    syscall(SYSCALL_MKDIRAT, [
+        dirfd as usize,
+        path.as_ptr() as usize,
+        mode,
+        0,
+        0,
+        0,
+    ])
 }
 
 /// 挂载 proc、sysfs、devtmpfs 或 tmpfs 等内核文件系统。
@@ -230,17 +234,14 @@ pub fn mount_with_data(
     flags: usize,
     data: &str,
 ) -> isize {
-    syscall(
-        SYSCALL_MOUNT,
-        [
-            source.as_ptr() as usize,
-            target.as_ptr() as usize,
-            fs_type.as_ptr() as usize,
-            flags,
-            data.as_ptr() as usize,
-            0,
-        ],
-    )
+    syscall(SYSCALL_MOUNT, [
+        source.as_ptr() as usize,
+        target.as_ptr() as usize,
+        fs_type.as_ptr() as usize,
+        flags,
+        data.as_ptr() as usize,
+        0,
+    ])
 }
 
 pub fn poweroff() -> ! {

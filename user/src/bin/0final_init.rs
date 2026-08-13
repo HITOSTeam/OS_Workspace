@@ -6,48 +6,12 @@ extern crate user;
 
 use core::ptr;
 use user::syscall::{
-    _yield, RDONLY, chdir, close, execve, exit, fork, mount_with_data, open, poweroff, sync,
-    waitpid,
+    _yield, RDONLY, chdir, close, execve, exit, fork, open, poweroff, read, sync, waitpid,
 };
 
 const EVAL_DIR: &str = "/glibc";
 const BUILDSTORM_SCRIPT: &str = "/glibc/buildstorm_testcode.sh\0";
 const CAGENT_SCRIPT: &str = "/glibc/cagent_testcode.sh\0";
-
-/// 将 BuildStorm 每个架构的重新编译输出放入 tmpfs。
-///
-/// 官方脚本会在计时开始前删除这个目录，而 `target/debug` 中预置的 tg-xtask
-/// 缓存不会被覆盖。这样能避免把大量增量编译的小文件写回较慢的 virtio 块设备。
-/// 上限为物理内存的 25%：云端 16GiB 时为 4GiB，本地测试会随 QEMU 内存自动缩小。
-#[cfg(target_arch = "riscv64")]
-const BUILDSTORM_TARGET_DIR: &str = "/work/tgoskits/target/riscv64gc-unknown-linux-musl\0";
-#[cfg(target_arch = "loongarch64")]
-const BUILDSTORM_TARGET_DIR: &str = "/work/tgoskits/target/loongarch64-unknown-linux-musl\0";
-const TMPFS_TARGET_SIZE: &str = "size=25%\0";
-
-/// 挂载失败时保留 ext4 路径，确保优化措施不会阻断官方脚本。
-fn mount_buildstorm_target_tmpfs() {
-    let target = BUILDSTORM_TARGET_DIR.trim_end_matches('\0');
-    let rc = mount_with_data(
-        "tmpfs\0",
-        BUILDSTORM_TARGET_DIR,
-        "tmpfs\0",
-        0,
-        TMPFS_TARGET_SIZE,
-    );
-    if rc < 0 {
-        println!(
-            "[final_init] buildstorm target tmpfs unavailable: path={} errno={}; fallback=ext4",
-            target, -rc
-        );
-    } else {
-        println!(
-            "[final_init] buildstorm target tmpfs mounted: path={} options={}",
-            target,
-            TMPFS_TARGET_SIZE.trim_end_matches('\0')
-        );
-    }
-}
 
 ///判断文件是不是存在
 fn path_exists(path: &str) -> bool {
@@ -57,6 +21,43 @@ fn path_exists(path: &str) -> bool {
     }
     let _ = close(fd as usize);
     true
+}
+
+#[cfg(target_arch = "loongarch64")]
+fn print_loongarch_buildstorm_script() {
+    let path = BUILDSTORM_SCRIPT.trim_end_matches('\0');
+    println!(
+        "[final_init] ----- BEGIN LoongArch BuildStorm script: {} -----",
+        path
+    );
+
+    let fd = open(path, RDONLY);
+    if fd < 0 {
+        println!("[final_init] unable to read BuildStorm script: rc={}", fd);
+    } else {
+        let fd = fd as usize;
+        let mut buf = [0u8; 512];
+        loop {
+            let n = read(fd, &mut buf);
+            if n < 0 {
+                println!("[final_init] BuildStorm script read failed: rc={}", n);
+                break;
+            }
+            if n == 0 {
+                break;
+            }
+            match core::str::from_utf8(&buf[..n as usize]) {
+                Ok(text) => print!("{}", text),
+                Err(_) => {
+                    println!("[final_init] BuildStorm script is not valid UTF-8");
+                    break;
+                }
+            }
+        }
+        let _ = close(fd);
+    }
+
+    println!("\n[final_init] ----- END LoongArch BuildStorm script -----");
 }
 
 fn decode_wait_status(status: i32) -> i32 {
@@ -114,13 +115,54 @@ fn run_script(shell: &'static str, script: &'static str) -> i32 {
 }
 
 #[cfg(target_arch = "loongarch64")]
-fn run_local_ual_runtime_check() {
-    // QEMU 安装在 /opt 下，必须显式指定数据目录；否则会在加载 efi-virtio.rom
-    // 时提前退出，尚未执行到云端实际失败的 UAL 能力检查。
-    const COMMAND: &str = "LD_LIBRARY_PATH=/opt/qemu-la64/lib timeout -k 1 5 /opt/qemu-la64/bin/qemu-system-loongarch64 -L /opt/qemu-la64/share/qemu -machine virt -cpu la464 -m 128M -smp 1 -nographic -S; rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then echo 'LOCAL_UAL_RUNTIME_CHECK=PASS'; exit 0; fi; echo LOCAL_UAL_RUNTIME_CHECK=FAIL rc=$rc; exit $rc\0";
+fn run_prebuilt_buildstorm_runtime() -> i32 {
+    // 该函数只供 PREBUILT_ONLY 本地诊断模式调用：复用镜像里的预编译 BIN，
+    // 按 axbuild/ostool 真实的 LoongArch UEFI 流程运行一次：
+    //   BIN -> ESP/EFI/BOOT/BOOTLOONGARCH64.EFI
+    //   EDK2 code + 可写 vars pflash + FAT ESP
+    // UEFI 路径不使用 `-kernel`，否则会把 BIN/ELF 错当作 Linux 内核装载。
+    // 与云端隐藏运行阶段保持相同的 30 秒硬门槛，并用外层 OS 的
+    // `/proc/uptime` 单独统计内层 QEMU 墙钟时间，避免混入镜像制作和外层启动时间。
+    // 固件进度码出现在日志开头，不能只看 tail；运行结束后单独摘出这些行，
+    // 这样本地可以直接和云端的 `PROGRESS CODE: V03040002 I0` 对照。
+    const COMMAND: &str = concat!(
+        "qemu=/opt/qemu-la64/bin/qemu-system-loongarch64; ",
+        "qemu_data=/opt/qemu-la64/share/qemu; ",
+        "firmware=/opt/qemu-la64/share/edk2/loongarch64; ",
+        "code=$firmware/code.fd; vars_template=$firmware/vars.fd; ",
+        "artifact=/work/tgoskits/target/loongarch64-unknown-linux-musl/release/arceos-helloworld.bin; ",
+        "runtime=/work/buildstorm-prebuilt-uefi; esp=$runtime/arceos-helloworld.esp; ",
+        "vars=$runtime/arceos-helloworld.vars.fd; ",
+        "rootfs=/work/tgoskits/tmp/axbuild/rootfs/arceos-loongarch64-fat32.img; ",
+        "log=/work/buildstorm.prebuilt.run.out; ",
+        "if [ ! -x \"$qemu\" ] || [ ! -r \"$code\" ] || [ ! -r \"$vars_template\" ] || [ ! -r \"$artifact\" ]; then ",
+        "echo \"BUILDSTORM_PREBUILT_RUNTIME status=FAIL reason=missing-prerequisite qemu=$qemu code=$code vars=$vars_template artifact=$artifact\"; exit 1; fi; ",
+        "mkdir -p \"$esp/EFI/BOOT\" \"$(dirname \"$rootfs\")\" || exit 1; ",
+        "cp \"$artifact\" \"$esp/EFI/BOOT/BOOTLOONGARCH64.EFI\" || exit 1; ",
+        "cp \"$vars_template\" \"$vars\" || exit 1; ",
+        "if [ ! -r \"$rootfs\" ]; then truncate -s 64M \"$rootfs\" && mkfs.fat -F 32 \"$rootfs\" >/dev/null || exit 1; fi; ",
+        "echo \"----- boot prebuilt $(basename \"$artifact\") with real UEFI flow (arch=loongarch64; timeout=30s) -----\"; ",
+        "t0=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); ",
+        "LD_LIBRARY_PATH=/opt/qemu-la64/lib timeout -k 1 30 \"$qemu\" -L \"$qemu_data\" ",
+        "-machine virt -cpu la464 -m 2G -smp 1 -nographic ",
+        "-device virtio-blk-pci,drive=disk0 -drive id=disk0,if=none,format=raw,file=\"$rootfs\" ",
+        "-device virtio-net-pci,netdev=net0 -netdev user,id=net0 -serial mon:stdio ",
+        "-drive if=pflash,format=raw,unit=0,readonly=on,file=\"$code\" ",
+        "-drive if=pflash,format=raw,unit=1,file=\"$vars\" ",
+        "-drive format=raw,file=fat:rw:\"$esp\" </dev/null >\"$log\" 2>&1; rc=$?; ",
+        "t1=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); ",
+        "elapsed=$(awk \"BEGIN{printf \\\"%.2f\\\", (\\\"$t1\\\"+0)-(\\\"$t0\\\"+0)}\" 2>/dev/null); ",
+        "echo \"BUILDSTORM_PREBUILT_RUNTIME elapsed_s=$elapsed qemu_rc=$rc\"; ",
+        "progress_count=$(grep -c 'PROGRESS CODE:' \"$log\" 2>/dev/null || true); ",
+        "echo \"----- prebuilt EDK2 progress codes (count=$progress_count) -----\"; ",
+        "grep 'PROGRESS CODE:' \"$log\" 2>/dev/null | head -n 40 || true; ",
+        "echo '----- prebuilt nested QEMU output tail -----'; tail -n 120 \"$log\"; ",
+        "if grep -q 'Hello, world!' \"$log\"; then echo \"BUILDSTORM_PREBUILT_RUNTIME status=PASS rc=$rc artifact=$artifact\"; exit 0; fi; ",
+        "echo \"BUILDSTORM_PREBUILT_RUNTIME status=FAIL rc=$rc artifact=$artifact log=$log\"; exit 1\0",
+    );
     const SHELL: &str = "/bin/sh\0";
 
-    println!("[final_init] start local LoongArch UAL runtime check");
+    println!("[final_init] start prebuilt LoongArch runtime check");
     let pid = fork();
     if pid == 0 {
         let argv = [
@@ -138,33 +180,49 @@ fn run_local_ual_runtime_check() {
             ptr::null(),
         ];
         let rc = execve(SHELL, &argv, &envp);
-        println!("[final_init] exec local UAL check failed: rc={}", rc);
+        println!("[final_init] exec prebuilt runtime check failed: rc={}", rc);
         exit(127);
     }
     if pid < 0 {
-        println!("[final_init] fork local UAL check failed: rc={}", pid);
-        return;
+        println!(
+            "[final_init] fork prebuilt runtime check failed: rc={}",
+            pid
+        );
+        return 127;
     }
 
     let mut status = 0;
     loop {
         let waited = waitpid(pid, &mut status);
         if waited == pid {
+            let exit_code = decode_wait_status(status);
             println!(
-                "[final_init] local UAL runtime check exit_code={}",
-                decode_wait_status(status)
+                "[final_init] prebuilt runtime check exit_code={}",
+                exit_code
             );
-            return;
+            return exit_code;
         }
         if waited < 0 {
             println!(
-                "[final_init] wait local UAL check failed: pid={} rc={}",
+                "[final_init] wait prebuilt runtime check failed: pid={} rc={}",
                 pid, waited
             );
-            return;
+            return 127;
         }
         _yield();
     }
+}
+
+#[cfg(target_arch = "loongarch64")]
+fn run_prebuilt_diagnosis_and_poweroff() -> ! {
+    println!("[final_init] PREBUILT_ONLY: skip CAgent and BuildStorm compilation");
+    let exit_code = run_prebuilt_buildstorm_runtime();
+    println!(
+        "[final_init] PREBUILT_ONLY: runtime diagnosis exit_code={}",
+        exit_code
+    );
+    let _ = sync();
+    poweroff();
 }
 
 ///回收剩下的进程
@@ -181,6 +239,15 @@ fn reap_remaining_children() {
 pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
     // println!("[final_init] automatic evaluation init started");
     let _ = chdir("/");
+
+    #[cfg(target_arch = "loongarch64")]
+    print_loongarch_buildstorm_script();
+
+    #[cfg(target_arch = "loongarch64")]
+    if option_env!("FINAL_PREBUILT_ONLY").is_some() {
+        // 使用环境控制编译,目的是在本地测试运行流程
+        run_prebuilt_diagnosis_and_poweroff();
+    }
 
     let cagent_ready = path_exists(CAGENT_SCRIPT.trim_end_matches('\0'))
         && path_exists("/bin/bash")
@@ -208,7 +275,6 @@ pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
     );
 
     println!("[final_init] detected BuildStorm payload");
-    mount_buildstorm_target_tmpfs();
     let _ = chdir(EVAL_DIR);
     let buildstorm_exit_code = run_script("/bin/sh\0", BUILDSTORM_SCRIPT);
     reap_remaining_children();
@@ -216,12 +282,6 @@ pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
         "[final_init] evaluation finished: suite=buildstorm exit_code={}",
         buildstorm_exit_code
     );
-
-    // 本地 LoongArch 诊断入口；上传云端前将整个 cfg 代码块注释即可。
-    #[cfg(target_arch = "loongarch64")]
-    {
-        run_local_ual_runtime_check();
-    }
 
     let exit_code = if cagent_exit_code != 0 {
         cagent_exit_code
